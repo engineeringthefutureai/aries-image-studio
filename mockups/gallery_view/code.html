@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_standard" name="shell-type"/><title>Aries Studio</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#e5e2db", "tertiary-fixed-dim": "#f0bd8b", "surface-container": "#f1eee7", "tertiary": "#7b542b", "on-tertiary-container": "#fffbff", "inverse-primary": "#ffb59c", "surface-bright": "#fcf9f2", "on-tertiary-fixed-variant": "#623f18", "tertiary-fixed": "#ffdcbd", "on-secondary-fixed": "#151c25", "tertiary-container": "#966c41", "surface-tint": "#a83907", "on-primary-fixed": "#380c00", "on-primary": "#ffffff", "secondary": "#585f69", "on-secondary": "#ffffff", "surface-variant": "#e5e2db", "surface-container-lowest": "#ffffff", "surface": "#fcf9f2", "on-error": "#ffffff", "on-error-container": "#93000a", "surface-container-low": "#f6f3ec", "on-surface": "#1c1c18", "error-container": "#ffdad6", "inverse-surface": "#31312c", "primary-fixed": "#ffdbcf", "primary-fixed-dim": "#ffb59c", "outline-variant": "#dfc0b6", "on-secondary-fixed-variant": "#404751", "on-secondary-container": "#5e656f", "primary-container": "#c64e1f", "secondary-fixed-dim": "#c0c7d2", "error": "#ba1a1a", "background": "#fcf9f2", "on-primary-fixed-variant": "#822800", "secondary-container": "#dce3ef", "on-tertiary": "#ffffff", "on-tertiary-fixed": "#2c1600", "on-surface-variant": "#58423a", "outline": "#8c7169", "surface-dim": "#dcdad3", "on-background": "#1c1c18", "inverse-on-surface": "#f3f0e9", "on-primary-container": "#fffbff", "secondary-fixed": "#dce3ef", "surface-container-high": "#ebe8e1", "primary": "#a53705" }, "borderRadius": { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, "spacing": { "space-lg": "1.5rem", "margin-desktop": "2.5rem", "margin-tablet": "1.5rem", "space-xl": "2.5rem", "space-sm": "0.5rem", "gutter": "1.25rem", "space-md": "1rem", "margin": "1rem", "gutter-desktop": "1.5rem", "space-xs": "0.25rem" }, "fontFamily": { "body-md": ["Inter"], "label-lg": ["Plus Jakarta Sans"], "code-tech-xs": ["JetBrains Mono"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "headline-xl": ["Plus Jakarta Sans"], "label-md": ["Inter"], "body-lg": ["Inter"], "headline-lg": ["Plus Jakarta Sans"], "body-sm": ["Inter"], "headline-lg-mobile": ["Plus Jakarta Sans"], "code-tech-sm": ["JetBrains Mono"], "headline-xl-mobile": ["Plus Jakarta Sans"] }, "fontSize": { "body-md": ["14px", { "lineHeight": "22px", "fontWeight": "400" }], "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }], "code-tech-xs": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-xl": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.03em", "fontWeight": "600" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "500" }], "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.005em", "fontWeight": "400" }], "headline-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "code-tech-sm": ["11px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-xl-mobile": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.025em", "fontWeight": "600" }] } } } };</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased"><header class="fixed top-0 left-0 right-0 z-50 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(43,50,59,0.04)]"><div class="h-16 w-full px-margin-desktop flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-md flex-shrink-0"><a class="flex items-center gap-space-sm group" data-path="timeline-view" href="#"><span class="flex items-center justify-center w-8 h-8 rounded-full bg-primary-container text-on-primary-container shadow-[0_2px_8px_-2px_rgba(43,50,59,0.04)]"><span class="material-symbols-outlined text-[18px]">flare</span></span><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface group-hover:text-primary transition-colors">Aries Studio</span></a><span class="font-code-tech-xs text-code-tech-xs px-space-xs py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">v2.1</span></div><div class="hidden xl:flex items-center gap-space-lg flex-1 justify-center max-w-4xl"><div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]"><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="timeline-view" href="#"><span class="material-symbols-outlined text-[15px]">stream</span><span>Timeline</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">T</span></a><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="gallery-view" href="#"><span class="material-symbols-outlined text-[15px]">grid_view</span><span>Gallery</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">G</span></a></div><nav class="flex items-center gap-space-xs bg-surface-container-low px-space-sm py-1 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" data-active-classes="bg-primary-container text-on-primary-container font-semibold"><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="timeline-view" href="#">Timeline View</a><a aria-current="page" class="px-space-sm py-0.5 rounded-full transition-colors bg-primary-container text-on-primary-container font-semibold" data-path="gallery-view" href="#">Gallery View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="image-viewer-overlay" href="#">Image Viewer Overlay</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="status-and-edge-states" href="#">Status & Edge States</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="style-sheet-and-components" href="#">Style Sheet & Components</a></nav></div><div class="flex items-center gap-space-sm flex-shrink-0"><div class="relative group"><button class="flex items-center gap-space-xs px-space-md py-1 rounded-full bg-surface-container-low hover:bg-surface-container transition-colors shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" type="button"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-code-tech-sm text-code-tech-sm text-on-surface font-medium">Ready</span><span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span></button><div class="absolute right-0 top-full mt-1.5 w-48 py-1 rounded-2xl bg-surface-container-lowest shadow-[0_12px_32px_-8px_rgba(43,50,59,0.08)] hidden group-hover:flex flex-col z-50"><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-primary"></span><span class="font-body-sm text-body-sm text-on-surface">Ready</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-tertiary"></span><span class="font-body-sm text-body-sm text-on-surface">Busy (3 queued)</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-secondary"></span><span class="font-body-sm text-body-sm text-on-surface">Loading model</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-outline-variant"></span><span class="font-body-sm text-body-sm text-on-surface">Asleep</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-error"></span><span class="font-body-sm text-body-sm text-on-surface">Error</span></div></div></div><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Toggle theme" type="button"><span class="material-symbols-outlined text-[18px]">light_mode</span></button><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors font-code-tech-xs text-code-tech-xs font-medium" title="Keyboard shortcuts" type="button"><span class="material-symbols-outlined text-[18px]">help_outline</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/></div></div></header><main class="w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full">
+<!-- Interactive Gallery Container -->
+<div class="w-full px-margin-desktop py-space-md flex flex-col gap-space-lg">
+<!-- Top Command & Filter Control Deck -->
+<header class="flex flex-col gap-space-md bg-surface-container-low p-space-md rounded-lg shadow-sm">
+<div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-space-md">
+<!-- Search Prompt / Seed Input -->
+<div class="relative flex-1 max-w-2xl">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
+<input class="w-full bg-surface-container-lowest text-on-surface placeholder:text-outline font-body-md text-body-md pl-10 pr-12 py-2 rounded-full focus:outline-none focus:ring-1 focus:ring-primary shadow-sm transition-all" id="gallery-search" placeholder="Search prompts, seeds, or models... (Press / to focus)" type="text"/>
+<kbd class="absolute right-3.5 top-1/2 -translate-y-1/2 font-code-tech-xs text-code-tech-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded shadow-sm">/</kbd>
+</div>
+<!-- Utility Toggles & Batch Action trigger -->
+<div class="flex items-center gap-space-sm flex-wrap self-end lg:self-center">
+<!-- Density Toggle -->
+<div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-sm">
+<button class="flex items-center gap-1 px-3 py-1 rounded-full bg-surface-container-lowest text-on-surface font-label-md text-label-md shadow-sm transition-all" id="btn-density-comfortable" type="button">
+<span class="material-symbols-outlined text-[16px]">view_agenda</span>
+<span class="hidden sm:inline">Comfortable</span>
+</button>
+<button class="flex items-center gap-1 px-3 py-1 rounded-full text-on-surface-variant hover:text-on-surface font-label-md text-label-md transition-all" id="btn-density-compact" type="button">
+<span class="material-symbols-outlined text-[16px]">grid_view</span>
+<span class="hidden sm:inline">Compact</span>
+</button>
+</div>
+<!-- Batch Action Trigger Button -->
+<button class="flex items-center gap-1.5 px-space-md py-1.5 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors shadow-sm" id="btn-batch-mode" type="button">
+<span class="material-symbols-outlined text-[18px]">checklist</span>
+<span>Batch Select</span>
+<span class="hidden font-code-tech-xs text-code-tech-xs bg-primary text-on-primary px-1.5 py-0.2 rounded-full" id="batch-counter">0</span>
+</button>
+</div>
+</div>
+<!-- Filter Ribbons & Param Selectors -->
+<div class="flex flex-wrap items-center justify-between gap-space-sm pt-space-xs">
+<div class="flex items-center gap-space-xs flex-wrap">
+<!-- Filter: All -->
+<button class="filter-chip flex items-center gap-1 px-3 py-1 rounded-full bg-primary-container text-on-primary-container font-label-md text-label-md shadow-sm" data-filter="all" type="button">
+<span>All</span>
+<span class="font-code-tech-xs text-code-tech-xs opacity-80">(28)</span>
+</button>
+<!-- Filter: Favorites -->
+<button class="filter-chip flex items-center gap-1 px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" data-filter="favorites" type="button">
+<span class="material-symbols-outlined text-[15px] text-tertiary" style="font-variation-settings: 'FILL' 1;">star</span>
+<span>Favorites</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">(9)</span>
+</button>
+<!-- Aspect Ratio Dropdown -->
+<div class="relative group">
+<button class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" type="button">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">aspect_ratio</span>
+<span id="current-ratio-label">All ratios</span>
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span>
+</button>
+<div class="absolute left-0 top-full mt-1.5 w-36 py-1.5 rounded-xl bg-surface-container-lowest shadow-xl hidden group-hover:flex flex-col z-40">
+<button class="ratio-option text-left px-3 py-1 hover:bg-surface-container text-on-surface font-body-sm text-body-sm flex items-center justify-between" data-ratio="all" type="button">
+<span>All ratios</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">28</span>
+</button>
+<button class="ratio-option text-left px-3 py-1 hover:bg-surface-container text-on-surface font-body-sm text-body-sm flex items-center justify-between" data-ratio="16:9" type="button">
+<span>16:9</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">8</span>
+</button>
+<button class="ratio-option text-left px-3 py-1 hover:bg-surface-container text-on-surface font-body-sm text-body-sm flex items-center justify-between" data-ratio="9:16" type="button">
+<span>9:16</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">6</span>
+</button>
+<button class="ratio-option text-left px-3 py-1 hover:bg-surface-container text-on-surface font-body-sm text-body-sm flex items-center justify-between" data-ratio="1:1" type="button">
+<span>1:1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">11</span>
+</button>
+<button class="ratio-option text-left px-3 py-1 hover:bg-surface-container text-on-surface font-body-sm text-body-sm flex items-center justify-between" data-ratio="3:2" type="button">
+<span>3:2</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">3</span>
+</button>
+</div>
+</div>
+<!-- Date Range Selector -->
+<div class="relative group">
+<button class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" type="button">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">calendar_today</span>
+<span>Past 7 Days</span>
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span>
+</button>
+<div class="absolute left-0 top-full mt-1.5 w-40 py-1.5 rounded-xl bg-surface-container-lowest shadow-xl hidden group-hover:flex flex-col z-40">
+<span class="px-3 py-1 hover:bg-surface-container cursor-pointer text-on-surface font-body-sm text-body-sm">Today</span>
+<span class="px-3 py-1 hover:bg-surface-container cursor-pointer text-on-surface font-body-sm text-body-sm font-medium">Past 7 Days</span>
+<span class="px-3 py-1 hover:bg-surface-container cursor-pointer text-on-surface font-body-sm text-body-sm">This Month</span>
+<span class="px-3 py-1 hover:bg-surface-container cursor-pointer text-on-surface font-body-sm text-body-sm">All Generations</span>
+</div>
+</div>
+</div>
+<!-- Telemetry readout -->
+<div class="flex items-center gap-space-sm text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span class="inline-flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            Sync live
+          </span>
+<span>·</span>
+<span>Cache: 840 MB</span>
+</div>
+</div>
+</header>
+<!-- Masonry Feed Grid -->
+<div class="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-gutter-desktop space-y-gutter-desktop transition-all duration-300" id="masonry-canvas">
+<!-- Card 1: 16:9 Landscape - Moraine Lake Dawn -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="16:9" data-favorite="true">
+<!-- Batch Checkbox -->
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-[16/9] overflow-hidden bg-surface-container-high">
+<img alt="Panoramic mountain lake at dawn" class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBIjIvVo40kurrdxqH7Hcvv_86Nkak8xzpniTOGSDE-JRoXZZMpNzeNZ0mNutB_2mwzJm5pwr5zy-JPFC9JTLxuzTKpfTCP-NpotCMSlebCe379HfwWWJsWh6mPEeWzq31lVXSzhdbQPCFBQcnJ_XXTkX4LRTKsMBQGyz4cSfMpqwr8WQ0ZgUGVdCJqqpB2ZLU5X0JXQ0WDUGN8DAoYEYUsv5vto1E0wHp1rGdKzGn8JTD3cS41wPCU"/>
+<!-- Terracotta Variant Pill -->
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 16:9</span>
+</div>
+<!-- Hover Overlay Scrim -->
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<!-- Top Actions -->
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px] text-tertiary-fixed" style="font-variation-settings: 'FILL' 1;">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<!-- Bottom Metadata -->
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Panoramic mountain lake at dawn with turquoise waters reflecting snow-capped Rocky peaks and a lone wooden canoe moored in foreground fog.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 39011</span>
+<span>·</span>
+<span>CFG: 7.2</span>
+<span>·</span>
+<span>Steps: 30</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 2: 9:16 Vertical - Lighthouse in Storm -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="9:16" data-favorite="false">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-[9/16] overflow-hidden bg-surface-container-high">
+<img alt="A lighthouse on a cliff during a storm" class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAdjgZNRo1Ffi8ZEBMfY0P_SUfVOiJVg-pOf-Wky8cvqqWjHFUvuq0ZjlG1ZkwdY4W7qUkS0s3PwlPwsjUeBqq0DCKhWYWUblX7P2efT5aS01bpgcjP5DPd5KeBPj6dxR5jtREp_SQ8xC5JdkmNhHWtINOExabgpz-7pUx3gciUEJIow0mVPHX5DZH8b_bwINJZ6kOXcrfd_j5D8KFbbBFn12gVuYUJu8OqH7xBkYsTfw30482QqP1l"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 9:16</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-3 text-inverse-on-surface font-medium leading-tight">
+                A solitary stone lighthouse atop jagged sea cliffs battling violent phosphorescent waves during a nocturnal thunderstorm, beam piercing driving rain.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 48213</span>
+<span>·</span>
+<span>CFG: 8.5</span>
+<span>·</span>
+<span>Steps: 45</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 3: 1:1 Square - Elderly Fisherman -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="1:1" data-favorite="true">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-square overflow-hidden bg-surface-container-high">
+<img alt="Portrait of an elderly fisherman" class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBa9O0kyuTiMWtFRPXAXHfj7VWzqxCuWPcGvJDsIVeMd-0dcw6gH20stHgYqYeCQgMboxbmEdNehrKfVzE_gYnkjd_qD0upAxOqZAOqzjPNUs2dmNOZCTO6Jx1cZI9uJgCyry2qmb9JuBEyGGGDlI78kN9RxzZsWrd9DosyKX7aqk0oknvm6yrO7h9KPqz6f4Mc5XpFsCPtC3q_Fp78e3Ve1DcEMRN4l17uYJ9f3_Ja_Aqau1HKeaax"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 1:1</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px] text-tertiary-fixed" style="font-variation-settings: 'FILL' 1;">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Portrait of an elderly weathered fisherman in oilskin jacket and woolen beanie, harbor trawler boats docked behind, 35mm film grain documentary aesthetic.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 19042</span>
+<span>·</span>
+<span>CFG: 6.8</span>
+<span>·</span>
+<span>Steps: 35</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 4: Simulated 1:1 - Minimalist Geometry Study -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="1:1" data-favorite="false">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-square overflow-hidden bg-surface-container-high">
+<img class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" data-alt="Three vermillion matte ceramic cubes and two pale azure frosted glass spheres arranged deliberately on a seamless alabaster podium, soft studio daylight cast shadows, Bauhaus product photography" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDTMW0AY-l4JBVjlpNGF-sWum2rYqZUOoVM8PkuFK9f1EtVLNLd3lOkaWKPADmXSzDgmbgL1dGc95rfZ7rgO9T2lGmZwSi8fRHsjGcmO3gfiCJy3t-_U4FXxyeYSyRdn6U-X6zcMx1zIjLaCOowO_9XGg1ZYpNx1ZfZ1yqjTKvAD36Ya9G9iJux_w8uFfFBiMAdisMF5_4_zVF2EAo_KRCqdqIeQcU9-ruoeWII7BTZsqFUxS9HEn-_"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 1:1</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Three red cubes and two blue spheres on pure white marble table, volumetric soft shadows, Bauhaus composition.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 52194</span>
+<span>·</span>
+<span>CFG: 7.0</span>
+<span>·</span>
+<span>Steps: 28</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 5: 1:1 Square - Cyberpunk Alleyway -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="1:1" data-favorite="true">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-square overflow-hidden bg-surface-container-high">
+<img alt="Cyberpunk rainy night city alleyway with glowing neon" class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDosrO95Yv3CN96IqtzAeh91LkXXF_I-4ENd2y-U0tPpBFt3amrCZw8m6kPLluJEq6r4lcMRZOCf3w6IceVZW-gg1XuhU7OuzgGd9T6HrDNRWQkv3KYyrfXab6E39sWCSAza63QfpcJYaV21c6REw28ks3kJ49-fQ5jcypNPIH_XWDi6Pe0c2CjxsB2OIsBKMOqogq1AJgCK6oe4sjYXSPtLyXQ08vrIDatuFZbRYy39TqCEzsWCrT0"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 1:1</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px] text-tertiary-fixed" style="font-variation-settings: 'FILL' 1;">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Cyberpunk rainy night city alleyway, QWEN IMAGE 2.1 glowing neon sign reflecting into wet cobbles, silhouettes with umbrellas in dense smog.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 88402</span>
+<span>·</span>
+<span>CFG: 8.0</span>
+<span>·</span>
+<span>Steps: 38</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 6: Simulated 1:1 - Cartoon Dragon Sticker -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="1:1" data-favorite="false">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-square overflow-hidden bg-surface-container-high">
+<img class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" data-alt="Cute miniature emerald green cartoon baby dragon vinyl die-cut sticker with gloss sheen, breathing tiny golden smoke puffs, isolated on transparent white checkerboard background, bold crisp vector contour" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBeQgXShH1LLbfv8f1O7BkrJ1jS9198qEQs-63lR3QEYlqrAXcRDGJEBLJ9Y6uBubAfpq8HGorByBFfaJpemiUOvBOIep1AZturgz5Ia6fAADyPnMMsh79jmSq6KUhAYdZ6LAZ3ExHi3dOsq3irE_TjliX1eg9wa3R2P46RMlynSgGQQONKuYKUNbRGAjYOu1o34GWrc-_1vJl1ADVH9UKanLF-AwE_DzPbC7C06d7p8Dn536y5XRK4"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 1:1</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Cute cartoon dragon sticker on transparent checkerboard, vinyl gloss texture, tiny smoke puffs.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 94811</span>
+<span>·</span>
+<span>CFG: 7.4</span>
+<span>·</span>
+<span>Steps: 24</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 7: 3:2 Architectural Form Study -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="3:2" data-favorite="true">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-[3/2] overflow-hidden bg-surface-container-high">
+<img class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" data-alt="Minimalist brutalist concrete pavillion nestled inside an arid terracotta desert sand dune landscape, circular skylight piercing sunlight through subtle atmospheric dust, architectural digest interior photography" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDK9UpTJNNCrnFTDyLQ1u435kqEoo3s_6zzjcsbg89OLaAoPSlPZ8HcKNMciJQN7wKPLJqmiyeWv-2cOo7n2DW9bWPmhvpbLwJ8iVaZ959W4qDgKAjutRQiOf6aepIANivxl63K1jFvWe4QbBMhp-qR5L0lREqq8kr5ORPD93UiAAZCMZpJr-CRHPStbpXzopvzgrzhGtXAHqcB0g0-ms7lhSSFRGcI9lit_TFWEZIEg3UEAPmJuUNG"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 3:2</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px] text-tertiary-fixed" style="font-variation-settings: 'FILL' 1;">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Brutalist raw concrete pavilion in warm desert dunes, circular ceiling oculus filtering sharp sunbeams, Tadao Ando inspiration.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 67102</span>
+<span>·</span>
+<span>CFG: 6.9</span>
+<span>·</span>
+<span>Steps: 40</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 8: 16:9 Cinema Still -->
+<div class="masonry-tile break-inside-avoid group relative rounded-DEFAULT overflow-hidden bg-surface-container shadow-sm hover:shadow-lg transition-all duration-200" data-aspect="16:9" data-favorite="false">
+<div class="batch-box absolute top-3 left-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+<input class="w-4 h-4 rounded accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<div class="relative w-full aspect-[16/9] overflow-hidden bg-surface-container-high">
+<img class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]" data-alt="Cinematic wide-angle establishing shot of an emerald alpine valley with low wisps of cloud hanging over mirror-still tarn lake, warm amber sunset glancing mountain ridges, anamorphic lens flare" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBezB-z8CWbEGqzZZAHBQGQJE79xLdgCYRUJjkptsAMfyDz8ag4f_y2mPC69i90F_lxJjSZdk3Zke-h1WjbIcpotY4q30tb7jufVFOJb4miWz_JvHslFPKsBWHVn9NZEKEd1kzTKlbuwq6UvB0KBJgf-lDdeXWB5U88vAx75VK4GgrTQ-i_QhXqAr3Rlay7hetvlOlSTAJ7dNzfvCfejvqHUDmJsbb-_1DllY2O4rDjy0HAlInNrGzz"/>
+<div class="absolute top-3 right-3 z-20 flex items-center gap-1 bg-surface-container-lowest/80 backdrop-blur-md px-2 py-0.5 rounded-full shadow-sm">
+<span class="font-code-tech-xs text-code-tech-xs font-medium text-primary">v2.1</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">· 16:9</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-space-md z-10">
+<div class="flex items-center justify-end gap-1.5">
+<button class="fav-toggle w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:text-tertiary-fixed hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Toggle Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">star</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Vary prompt" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Expand view" type="button">
+<span class="material-symbols-outlined text-[18px]">fullscreen</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-lowest/20 backdrop-blur-md text-inverse-on-surface hover:bg-surface-container-lowest/30 flex items-center justify-center transition-colors" title="Download High-Res" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<div class="flex flex-col gap-1 text-inverse-on-surface">
+<p class="font-body-sm text-body-sm line-clamp-2 text-inverse-on-surface font-medium leading-tight">
+                Cinematic alpine meadow landscape under gold hour sun rays, misty ridge background, Panavision 70mm look.
+              </p>
+<div class="flex items-center gap-space-sm pt-1 font-code-tech-xs text-code-tech-xs text-inverse-on-surface/80">
+<span>seed: 31209</span>
+<span>·</span>
+<span>CFG: 7.1</span>
+<span>·</span>
+<span>Steps: 32</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Infinite Scroll & Status Footer Deck -->
+<footer class="flex flex-col sm:flex-row items-center justify-between gap-space-md py-space-xl text-on-surface-variant">
+<!-- Generator Telemetry Badge -->
+<div class="flex items-center gap-space-sm">
+<span class="flex h-2.5 w-2.5 rounded-full bg-outline-variant"></span>
+<span class="font-code-tech-sm text-code-tech-sm text-on-surface">Generator Idle · VRAM 4.2 / 24 GB</span>
+</div>
+<!-- Item Counter Progress Bar -->
+<div class="flex flex-col items-center gap-1 w-full max-w-xs">
+<div class="flex items-center justify-between w-full font-code-tech-xs text-code-tech-xs">
+<span>Showing 28 of 142 generations</span>
+<span>19.7%</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="bg-primary h-full w-[20%] rounded-full transition-all duration-300"></div>
+</div>
+</div>
+<!-- Load More Action Trigger -->
+<button class="flex items-center gap-2 px-space-lg py-2 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-all shadow-sm active:scale-95" id="btn-load-more" type="button">
+<span>Load Next Set</span>
+<span class="material-symbols-outlined text-[18px]">arrow_downward</span>
+</button>
+</footer>
+</div>
+<!-- Client Interaction Script for Density, Ratio filtering, and Favorites -->
+<script>
+    (function () {
+      // Density Toggle
+      const grid = document.getElementById('masonry-canvas');
+      const btnComfort = document.getElementById('btn-density-comfortable');
+      const btnCompact = document.getElementById('btn-density-compact');
+
+      btnComfort?.addEventListener('click', () => {
+        grid.className = 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-gutter-desktop space-y-gutter-desktop transition-all duration-300';
+        btnComfort.classList.add('bg-surface-container-lowest', 'text-on-surface', 'shadow-sm');
+        btnComfort.classList.remove('text-on-surface-variant');
+        btnCompact.classList.remove('bg-surface-container-lowest', 'text-on-surface', 'shadow-sm');
+        btnCompact.classList.add('text-on-surface-variant');
+      });
+
+      btnCompact?.addEventListener('click', () => {
+        grid.className = 'columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-space-sm space-y-space-sm transition-all duration-300';
+        btnCompact.classList.add('bg-surface-container-lowest', 'text-on-surface', 'shadow-sm');
+        btnCompact.classList.remove('text-on-surface-variant');
+        btnComfort.classList.remove('bg-surface-container-lowest', 'text-on-surface', 'shadow-sm');
+        btnComfort.classList.add('text-on-surface-variant');
+      });
+
+      // Quick filter pills
+      const filterChips = document.querySelectorAll('.filter-chip');
+      const tiles = document.querySelectorAll('.masonry-tile');
+
+      filterChips.forEach(chip => {
+        chip.addEventListener('click', () => {
+          filterChips.forEach(c => {
+            c.classList.remove('bg-primary-container', 'text-on-primary-container');
+            c.classList.add('bg-surface-container', 'text-on-surface');
+          });
+          chip.classList.add('bg-primary-container', 'text-on-primary-container');
+          chip.classList.remove('bg-surface-container', 'text-on-surface');
+
+          const filterType = chip.getAttribute('data-filter');
+          tiles.forEach(tile => {
+            if (filterType === 'all') {
+              tile.style.display = '';
+            } else if (filterType === 'favorites') {
+              const isFav = tile.getAttribute('data-favorite') === 'true';
+              tile.style.display = isFav ? '' : 'none';
+            }
+          });
+        });
+      });
+
+      // Ratio Filter Dropdown
+      const ratioLabel = document.getElementById('current-ratio-label');
+      document.querySelectorAll('.ratio-option').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const ratio = btn.getAttribute('data-ratio');
+          ratioLabel.textContent = ratio === 'all' ? 'All ratios' : ratio;
+          tiles.forEach(tile => {
+            if (ratio === 'all' || tile.getAttribute('data-aspect') === ratio) {
+              tile.style.display = '';
+            } else {
+              tile.style.display = 'none';
+            }
+          });
+        });
+      });
+
+      // Favorites Star Toggle
+      document.querySelectorAll('.fav-toggle').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const starIcon = btn.querySelector('.material-symbols-outlined');
+          const tile = btn.closest('.masonry-tile');
+          const isCurrentlyFav = tile.getAttribute('data-favorite') === 'true';
+
+          if (isCurrentlyFav) {
+            tile.setAttribute('data-favorite', 'false');
+            starIcon.style.fontVariationSettings = "'FILL' 0";
+            starIcon.classList.remove('text-tertiary-fixed');
+          } else {
+            tile.setAttribute('data-favorite', 'true');
+            starIcon.style.fontVariationSettings = "'FILL' 1";
+            starIcon.classList.add('text-tertiary-fixed');
+          }
+        });
+      });
+
+      // Batch Selection Mode
+      let batchActive = false;
+      const btnBatch = document.getElementById('btn-batch-mode');
+      const batchCounter = document.getElementById('batch-counter');
+      const checkBoxes = document.querySelectorAll('.batch-box');
+
+      btnBatch?.addEventListener('click', () => {
+        batchActive = !batchActive;
+        if (batchActive) {
+          btnBatch.classList.add('bg-primary-container', 'text-on-primary-container');
+          btnBatch.classList.remove('bg-surface-container', 'text-on-surface');
+          batchCounter.classList.remove('hidden');
+          checkBoxes.forEach(b => b.classList.remove('opacity-0'));
+        } else {
+          btnBatch.classList.remove('bg-primary-container', 'text-on-primary-container');
+          btnBatch.classList.add('bg-surface-container', 'text-on-surface');
+          batchCounter.classList.add('hidden');
+          checkBoxes.forEach(b => b.classList.add('opacity-0'));
+          document.querySelectorAll('.batch-box input[type="checkbox"]').forEach(c => c.checked = false);
+          batchCounter.textContent = '0';
+        }
+      });
+
+      document.querySelectorAll('.batch-box input[type="checkbox"]').forEach(box => {
+        box.addEventListener('change', () => {
+          const count = document.querySelectorAll('.batch-box input[type="checkbox"]:checked').length;
+          batchCounter.textContent = count;
+        });
+      });
+
+      // Keyboard Shortcut "/" to Focus Search
+      window.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+          e.preventDefault();
+          document.getElementById('gallery-search')?.focus();
+        }
+      });
+    })();
+  </script>
+</div></main><footer class="w-full bg-surface-container-lowest py-space-xl shadow-[0_1px_8px_rgba(43,50,59,0.02)]"><div class="w-full px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-space-md text-on-surface-variant"><div class="flex items-center gap-space-md"><span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Aries Studio</span><span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Atmospheric Neural Canvas · Personal Edition</span></div><div class="flex items-center gap-space-lg font-label-md text-label-md"><a class="hover:text-on-surface transition-colors" data-path="timeline-view" href="#">Timeline</a><a class="hover:text-on-surface transition-colors" data-path="gallery-view" href="#">Gallery</a><a class="hover:text-on-surface transition-colors" data-path="status-and-edge-states" href="#">Telemetry</a><a class="hover:text-on-surface transition-colors" data-path="style-sheet-and-components" href="#">Design System</a></div><div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">© 2025 Aries Studio. High-fidelity generative atelier.</div></div></footer></body></html>

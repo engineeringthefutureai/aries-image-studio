@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_standard" name="shell-type"/><title>Aries Studio</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#e5e2db", "tertiary-fixed-dim": "#f0bd8b", "surface-container": "#f1eee7", "tertiary": "#7b542b", "on-tertiary-container": "#fffbff", "inverse-primary": "#ffb59c", "surface-bright": "#fcf9f2", "on-tertiary-fixed-variant": "#623f18", "tertiary-fixed": "#ffdcbd", "on-secondary-fixed": "#151c25", "tertiary-container": "#966c41", "surface-tint": "#a83907", "on-primary-fixed": "#380c00", "on-primary": "#ffffff", "secondary": "#585f69", "on-secondary": "#ffffff", "surface-variant": "#e5e2db", "surface-container-lowest": "#ffffff", "surface": "#fcf9f2", "on-error": "#ffffff", "on-error-container": "#93000a", "surface-container-low": "#f6f3ec", "on-surface": "#1c1c18", "error-container": "#ffdad6", "inverse-surface": "#31312c", "primary-fixed": "#ffdbcf", "primary-fixed-dim": "#ffb59c", "outline-variant": "#dfc0b6", "on-secondary-fixed-variant": "#404751", "on-secondary-container": "#5e656f", "primary-container": "#c64e1f", "secondary-fixed-dim": "#c0c7d2", "error": "#ba1a1a", "background": "#fcf9f2", "on-primary-fixed-variant": "#822800", "secondary-container": "#dce3ef", "on-tertiary": "#ffffff", "on-tertiary-fixed": "#2c1600", "on-surface-variant": "#58423a", "outline": "#8c7169", "surface-dim": "#dcdad3", "on-background": "#1c1c18", "inverse-on-surface": "#f3f0e9", "on-primary-container": "#fffbff", "secondary-fixed": "#dce3ef", "surface-container-high": "#ebe8e1", "primary": "#a53705" }, "borderRadius": { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, "spacing": { "space-lg": "1.5rem", "margin-desktop": "2.5rem", "margin-tablet": "1.5rem", "space-xl": "2.5rem", "space-sm": "0.5rem", "gutter": "1.25rem", "space-md": "1rem", "margin": "1rem", "gutter-desktop": "1.5rem", "space-xs": "0.25rem" }, "fontFamily": { "body-md": ["Inter"], "label-lg": ["Plus Jakarta Sans"], "code-tech-xs": ["JetBrains Mono"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "headline-xl": ["Plus Jakarta Sans"], "label-md": ["Inter"], "body-lg": ["Inter"], "headline-lg": ["Plus Jakarta Sans"], "body-sm": ["Inter"], "headline-lg-mobile": ["Plus Jakarta Sans"], "code-tech-sm": ["JetBrains Mono"], "headline-xl-mobile": ["Plus Jakarta Sans"] }, "fontSize": { "body-md": ["14px", { "lineHeight": "22px", "fontWeight": "400" }], "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }], "code-tech-xs": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-xl": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.03em", "fontWeight": "600" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "500" }], "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.005em", "fontWeight": "400" }], "headline-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "code-tech-sm": ["11px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-xl-mobile": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.025em", "fontWeight": "600" }] } } } };</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased"><header class="fixed top-0 left-0 right-0 z-50 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(43,50,59,0.04)]"><div class="h-16 w-full px-margin-desktop flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-md flex-shrink-0"><a class="flex items-center gap-space-sm group" data-path="timeline-view" href="#"><span class="flex items-center justify-center w-8 h-8 rounded-full bg-primary-container text-on-primary-container shadow-[0_2px_8px_-2px_rgba(43,50,59,0.04)]"><span class="material-symbols-outlined text-[18px]">flare</span></span><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface group-hover:text-primary transition-colors">Aries Studio</span></a><span class="font-code-tech-xs text-code-tech-xs px-space-xs py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">v2.1</span></div><div class="hidden xl:flex items-center gap-space-lg flex-1 justify-center max-w-4xl"><div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]"><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="timeline-view" href="#"><span class="material-symbols-outlined text-[15px]">stream</span><span>Timeline</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">T</span></a><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="gallery-view" href="#"><span class="material-symbols-outlined text-[15px]">grid_view</span><span>Gallery</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">G</span></a></div><nav class="flex items-center gap-space-xs bg-surface-container-low px-space-sm py-1 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" data-active-classes="bg-primary-container text-on-primary-container font-semibold"><a aria-current="page" class="px-space-sm py-0.5 rounded-full transition-colors bg-primary-container text-on-primary-container font-semibold" data-path="timeline-view" href="#">Timeline View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="gallery-view" href="#">Gallery View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="image-viewer-overlay" href="#">Image Viewer Overlay</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="status-and-edge-states" href="#">Status & Edge States</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="style-sheet-and-components" href="#">Style Sheet & Components</a></nav></div><div class="flex items-center gap-space-sm flex-shrink-0"><div class="relative group"><button class="flex items-center gap-space-xs px-space-md py-1 rounded-full bg-surface-container-low hover:bg-surface-container transition-colors shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" type="button"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-code-tech-sm text-code-tech-sm text-on-surface font-medium">Ready</span><span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span></button><div class="absolute right-0 top-full mt-1.5 w-48 py-1 rounded-2xl bg-surface-container-lowest shadow-[0_12px_32px_-8px_rgba(43,50,59,0.08)] hidden group-hover:flex flex-col z-50"><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-primary"></span><span class="font-body-sm text-body-sm text-on-surface">Ready</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-tertiary"></span><span class="font-body-sm text-body-sm text-on-surface">Busy (3 queued)</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-secondary"></span><span class="font-body-sm text-body-sm text-on-surface">Loading model</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-outline-variant"></span><span class="font-body-sm text-body-sm text-on-surface">Asleep</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-error"></span><span class="font-body-sm text-body-sm text-on-surface">Error</span></div></div></div><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Toggle theme" type="button"><span class="material-symbols-outlined text-[18px]">light_mode</span></button><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors font-code-tech-xs text-code-tech-xs font-medium" title="Keyboard shortcuts" type="button"><span class="material-symbols-outlined text-[18px]">help_outline</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/></div></div></header><main class="w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full">
+<!-- Interactive & Studio Canvas Container -->
+<div class="w-full max-w-[940px] mx-auto px-margin md:px-gutter-desktop pt-space-lg pb-48 flex flex-col gap-space-xl">
+<!-- Timeline Meta Stream Header -->
+<div class="flex items-center justify-between pb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-2.5 h-2.5 rounded-full bg-primary animate-pulse"></span>
+<span class="font-headline-sm text-headline-sm text-on-surface font-semibold tracking-tight">Active Generation Session</span>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">Session #8824-B</span>
+</div>
+<div class="flex items-center gap-space-xs text-on-surface-variant">
+<button class="flex items-center gap-1 px-space-sm py-1 rounded-full bg-surface-container hover:bg-surface-container-high transition-colors font-label-md text-label-md text-on-surface" type="button">
+<span class="material-symbols-outlined text-[16px] text-primary">filter_list</span>
+<span>All runs (4)</span>
+</button>
+<button class="w-7 h-7 flex items-center justify-center rounded-full bg-surface-container hover:bg-surface-container-high transition-colors" title="Session details" type="button">
+<span class="material-symbols-outlined text-[16px]">info</span>
+</button>
+</div>
+</div>
+<!-- ========================================================================= -->
+<!-- TURN 1: Completed 9:16 portrait lighthouse with lineage and quick actions -->
+<!-- ========================================================================= -->
+<article class="flex flex-col gap-space-md p-space-lg rounded-lg bg-surface-container-lowest shadow-sm hover:shadow-md transition-shadow duration-300">
+<!-- Prompt Header & Lineage -->
+<div class="flex flex-col gap-space-xs">
+<div class="flex items-start justify-between gap-space-md">
+<div class="flex items-start gap-space-sm flex-1">
+<span class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant font-code-tech-xs text-code-tech-xs font-semibold mt-0.5">01</span>
+<div class="flex flex-col gap-1 flex-1">
+<p class="font-body-lg text-body-lg text-on-surface font-medium leading-snug">
+                A lighthouse on a cliff during a storm, waves crashing
+              </p>
+<!-- Lineage marker -->
+<div class="flex items-center gap-1.5 text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span class="material-symbols-outlined text-[14px] text-tertiary">subdirectory_arrow_right</span>
+<span class="text-tertiary font-medium">↳ variation of seed 47902</span>
+<span class="text-outline-variant">·</span>
+<span>Latent noise bias: 0.35</span>
+</div>
+</div>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant shrink-0">14:18:04</span>
+</div>
+<!-- Chips & Hyper-parameters -->
+<div class="flex flex-wrap items-center gap-1.5 pt-1">
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs font-medium">9:16</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">seed 48213</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">40 steps</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">2m 31s</span>
+<span class="px-2.5 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed-variant font-code-tech-xs text-code-tech-xs font-medium">Qwen-Image 2.1</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-code-tech-xs text-code-tech-xs">bf16</span>
+<button class="ml-auto text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1 font-label-md text-label-md" type="button">
+<span class="material-symbols-outlined text-[15px]">content_copy</span>
+<span>Copy Prompt</span>
+</button>
+</div>
+</div>
+<!-- Turn 1 Visual Showcase (True 9:16 Aspect Card) -->
+<div class="relative w-full max-w-[360px] mx-auto group overflow-hidden rounded-[1.25rem] bg-surface-container-high shadow-md transition-all duration-300">
+<div class="aspect-[9/16] w-full relative">
+<img alt="Towering lighthouse standing firm on steep jagged sea cliffs amidst a thunderous oceanic tempest, colossal cyan and azure waves crashing upward, atmospheric rain streaks and warm incandescent lantern beam piercing dark storm clouds" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAdjgZNRo1Ffi8ZEBMfY0P_SUfVOiJVg-pOf-Wky8cvqqWjHFUvuq0ZjlG1ZkwdY4W7qUkS0s3PwlPwsjUeBqq0DCKhWYWUblX7P2efT5aS01bpgcjP5DPd5KeBPj6dxR5jtREp_SQ8xC5JdkmNhHWtINOExabgpz-7pUx3gciUEJIow0mVPHX5DZH8b_bwINJZ6kOXcrfd_j5D8KFbbBFn12gVuYUJu8OqH7xBkYsTfw30482QqP1l"/>
+<!-- Live Watermark / Precision Pill -->
+<div class="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-inverse-surface/80 backdrop-blur-md text-inverse-on-surface font-code-tech-xs text-code-tech-xs">
+<span class="w-1.5 h-1.5 rounded-full bg-primary-fixed"></span>
+<span>Completed · 1152×2048</span>
+</div>
+<!-- Bottom Scrim Overlay with Technical Data & Hover Actions -->
+<div class="absolute inset-x-0 bottom-0 p-space-md bg-gradient-to-t from-inverse-surface/90 via-inverse-surface/40 to-transparent flex flex-col justify-end gap-2 translate-y-2 opacity-95 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-200">
+<div class="flex items-center justify-between text-inverse-on-surface">
+<span class="font-code-tech-xs text-code-tech-xs opacity-80">sampler: Euler A · CFG 6.5</span>
+<!-- Quick Actions -->
+<div class="flex items-center gap-1">
+<button class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/25 backdrop-blur text-white flex items-center justify-center transition-transform hover:scale-110" title="Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">favorite</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/25 backdrop-blur text-white flex items-center justify-center transition-transform hover:scale-110" title="Vary Seed" type="button">
+<span class="material-symbols-outlined text-[18px]">casino</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/25 backdrop-blur text-white flex items-center justify-center transition-transform hover:scale-110" title="Open Inspector" type="button">
+<span class="material-symbols-outlined text-[18px]">open_in_full</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/25 backdrop-blur text-white flex items-center justify-center transition-transform hover:scale-110" title="Download" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- ========================================================================= -->
+<!-- TURN 2: Mixed States (2 images requested, 1:1 ratio: Tile A Done, Tile B Generating) -->
+<!-- ========================================================================= -->
+<article class="flex flex-col gap-space-md p-space-lg rounded-lg bg-surface-container-lowest shadow-sm hover:shadow-md transition-shadow duration-300">
+<!-- Prompt Header -->
+<div class="flex flex-col gap-space-xs">
+<div class="flex items-start justify-between gap-space-md">
+<div class="flex items-start gap-space-sm flex-1">
+<span class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant font-code-tech-xs text-code-tech-xs font-semibold mt-0.5">02</span>
+<div class="flex flex-col gap-1 flex-1">
+<p class="font-body-lg text-body-lg text-on-surface font-medium leading-snug">
+                Portrait of an elderly fisherman, Rembrandt lighting, weathered skin, 85mm photo
+              </p>
+<div class="flex items-center gap-1.5 text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span>Studio Batch Batch-4091</span>
+<span class="text-outline-variant">·</span>
+<span>2 concurrent variants</span>
+</div>
+</div>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant shrink-0">14:24:19</span>
+</div>
+<!-- Chips -->
+<div class="flex flex-wrap items-center gap-1.5 pt-1">
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs font-medium">1:1</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">seed 19042</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">40 steps</span>
+<span class="px-2.5 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant font-code-tech-xs text-code-tech-xs font-medium">Denoising</span>
+</div>
+</div>
+<!-- 2-Column Grid (1:1 Ratio) -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter-desktop">
+<!-- Tile A: Done -->
+<div class="relative group overflow-hidden rounded-[1.25rem] bg-surface-container-high aspect-square shadow-sm">
+<img alt="Cinematic square format close-up portrait of an elderly bearded sea fisherman wearing a navy wool watch cap and oilskin coat against a harbor backdrop, deep Rembrandt chiaroscuro lighting, intricate wrinkles and weathered skin details" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBa9O0kyuTiMWtFRPXAXHfj7VWzqxCuWPcGvJDsIVeMd-0dcw6gH20stHgYqYeCQgMboxbmEdNehrKfVzE_gYnkjd_qD0upAxOqZAOqzjPNUs2dmNOZCTO6Jx1cZI9uJgCyry2qmb9JuBEyGGGDlI78kN9RxzZsWrd9DosyKX7aqk0oknvm6yrO7h9KPqz6f4Mc5XpFsCPtC3q_Fp78e3Ve1DcEMRN4l17uYJ9f3_Ja_Aqau1HKeaax"/>
+<!-- Quick State Pill -->
+<div class="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-inverse-surface/80 backdrop-blur text-inverse-on-surface font-code-tech-xs text-code-tech-xs flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[13px] text-tertiary-fixed">check_circle</span>
+<span>Seed 19042 · Done</span>
+</div>
+<!-- Bottom Hover Scrim Overlay -->
+<div class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-inverse-surface/90 via-inverse-surface/40 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+<span class="font-code-tech-xs text-code-tech-xs text-inverse-on-surface">1024×1024 · 3.4MB</span>
+<div class="flex items-center gap-1">
+<button class="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center transition-all" title="Favorite" type="button">
+<span class="material-symbols-outlined text-[16px]">favorite</span>
+</button>
+<button class="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center transition-all" title="Vary" type="button">
+<span class="material-symbols-outlined text-[16px]">casino</span>
+</button>
+<button class="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center transition-all" title="Expand" type="button">
+<span class="material-symbols-outlined text-[16px]">open_in_full</span>
+</button>
+<button class="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center transition-all" title="Download" type="button">
+<span class="material-symbols-outlined text-[16px]">download</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Tile B: Generating in Progress -->
+<div class="relative overflow-hidden rounded-[1.25rem] bg-surface-container aspect-square flex flex-col justify-between p-space-lg shadow-inner">
+<div class="flex items-center justify-between w-full">
+<span class="px-2.5 py-1 rounded-full bg-surface-container-highest text-on-surface font-code-tech-xs text-code-tech-xs font-medium flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-primary animate-ping"></span>
+<span>Denoising Latents</span>
+</span>
+<button class="px-2.5 py-1 rounded-full bg-surface-container-highest hover:bg-error-container text-on-surface hover:text-on-error-container font-label-md text-label-md transition-colors flex items-center gap-1" type="button">
+<span class="material-symbols-outlined text-[14px]">close</span>
+<span>Cancel</span>
+</button>
+</div>
+<!-- Central Ambient Spinner / Pulse graphic -->
+<div class="flex flex-col items-center justify-center gap-space-sm text-center py-4">
+<div class="relative w-16 h-16 flex items-center justify-center">
+<svg class="w-full h-full -rotate-90" viewbox="0 0 36 36">
+<!-- Background track -->
+<path class="text-surface-container-highest" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path>
+<!-- Progress stroke (60%) -->
+<path class="text-primary stroke-dasharray-[60,100] transition-all duration-500 ease-out" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="60, 100" stroke-linecap="round" stroke-width="3"></path>
+</svg>
+<span class="absolute font-headline-sm text-headline-sm font-semibold text-primary">60%</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-sm text-headline-sm text-on-surface font-medium">Synthesizing High-Pass Detail</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">step 24 / 40 · ~48s remaining</span>
+</div>
+</div>
+<!-- Bottom Step Bar -->
+<div class="flex flex-col gap-1.5 w-full">
+<div class="w-full bg-surface-container-highest h-2 rounded-full overflow-hidden">
+<div class="bg-primary h-full rounded-full w-[60%] transition-all duration-300"></div>
+</div>
+<div class="flex items-center justify-between text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span>seed 19043 (variant)</span>
+<span>Karras sched. · 1.4 it/s</span>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- ========================================================================= -->
+<!-- TURN 3: 16:9 Landscape Turn with Queued and Calm Failed States -->
+<!-- ========================================================================= -->
+<article class="flex flex-col gap-space-md p-space-lg rounded-lg bg-surface-container-lowest shadow-sm hover:shadow-md transition-shadow duration-300">
+<!-- Prompt Header -->
+<div class="flex flex-col gap-space-xs">
+<div class="flex items-start justify-between gap-space-md">
+<div class="flex items-start gap-space-sm flex-1">
+<span class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant font-code-tech-xs text-code-tech-xs font-semibold mt-0.5">03</span>
+<div class="flex flex-col gap-1 flex-1">
+<p class="font-body-lg text-body-lg text-on-surface font-medium leading-snug">
+                Panoramic mountain lake at dawn, mist over the water, a single canoe (16:9)
+              </p>
+<div class="flex items-center gap-1.5 text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span>Cluster GPU Node-04</span>
+<span class="text-outline-variant">·</span>
+<span>Job #QA-992</span>
+</div>
+</div>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant shrink-0">14:31:02</span>
+</div>
+<!-- Chips -->
+<div class="flex flex-wrap items-center gap-1.5 pt-1">
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs font-medium">16:9</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">2 images requested</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">High Dynamic Range</span>
+</div>
+</div>
+<!-- 2-Column Responsive Grid (16:9 Tiles) -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter-desktop">
+<!-- Tile A: Queued State -->
+<div class="relative overflow-hidden rounded-[1.25rem] bg-surface-container aspect-video flex flex-col justify-between p-space-md shadow-inner">
+<div class="flex items-center justify-between">
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-code-tech-xs text-code-tech-xs flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+<span>Queued Position #1</span>
+</span>
+<button class="px-2 py-0.5 rounded-full bg-surface-container-high hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface font-label-md text-label-md transition-colors" type="button">
+              Cancel
+            </button>
+</div>
+<div class="flex flex-col items-center justify-center gap-2 text-center my-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined text-[20px] animate-spin">hourglass_empty</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-sm text-headline-sm text-on-surface font-medium">Waiting for inference slot</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">1 ahead in queue · Estimated wait ~18s</span>
+</div>
+</div>
+<div class="flex items-center justify-between font-code-tech-xs text-code-tech-xs text-on-surface-variant px-1">
+<span>seed 61002</span>
+<span>Allocating VRAM (12.4GB)</span>
+</div>
+</div>
+<!-- Tile B: Calm Failed State -->
+<div class="relative overflow-hidden rounded-[1.25rem] bg-surface-container aspect-video flex flex-col justify-between p-space-md shadow-inner">
+<div class="flex items-center justify-between">
+<span class="px-2.5 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant font-code-tech-xs text-code-tech-xs flex items-center gap-1.5 font-medium">
+<span class="material-symbols-outlined text-[13px]">warning</span>
+<span>Generation Interrupted</span>
+</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">seed 61003</span>
+</div>
+<div class="flex flex-col items-center justify-center gap-2 text-center my-auto">
+<div class="w-10 h-10 rounded-full bg-tertiary-fixed flex items-center justify-center text-tertiary">
+<span class="material-symbols-outlined text-[20px]">sync_problem</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-sm text-headline-sm text-on-surface font-medium">The generator stopped unexpectedly</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Latent pipeline halted at step 12. GPU memory was recovered safely.</span>
+</div>
+</div>
+<div class="flex items-center justify-between font-label-md text-label-md px-1">
+<a class="text-tertiary hover:underline flex items-center gap-1" href="#">
+<span class="material-symbols-outlined text-[14px]">article</span>
+<span>View error log</span>
+</a>
+<button class="px-3 py-1 rounded-full bg-primary text-on-primary hover:bg-primary-container transition-colors font-medium flex items-center gap-1 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[14px]">refresh</span>
+<span>Retry Tile</span>
+</button>
+</div>
+</div>
+</div>
+</article>
+<!-- ========================================================================= -->
+<!-- TURN 4: Cancelled State Example -->
+<!-- ========================================================================= -->
+<article class="flex flex-col gap-space-md p-space-lg rounded-lg bg-surface-container-lowest shadow-sm hover:shadow-md transition-shadow duration-300">
+<div class="flex flex-col gap-space-xs">
+<div class="flex items-start justify-between gap-space-md">
+<div class="flex items-start gap-space-sm flex-1">
+<span class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant font-code-tech-xs text-code-tech-xs font-semibold mt-0.5">04</span>
+<div class="flex flex-col gap-1 flex-1">
+<p class="font-body-lg text-body-lg text-on-surface font-medium leading-snug">
+                Cybernetic botanical greenhouse interior, diffuse volumetric morning sunshine, moss terrarium details
+              </p>
+<div class="flex items-center gap-1.5 text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span>Cancelled manually</span>
+<span class="text-outline-variant">·</span>
+<span>Job aborted at 4%</span>
+</div>
+</div>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant shrink-0">14:38:40</span>
+</div>
+<div class="flex flex-wrap items-center gap-1.5 pt-1">
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs font-medium">3:2</span>
+<span class="px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-code-tech-xs text-code-tech-xs">Aborted by operator</span>
+</div>
+</div>
+<!-- Cancelled Tile Holder -->
+<div class="w-full rounded-[1.25rem] bg-surface-container p-space-lg flex flex-col md:flex-row items-center justify-between gap-space-md">
+<div class="flex items-center gap-space-md">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined text-[20px]">block</span>
+</div>
+<div class="flex flex-col">
+<span class="font-headline-sm text-headline-sm text-on-surface font-medium">Cancelled by user</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">No credits were deducted. Latent buffer cleared successfully.</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<button class="px-4 py-1.5 rounded-full bg-surface-container-highest hover:bg-surface-container-low text-on-surface font-label-md text-label-md transition-colors flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px]">edit</span>
+<span>Edit Prompt</span>
+</button>
+<button class="px-4 py-1.5 rounded-full bg-primary text-on-primary hover:bg-primary-container transition-colors font-label-md text-label-md font-medium flex items-center gap-1.5 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[16px]">replay</span>
+<span>Restart</span>
+</button>
+</div>
+</div>
+</article>
+</div>
+<!-- ========================================================================= -->
+<!-- DOCKED COMPOSER AT BOTTOM (PERSISTENT & ULTRA-POLISHED) -->
+<!-- ========================================================================= -->
+<aside class="fixed bottom-0 inset-x-0 z-40 px-margin md:px-gutter-desktop pb-4 pointer-events-none">
+<div class="w-full max-w-[940px] mx-auto pointer-events-auto flex flex-col gap-2">
+<!-- Floating Context Chip / Sticky Reuse Banner -->
+<div class="self-start flex items-center gap-2 px-3 py-1 rounded-full bg-surface-container-lowest/95 backdrop-blur-md shadow-md text-on-surface font-label-md text-label-md transition-all">
+<span class="material-symbols-outlined text-[15px] text-primary">history</span>
+<span>Reuse settings applied from <strong class="font-code-tech-xs text-code-tech-xs">seed 48213</strong></span>
+<button class="ml-1 text-on-surface-variant hover:text-error transition-colors flex items-center" title="Dismiss inherited settings" type="button">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+<!-- Main Frosted Composer Console -->
+<div class="flex flex-col rounded-lg bg-surface-container-lowest/95 backdrop-blur-2xl shadow-xl overflow-hidden">
+<!-- Reference Strip Drawer (Collapsible) -->
+<div class="px-space-md pt-space-sm pb-1 flex items-center gap-2 overflow-x-auto" id="reference-strip">
+<button class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors shrink-0" type="button">
+<span class="material-symbols-outlined text-[16px] text-primary">add_photo_alternate</span>
+<span>+ Add reference images</span>
+</button>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface-variant font-code-tech-xs text-code-tech-xs shrink-0">
+<span class="material-symbols-outlined text-[14px]">tune</span>
+<span>Image guidance: inactive</span>
+</div>
+</div>
+<!-- Prompt Input Textarea -->
+<div class="p-space-md pb-space-sm flex flex-col">
+<textarea class="w-full bg-transparent resize-none font-body-lg text-body-lg text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none" id="prompt-composer" placeholder="Describe what you want to imagine... (Enter to submit, Shift+Enter for new line)" rows="2"></textarea>
+</div>
+<!-- Controls Dock Toolbar -->
+<div class="px-space-md pb-space-md pt-1 flex flex-wrap items-center justify-between gap-space-sm">
+<!-- Left Controls: Aspect Ratio, Count, Seed, Quality -->
+<div class="flex flex-wrap items-center gap-space-sm">
+<!-- Aspect Ratio Selector Dropdown/Group -->
+<div class="relative group/aspect">
+<button class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-code-tech-xs text-code-tech-xs transition-colors" type="button">
+<!-- Graphical mini box for 9:16 -->
+<span class="w-2.5 h-4 rounded-[2px] bg-primary-container"></span>
+<span class="font-semibold">9:16</span>
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">expand_more</span>
+</button>
+<!-- Popover Picker with Graphical Aspect Preview Boxes -->
+<div class="absolute bottom-full left-0 mb-2 p-2 rounded-2xl bg-surface-container-lowest shadow-xl hidden group-hover/aspect:flex items-center gap-1 z-50">
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="1:1 Square" type="button">
+<span class="w-5 h-5 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">1:1</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="4:3 Landscape" type="button">
+<span class="w-6 h-4.5 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">4:3</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="3:4 Portrait" type="button">
+<span class="w-4.5 h-6 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">3:4</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="3:2 Classic" type="button">
+<span class="w-6 h-4 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">3:2</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="2:3 Tall" type="button">
+<span class="w-4 h-6 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">2:3</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl hover:bg-surface-container transition-colors" title="16:9 Wide" type="button">
+<span class="w-7 h-4 rounded-[3px] bg-surface-container-highest"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface">16:9</span>
+</button>
+<button class="flex flex-col items-center gap-1 p-2 rounded-xl bg-primary-fixed hover:bg-primary-fixed-dim transition-colors" title="9:16 Story" type="button">
+<span class="w-4 h-7 rounded-[3px] bg-primary"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-primary-fixed font-bold">9:16</span>
+</button>
+</div>
+</div>
+<!-- Image Count Selector -->
+<div class="flex items-center p-0.5 rounded-full bg-surface-container text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<button class="px-2 py-0.5 rounded-full bg-surface-container-lowest text-on-surface font-semibold shadow-xs" type="button">1</button>
+<button class="px-2 py-0.5 rounded-full hover:text-on-surface" type="button">2</button>
+<button class="px-2 py-0.5 rounded-full hover:text-on-surface" type="button">3</button>
+<button class="px-2 py-0.5 rounded-full hover:text-on-surface" type="button">4</button>
+</div>
+<!-- Seed Control Pill -->
+<div class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs">
+<span class="material-symbols-outlined text-[14px] text-tertiary">casino</span>
+<span class="text-on-surface-variant">seed:</span>
+<span class="font-medium">48213</span>
+<button class="ml-0.5 text-on-surface-variant hover:text-primary" title="Toggle seed locking" type="button">
+<span class="material-symbols-outlined text-[13px]">lock_open</span>
+</button>
+</div>
+<!-- Quality Segmented Control -->
+<div class="hidden sm:flex items-center p-0.5 rounded-full bg-surface-container font-label-md text-label-md text-on-surface-variant">
+<button class="px-2.5 py-0.5 rounded-full bg-surface-container-lowest text-on-surface font-medium shadow-xs" type="button">Standard (40)</button>
+<button class="px-2 py-0.5 rounded-full hover:text-on-surface" type="button">Draft (20)</button>
+<button class="px-2 py-0.5 rounded-full hover:text-on-surface" type="button">Custom</button>
+</div>
+<!-- Enhance Prompt Toggle Pill (Disabled with badge) -->
+<div class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-low opacity-60 cursor-not-allowed">
+<span class="font-label-md text-label-md text-on-surface-variant">✨ Enhance</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.2 rounded-full bg-surface-container-highest text-on-surface-variant">soon</span>
+</div>
+</div>
+<!-- Right Action: Prominent Generate CTA -->
+<div class="flex items-center gap-space-sm ml-auto">
+<button class="flex items-center gap-2 px-space-lg py-2 rounded-full bg-primary hover:bg-primary-container text-on-primary transition-all duration-200 shadow-md hover:shadow-lg font-label-lg text-label-lg font-semibold tracking-wide active:scale-95" type="button">
+<span>Generate</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded-full bg-on-primary/20 text-on-primary">↵</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Micro Keyboard Prompt Footnote -->
+<div class="flex items-center justify-between px-2 text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span>Aries Generative Engine · Ready for dispatch</span>
+</span>
+<span class="hidden sm:inline">Press <kbd class="px-1 rounded bg-surface-container text-on-surface">Tab</kbd> to jump parameters · <kbd class="px-1 rounded bg-surface-container text-on-surface">Cmd + K</kbd> for command palette</span>
+</div>
+</div>
+</aside>
+<!-- Composer & Dynamic Interaction Behavior -->
+<script>
+    (function () {
+      const textarea = document.getElementById('prompt-composer');
+      if (textarea) {
+        textarea.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (this.value.trim().length > 0) {
+              const currentVal = this.value;
+              this.value = '';
+              console.log('Dispatched generation job for:', currentVal);
+            }
+          }
+        });
+      }
+    })();
+  </script>
+</div></main><footer class="w-full bg-surface-container-lowest py-space-xl shadow-[0_1px_8px_rgba(43,50,59,0.02)]"><div class="w-full px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-space-md text-on-surface-variant"><div class="flex items-center gap-space-md"><span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Aries Studio</span><span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Atmospheric Neural Canvas · Personal Edition</span></div><div class="flex items-center gap-space-lg font-label-md text-label-md"><a class="hover:text-on-surface transition-colors" data-path="timeline-view" href="#">Timeline</a><a class="hover:text-on-surface transition-colors" data-path="gallery-view" href="#">Gallery</a><a class="hover:text-on-surface transition-colors" data-path="status-and-edge-states" href="#">Telemetry</a><a class="hover:text-on-surface transition-colors" data-path="style-sheet-and-components" href="#">Design System</a></div><div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">© 2025 Aries Studio. High-fidelity generative atelier.</div></div></footer></body></html>

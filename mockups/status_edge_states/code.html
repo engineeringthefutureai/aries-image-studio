@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_standard" name="shell-type"/><title>Aries Studio</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#e5e2db", "tertiary-fixed-dim": "#f0bd8b", "surface-container": "#f1eee7", "tertiary": "#7b542b", "on-tertiary-container": "#fffbff", "inverse-primary": "#ffb59c", "surface-bright": "#fcf9f2", "on-tertiary-fixed-variant": "#623f18", "tertiary-fixed": "#ffdcbd", "on-secondary-fixed": "#151c25", "tertiary-container": "#966c41", "surface-tint": "#a83907", "on-primary-fixed": "#380c00", "on-primary": "#ffffff", "secondary": "#585f69", "on-secondary": "#ffffff", "surface-variant": "#e5e2db", "surface-container-lowest": "#ffffff", "surface": "#fcf9f2", "on-error": "#ffffff", "on-error-container": "#93000a", "surface-container-low": "#f6f3ec", "on-surface": "#1c1c18", "error-container": "#ffdad6", "inverse-surface": "#31312c", "primary-fixed": "#ffdbcf", "primary-fixed-dim": "#ffb59c", "outline-variant": "#dfc0b6", "on-secondary-fixed-variant": "#404751", "on-secondary-container": "#5e656f", "primary-container": "#c64e1f", "secondary-fixed-dim": "#c0c7d2", "error": "#ba1a1a", "background": "#fcf9f2", "on-primary-fixed-variant": "#822800", "secondary-container": "#dce3ef", "on-tertiary": "#ffffff", "on-tertiary-fixed": "#2c1600", "on-surface-variant": "#58423a", "outline": "#8c7169", "surface-dim": "#dcdad3", "on-background": "#1c1c18", "inverse-on-surface": "#f3f0e9", "on-primary-container": "#fffbff", "secondary-fixed": "#dce3ef", "surface-container-high": "#ebe8e1", "primary": "#a53705" }, "borderRadius": { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, "spacing": { "space-lg": "1.5rem", "margin-desktop": "2.5rem", "margin-tablet": "1.5rem", "space-xl": "2.5rem", "space-sm": "0.5rem", "gutter": "1.25rem", "space-md": "1rem", "margin": "1rem", "gutter-desktop": "1.5rem", "space-xs": "0.25rem" }, "fontFamily": { "body-md": ["Inter"], "label-lg": ["Plus Jakarta Sans"], "code-tech-xs": ["JetBrains Mono"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "headline-xl": ["Plus Jakarta Sans"], "label-md": ["Inter"], "body-lg": ["Inter"], "headline-lg": ["Plus Jakarta Sans"], "body-sm": ["Inter"], "headline-lg-mobile": ["Plus Jakarta Sans"], "code-tech-sm": ["JetBrains Mono"], "headline-xl-mobile": ["Plus Jakarta Sans"] }, "fontSize": { "body-md": ["14px", { "lineHeight": "22px", "fontWeight": "400" }], "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }], "code-tech-xs": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-xl": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.03em", "fontWeight": "600" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "500" }], "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.005em", "fontWeight": "400" }], "headline-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "code-tech-sm": ["11px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-xl-mobile": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.025em", "fontWeight": "600" }] } } } };</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased"><header class="fixed top-0 left-0 right-0 z-50 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(43,50,59,0.04)]"><div class="h-16 w-full px-margin-desktop flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-md flex-shrink-0"><a class="flex items-center gap-space-sm group" data-path="timeline-view" href="#"><span class="flex items-center justify-center w-8 h-8 rounded-full bg-primary-container text-on-primary-container shadow-[0_2px_8px_-2px_rgba(43,50,59,0.04)]"><span class="material-symbols-outlined text-[18px]">flare</span></span><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface group-hover:text-primary transition-colors">Aries Studio</span></a><span class="font-code-tech-xs text-code-tech-xs px-space-xs py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">v2.1</span></div><div class="hidden xl:flex items-center gap-space-lg flex-1 justify-center max-w-4xl"><div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]"><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="timeline-view" href="#"><span class="material-symbols-outlined text-[15px]">stream</span><span>Timeline</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">T</span></a><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="gallery-view" href="#"><span class="material-symbols-outlined text-[15px]">grid_view</span><span>Gallery</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">G</span></a></div><nav class="flex items-center gap-space-xs bg-surface-container-low px-space-sm py-1 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" data-active-classes="bg-primary-container text-on-primary-container font-semibold"><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="timeline-view" href="#">Timeline View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="gallery-view" href="#">Gallery View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="image-viewer-overlay" href="#">Image Viewer Overlay</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="status-and-edge-states" href="#">Status & Edge States</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="style-sheet-and-components" href="#">Style Sheet & Components</a></nav></div><div class="flex items-center gap-space-sm flex-shrink-0"><div class="relative group"><button class="flex items-center gap-space-xs px-space-md py-1 rounded-full bg-surface-container-low hover:bg-surface-container transition-colors shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" type="button"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-code-tech-sm text-code-tech-sm text-on-surface font-medium">Ready</span><span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span></button><div class="absolute right-0 top-full mt-1.5 w-48 py-1 rounded-2xl bg-surface-container-lowest shadow-[0_12px_32px_-8px_rgba(43,50,59,0.08)] hidden group-hover:flex flex-col z-50"><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-primary"></span><span class="font-body-sm text-body-sm text-on-surface">Ready</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-tertiary"></span><span class="font-body-sm text-body-sm text-on-surface">Busy (3 queued)</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-secondary"></span><span class="font-body-sm text-body-sm text-on-surface">Loading model</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-outline-variant"></span><span class="font-body-sm text-body-sm text-on-surface">Asleep</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-error"></span><span class="font-body-sm text-body-sm text-on-surface">Error</span></div></div></div><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Toggle theme" type="button"><span class="material-symbols-outlined text-[18px]">light_mode</span></button><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors font-code-tech-xs text-code-tech-xs font-medium" title="Keyboard shortcuts" type="button"><span class="material-symbols-outlined text-[18px]">help_outline</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/></div></div></header><main class="w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full">
+<!-- Page Header / Atelier Contextual Strip -->
+<section class="w-full px-margin-desktop pt-8 pb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-2">
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container-highest text-primary font-medium tracking-wide">TELEMETRY & HARNESS</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Aries v2.1 Engine Suite</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface font-semibold tracking-tight">Status & Edge States Atelier</h1>
+<p class="font-body-md text-body-md text-on-surface-variant max-w-2xl">
+        Complete operational showcase featuring real-time generator engine pills, live node diagnostic inspector, zero-state timeline starters, filtered gallery voids, and critical interaction sheets.
+      </p>
+</div>
+<div class="flex items-center gap-3">
+<button class="flex items-center gap-2 px-space-md py-2 rounded-full bg-surface-container hover:bg-surface-container-high transition-colors font-label-md text-label-md text-on-surface shadow-sm" onclick="document.getElementById('shortcut-sheet-modal').classList.remove('hidden')" type="button">
+<span class="material-symbols-outlined text-[16px] text-primary">keyboard</span>
+<span>Shortcuts Sheet</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.2 rounded bg-surface-container-highest text-secondary">?</span>
+</button>
+<button class="flex items-center gap-2 px-space-md py-2 rounded-full bg-primary hover:bg-primary/95 text-on-primary transition-all font-label-md text-label-md shadow-sm" onclick="triggerSimulatedPulse()" type="button">
+<span class="material-symbols-outlined text-[16px]">sync</span>
+<span>Poll Hardware Nodes</span>
+</button>
+</div>
+</section>
+<!-- Offline / Reconnecting System Banner -->
+<section class="w-full px-margin-desktop mb-8">
+<div class="w-full p-4 rounded-DEFAULT bg-surface-container-high flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-surface-container-highest flex items-center justify-center text-on-surface-variant flex-shrink-0">
+<span class="material-symbols-outlined text-[20px] text-tertiary">bedtime</span>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline-sm text-headline-sm text-on-surface font-medium">Generator Node Cold Sleep</span>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-medium">Daemon Suspended</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">
+            Generator asleep — new prompt tasks will accumulate safely in local queue (3 jobs buffered) and resume automatically once nodes wake.
+          </p>
+</div>
+</div>
+<div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
+<button class="px-space-md py-1.5 rounded-full bg-surface-container-highest hover:bg-surface-variant text-on-surface font-label-md text-label-md transition-colors" type="button">
+          View Buffer (3)
+        </button>
+<button class="px-space-md py-1.5 rounded-full bg-primary text-on-primary hover:bg-primary/90 font-label-md text-label-md transition-colors flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[15px]">power_settings_new</span>
+<span>Wake Engine (Spin-up)</span>
+</button>
+</div>
+</div>
+</section>
+<!-- SECTION 1: THE 5 GENERATOR STATES & HARDWARE HEALTH FLYOUT -->
+<section class="w-full px-margin-desktop mb-12">
+<div class="flex items-center justify-between mb-4">
+<div>
+<div class="font-code-tech-xs text-code-tech-xs text-primary font-medium">SYSTEM ORCHESTRATION</div>
+<h2 class="font-headline-md text-headline-md text-on-surface">1. Generator Status Lifecycle States</h2>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">5 Core Rig States • Tap to Inspect</span>
+</div>
+<!-- The 5 State Pills Matrix -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+<!-- 1. Ready -->
+<div class="p-3.5 rounded-DEFAULT bg-surface-container-low hover:bg-surface-container transition-all flex flex-col gap-2.5 cursor-pointer shadow-sm group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="relative flex h-2.5 w-2.5">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
+</span>
+<span class="font-label-lg text-label-lg font-semibold text-on-surface">Ready</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-surface-container-high text-primary font-medium">STATE 01</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Idle daemon, weights resident in VRAM. Will dispatch immediately (<0.4s start).</p>
+<div class="pt-2 flex items-center justify-between text-secondary">
+<span class="font-code-tech-xs text-code-tech-xs">VRAM: 14.2 / 24GB</span>
+<span class="material-symbols-outlined text-[16px] group-hover:text-primary transition-colors">check_circle</span>
+</div>
+</div>
+<!-- 2. Busy -->
+<div class="p-3.5 rounded-DEFAULT bg-surface-container-low hover:bg-surface-container transition-all flex flex-col gap-2.5 cursor-pointer shadow-sm group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="relative flex h-2.5 w-2.5">
+<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-tertiary"></span>
+</span>
+<span class="font-label-lg text-label-lg font-semibold text-on-surface">Busy · 3 queued</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-surface-container-high text-tertiary font-medium">STATE 02</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Synthesizing batch #884. Step 24/30. ETA: 4.8s remaining across active queue.</p>
+<div class="pt-2 flex items-center justify-between text-secondary">
+<span class="font-code-tech-xs text-code-tech-xs">Pipe: 82% · 32 it/s</span>
+<span class="material-symbols-outlined text-[16px] text-tertiary">hourglass_top</span>
+</div>
+</div>
+<!-- 3. Loading -->
+<div class="p-3.5 rounded-DEFAULT bg-surface-container-low hover:bg-surface-container transition-all flex flex-col gap-2.5 cursor-pointer shadow-sm group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-secondary animate-spin">cyclone</span>
+<span class="font-label-lg text-label-lg font-semibold text-on-surface">Loading weights</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-surface-container-high text-secondary font-medium">STATE 03</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Allocating safetensors to CUDA context. Warming UNet & VAE caches (45s elapsed).</p>
+<div class="pt-2 flex items-center justify-between text-secondary">
+<span class="font-code-tech-xs text-code-tech-xs">Stream: 1.8 GB/s</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">memory</span>
+</div>
+</div>
+<!-- 4. Asleep -->
+<div class="p-3.5 rounded-DEFAULT bg-surface-container-low hover:bg-surface-container transition-all flex flex-col gap-2.5 cursor-pointer shadow-sm group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-outline">bedtime</span>
+<span class="font-label-lg text-label-lg font-semibold text-on-surface">Asleep</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-surface-container-high text-outline font-medium">STATE 04</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Local runtime cluster unmounted to conserve energy. Automatic sleep after 20m idle.</p>
+<div class="pt-2 flex items-center justify-between text-secondary">
+<span class="font-code-tech-xs text-code-tech-xs">Wake cost: ~12s</span>
+<span class="material-symbols-outlined text-[16px] text-outline">power_off</span>
+</div>
+</div>
+<!-- 5. Error -->
+<div class="p-3.5 rounded-DEFAULT bg-surface-container-low hover:bg-surface-container transition-all flex flex-col gap-2.5 cursor-pointer shadow-sm group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-error">error</span>
+<span class="font-label-lg text-label-lg font-semibold text-error">VRAM Error</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-error-container text-on-error-container font-medium">STATE 05</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">CUDA Out-of-Memory during 4096px upscale pass. Tap to inspect telemetry & flush buffer.</p>
+<div class="pt-2 flex items-center justify-between text-error">
+<span class="font-code-tech-xs text-code-tech-xs">Code: OOM_ALLOC_FAIL</span>
+<span class="material-symbols-outlined text-[16px]">build</span>
+</div>
+</div>
+</div>
+<!-- Live Telemetry / Expanded Flyout Inspector Panel -->
+<div class="p-6 rounded-DEFAULT bg-surface-container-low shadow-sm">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Engine Telemetry & Node Health Flyout</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-container-highest font-code-tech-xs text-code-tech-xs text-on-surface-variant">Cluster-Node-01 (RTX 4090 24GB)</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Simulated hardware metrics and active priority pipeline scheduler.</p>
+</div>
+<div class="flex items-center gap-2">
+<button class="px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-code-tech-xs text-code-tech-xs transition-colors" type="button">Flush Cache</button>
+<button class="px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-code-tech-xs text-code-tech-xs transition-colors" type="button">Restart Daemon</button>
+</div>
+</div>
+<!-- Metrics Row -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+<!-- VRAM Metric with Mini Donut -->
+<div class="p-4 rounded-DEFAULT bg-surface-container flex items-center justify-between gap-3">
+<div class="flex flex-col">
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">VRAM ALLOCATION</span>
+<span class="font-headline-md text-headline-md text-on-surface font-semibold">18.2 <span class="font-body-sm text-body-sm text-secondary">/ 24 GB</span></span>
+<span class="font-code-tech-xs text-code-tech-xs text-tertiary">75.8% In-Use</span>
+</div>
+<svg class="w-14 h-14 flex-shrink-0" viewbox="0 0 36 36">
+<path class="text-surface-container-highest" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3.5"></path>
+<path class="text-primary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="76, 100" stroke-linecap="round" stroke-width="3.5"></path>
+<text class="text-on-surface font-code-tech-xs font-semibold" font-size="8" text-anchor="middle" x="18" y="20.5">76%</text>
+</svg>
+</div>
+<!-- GPU Temperature Metric -->
+<div class="p-4 rounded-DEFAULT bg-surface-container flex items-center justify-between gap-3">
+<div class="flex flex-col">
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">GPU DIE TEMPERATURE</span>
+<span class="font-headline-md text-headline-md text-on-surface font-semibold">58°C</span>
+<span class="font-code-tech-xs text-code-tech-xs text-primary">Normal • Target 72°C max</span>
+</div>
+<div class="flex flex-col items-center">
+<span class="material-symbols-outlined text-[28px] text-tertiary">thermostat</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Fan 44%</span>
+</div>
+</div>
+<!-- Queue Length / ETA -->
+<div class="p-4 rounded-DEFAULT bg-surface-container flex items-center justify-between gap-3">
+<div class="flex flex-col">
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">PENDING QUEUE</span>
+<span class="font-headline-md text-headline-md text-on-surface font-semibold">3 Jobs</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Est. clearance: 11.4s</span>
+</div>
+<div class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-fixed flex items-center justify-center font-code-tech-sm text-code-tech-sm font-semibold">
+            #3
+          </div>
+</div>
+<!-- Latency / Inference Speed -->
+<div class="p-4 rounded-DEFAULT bg-surface-container flex items-center justify-between gap-3">
+<div class="flex flex-col">
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">THROUGHPUT</span>
+<span class="font-headline-md text-headline-md text-on-surface font-semibold">28.4 <span class="font-body-sm text-body-sm text-secondary">it/s</span></span>
+<span class="font-code-tech-xs text-code-tech-xs text-primary">Float16 FlashAttention-2</span>
+</div>
+<span class="material-symbols-outlined text-[28px] text-secondary">speed</span>
+</div>
+</div>
+<!-- Current Job Queue Table -->
+<div class="w-full">
+<div class="font-code-tech-xs text-code-tech-xs text-secondary uppercase tracking-wider mb-2">Active Execution Queue</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-body-sm text-body-sm">
+<thead>
+<tr class="text-on-surface-variant font-label-md text-label-md">
+<th class="py-2 px-3 font-medium">Job ID</th>
+<th class="py-2 px-3 font-medium">Prompt Excerpt</th>
+<th class="py-2 px-3 font-medium">Aspect / Res</th>
+<th class="py-2 px-3 font-medium">Sampler & Steps</th>
+<th class="py-2 px-3 font-medium">Progress / Status</th>
+<th class="py-2 px-3 font-medium text-right">Action</th>
+</tr>
+</thead>
+<tbody class="divide-y-0">
+<tr class="bg-surface-container/60 hover:bg-surface-container transition-colors">
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-primary font-medium">#GEN-8841</td>
+<td class="py-2.5 px-3 text-on-surface font-medium truncate max-w-xs">Brutalist glass conservatory overgrown with Japanese moss at golden hour...</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">16:9 • 1344×768</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">DPM++ 2M Karras (30)</td>
+<td class="py-2.5 px-3">
+<div class="flex items-center gap-2">
+<div class="w-24 h-1.5 rounded-full bg-surface-container-highest overflow-hidden">
+<div class="h-full bg-primary rounded-full" style="width: 78%;"></div>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-primary font-semibold">78%</span>
+</div>
+</td>
+<td class="py-2.5 px-3 text-right">
+<button class="text-secondary hover:text-error transition-colors p-1" title="Cancel job" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">#GEN-8842</td>
+<td class="py-2.5 px-3 text-on-surface-variant truncate max-w-xs">Matte ceramic tea set on charred cedar table, diffused soft window light...</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">1:1 • 1024×1024</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">Euler Ancestral (25)</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-tertiary">Queued (Pos 2 • ETA 5.2s)</td>
+<td class="py-2.5 px-3 text-right">
+<button class="text-secondary hover:text-error transition-colors p-1" title="Cancel job" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">#GEN-8843</td>
+<td class="py-2.5 px-3 text-on-surface-variant truncate max-w-xs">Studio macro photograph of iridescent scarab beetle beetle shell, focus stack...</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">4:5 • 896×1152</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">UniPC (20)</td>
+<td class="py-2.5 px-3 font-code-tech-xs text-code-tech-xs text-secondary">Queued (Pos 3 • ETA 9.8s)</td>
+<td class="py-2.5 px-3 text-right">
+<button class="text-secondary hover:text-error transition-colors p-1" title="Cancel job" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</section>
+<!-- SECTION 2: FIRST-RUN / EMPTY TIMELINE STATE WITH 4 STARTER PILLS -->
+<section class="w-full px-margin-desktop mb-12">
+<div class="flex items-center justify-between mb-4">
+<div>
+<div class="font-code-tech-xs text-code-tech-xs text-primary font-medium">ONBOARDING EXPERIENCE</div>
+<h2 class="font-headline-md text-headline-md text-on-surface">2. Clean Canvas Zero-State (Timeline)</h2>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Default empty workspace</span>
+</div>
+<!-- Atelier Hero Clean State Card -->
+<div class="w-full p-8 md:p-12 rounded-lg bg-surface-container-low shadow-sm flex flex-col items-center text-center relative overflow-hidden">
+<!-- Decorative Atmospheric Glow in Background -->
+<div class="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-96 bg-primary-fixed/30 rounded-full blur-3xl pointer-events-none"></div>
+<!-- Icon Symbol -->
+<div class="w-16 h-16 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center mb-6 shadow-md z-10">
+<span class="material-symbols-outlined text-[32px]">auto_awesome</span>
+</div>
+<div class="max-w-xl z-10 mb-8">
+<span class="font-code-tech-xs text-code-tech-xs uppercase tracking-widest text-primary font-semibold">Welcome to Aries Studio</span>
+<h3 class="font-headline-xl text-headline-xl text-on-surface font-semibold tracking-tight mt-1 mb-3">Your canvas is clean.</h3>
+<p class="font-body-lg text-body-lg text-on-surface-variant">
+          Start by typing a prompt below or explore these curated starters designed to test dynamic light, architectural depth, and textural composition.
+        </p>
+</div>
+<!-- 4 Clickable Starter Prompts as High-Polish Visual Cards/Pills -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3 w-full max-w-3xl z-10 text-left mb-8">
+<!-- Starter 1: Panoramic mountain lake (16:9) -->
+<button class="p-4 rounded-DEFAULT bg-surface-container hover:bg-surface-container-high transition-all flex items-start gap-3 group text-left shadow-sm" data-prompt="Panoramic mountain lake at dawn, mist over the water (16:9)" onclick="populatePrompt(this)" type="button">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-primary group-hover:scale-105 transition-transform flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">landscape</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-label-lg text-label-lg font-semibold text-on-surface group-hover:text-primary transition-colors">Dawn Mountain Lake</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 rounded bg-surface-container-highest text-secondary">16:9</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mt-0.5">
+              Panoramic mountain lake at dawn, mist over the water, mirror reflections, cool slate granite, and alpine stillness.
+            </p>
+</div>
+</button>
+<!-- Starter 2: Lighthouse cliff storm (9:16) -->
+<button class="p-4 rounded-DEFAULT bg-surface-container hover:bg-surface-container-high transition-all flex items-start gap-3 group text-left shadow-sm" data-prompt="A lighthouse on a cliff during a storm, waves crashing (9:16)" onclick="populatePrompt(this)" type="button">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-primary group-hover:scale-105 transition-transform flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">storm</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-label-lg text-label-lg font-semibold text-on-surface group-hover:text-primary transition-colors">Storm Cliff Lighthouse</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 rounded bg-surface-container-highest text-secondary">9:16</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mt-0.5">
+              A lighthouse on a cliff during a storm, waves crashing, dramatic stormy spray, moody atmospheric chiaroscuro.
+            </p>
+</div>
+</button>
+<!-- Starter 3: Fisherman Rembrandt portrait (1:1) -->
+<button class="p-4 rounded-DEFAULT bg-surface-container hover:bg-surface-container-high transition-all flex items-start gap-3 group text-left shadow-sm" data-prompt="Portrait of an elderly fisherman, Rembrandt lighting (1:1)" onclick="populatePrompt(this)" type="button">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-primary group-hover:scale-105 transition-transform flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">face</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-label-lg text-label-lg font-semibold text-on-surface group-hover:text-primary transition-colors">Elderly Fisherman</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 rounded bg-surface-container-highest text-secondary">1:1</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mt-0.5">
+              Portrait of an elderly fisherman, deep weather-worn features, amber Rembrandt lighting with subtle rim light.
+            </p>
+</div>
+</button>
+<!-- Starter 4: Cartoon dragon sticker -->
+<button class="p-4 rounded-DEFAULT bg-surface-container hover:bg-surface-container-high transition-all flex items-start gap-3 group text-left shadow-sm" data-prompt="A cute cartoon dragon sticker, transparent background, die-cut outline" onclick="populatePrompt(this)" type="button">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center text-primary group-hover:scale-105 transition-transform flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">stars</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-label-lg text-label-lg font-semibold text-on-surface group-hover:text-primary transition-colors">Dragon Sticker</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 rounded bg-surface-container-highest text-secondary">Vector</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mt-0.5">
+              A cute cartoon dragon sticker, transparent background, clean vector contours, vibrant playful palette.
+            </p>
+</div>
+</button>
+</div>
+<!-- Docked Prompt Input Mimic -->
+<div class="w-full max-w-2xl bg-surface-container p-2 rounded-full flex items-center gap-2 shadow-sm z-10">
+<span class="material-symbols-outlined text-[20px] text-secondary pl-3">draw</span>
+<input class="bg-transparent flex-1 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/60 outline-none" id="demo-prompt-input" placeholder="Type prompt or click a starter above..." type="text"/>
+<button class="px-space-md py-2 rounded-full bg-primary hover:bg-primary/95 text-on-primary font-label-md text-label-md transition-all flex items-center gap-1" type="button">
+<span>Generate</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+</div>
+</section>
+<!-- SECTION 3: EDGE STATES, FILTER VOIDS & MODAL DIALOGS -->
+<section class="w-full px-margin-desktop mb-16">
+<div class="flex items-center justify-between mb-4">
+<div>
+<div class="font-code-tech-xs text-code-tech-xs text-primary font-medium">DISCOVERY & SAFETY DIALOGS</div>
+<h2 class="font-headline-md text-headline-md text-on-surface">3. Edge States & Confirmation Safeguards</h2>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Empty query results & destructive safeguards</span>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<!-- Edge State 1: Empty Gallery Filter State -->
+<div class="p-8 rounded-DEFAULT bg-surface-container-low shadow-sm flex flex-col items-center justify-center text-center">
+<div class="w-14 h-14 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant mb-4">
+<span class="material-symbols-outlined text-[28px] text-secondary">filter_list_off</span>
+</div>
+<div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container-highest text-on-surface-variant font-code-tech-xs text-code-tech-xs mb-3">
+<span>Active filter:</span>
+<span class="text-primary font-semibold">“cyberpunk”</span>
+<span>•</span>
+<span>Only Favorites</span>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-on-surface font-semibold mb-2">No favorites found matching “cyberpunk”</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant max-w-sm mb-6">
+          There are no starred generations labeled with this query. Try clearing your search keyword or switching off the “Favorites Only” toggle.
+        </p>
+<div class="flex items-center gap-3">
+<button class="px-4 py-2 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" type="button">
+            Show All “cyberpunk”
+          </button>
+<button class="px-4 py-2 rounded-full bg-primary text-on-primary hover:bg-primary/95 font-label-md text-label-md transition-colors flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px]">restart_alt</span>
+<span>Clear All Filters</span>
+</button>
+</div>
+</div>
+<!-- Edge State 2: Inline Delete Confirmation Dialog Mock -->
+<div class="p-8 rounded-DEFAULT bg-surface-container-low shadow-sm flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-4">
+<div class="flex items-center gap-2">
+<span class="w-8 h-8 rounded-full bg-error-container text-on-error-container flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">delete_forever</span>
+</span>
+<span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Destructive Action Safeguard</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-error/10 text-error font-medium">IRREVERSIBLE</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mb-4">
+            Are you sure you want to permanently delete <strong class="text-on-surface">Batch #GEN-7910</strong> (4 artifacts, high-res upscale buffers, and corresponding latent latches)?
+          </p>
+<!-- Selected Thumbnail Reference -->
+<div class="p-3 rounded-DEFAULT bg-surface-container flex items-center gap-3 mb-6">
+<img class="w-14 h-14 rounded object-cover flex-shrink-0" data-alt="A moody architectural interior of a minimalist brutalist villa with floor to ceiling glass overlooking misty pine forest at sunrise, rendered in warm terracotta and neutral stone tones with soft volumetric lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBLwOUnsN0OMeXBKbhgfJ9tsLBknYaZN2baVc5_Bt9C3ml7N3yovoPuYkFSWst8L5D6w2VmYqpHyZF_a5Nzxf-nHhDCua4TIhNB5uxLOoMzB1S8bbsHxSfd6yDxtv1gNZ29PSpz1gCGHmfl1yWLxJX0rsH7a6ZPayfBF1W8rp_SnJWW1b17LmInR81Ro4nMhkMFzRbpSyc5WPdC9q9fwGZs1F7uaKsGhOUkVt2uiDxenOHpE79L0cxt"/>
+<div class="flex flex-col min-w-0">
+<span class="font-label-md text-label-md font-semibold text-on-surface truncate">Brutalist Glass Villa Dawn · 4 Images</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary truncate">Seed 48190284 • 84.6 MB total storage</span>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-end gap-3 pt-4">
+<button class="px-4 py-2 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" type="button">
+            Keep Artifacts
+          </button>
+<button class="px-4 py-2 rounded-full bg-error hover:bg-error/90 text-on-error font-label-md text-label-md transition-colors flex items-center gap-1.5 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[16px]">delete</span>
+<span>Permanently Delete</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<!-- MODAL: KEYBOARD SHORTCUTS SHEET (? key) -->
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-on-surface/40 backdrop-blur-md hidden" id="shortcut-sheet-modal">
+<div class="w-full max-w-lg rounded-DEFAULT bg-surface-container-lowest p-6 shadow-xl flex flex-col gap-6">
+<div class="flex items-center justify-between pb-2">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">keyboard</span>
+</div>
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface font-semibold">Keyboard Shortcuts</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Global canvas & atelier hotkeys</p>
+</div>
+</div>
+<button class="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center text-on-surface-variant transition-colors" onclick="document.getElementById('shortcut-sheet-modal').classList.add('hidden')" type="button">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<!-- Shortcuts list -->
+<div class="flex flex-col gap-2.5">
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Focus Prompt Bar</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Immediate textarea entry from anywhere</span>
+</div>
+<kbd class="px-2.5 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">/</kbd>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Toggle Gallery / Timeline</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Switch between continuous feed and grid</span>
+</div>
+<kbd class="px-2.5 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">G</kbd>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Toggle Favorite on Active Card</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Stars or un-stars focused generative artifact</span>
+</div>
+<kbd class="px-2.5 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">F</kbd>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Dismiss Modal or Inspector</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Closes active lightbox, flyouts or sheets</span>
+</div>
+<kbd class="px-2.5 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">Esc</kbd>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Dispatch Generation</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Execute generation pipeline</span>
+</div>
+<kbd class="px-2.5 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">Enter</kbd>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-DEFAULT bg-surface-container-low">
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-on-surface font-medium">Add New Line in Prompt</span>
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Inserts carriage return without submit</span>
+</div>
+<div class="flex items-center gap-1">
+<kbd class="px-2 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">&Shift</kbd>
+<span class="text-secondary font-code-tech-xs">+</span>
+<kbd class="px-2 py-1 rounded bg-surface-container-highest font-code-tech-sm text-code-tech-sm text-on-surface font-semibold shadow-sm">Enter</kbd>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-between pt-2">
+<span class="font-code-tech-xs text-code-tech-xs text-secondary">Press <strong class="text-on-surface">?</strong> anytime to show this cheat sheet</span>
+<button class="px-4 py-1.5 rounded-full bg-primary text-on-primary font-label-md text-label-md hover:bg-primary/95 transition-colors" onclick="document.getElementById('shortcut-sheet-modal').classList.add('hidden')" type="button">
+          Got it
+        </button>
+</div>
+</div>
+</div>
+</div>
+<script>
+  function populatePrompt(btn) {
+    const promptText = btn.getAttribute('data-prompt');
+    const input = document.getElementById('demo-prompt-input');
+    if (input && promptText) {
+      input.value = promptText;
+      input.focus();
+    }
+  }
+
+  function triggerSimulatedPulse() {
+    const btn = event.currentTarget;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = `<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span><span>Scanning...</span>`;
+    setTimeout(() => {
+      btn.innerHTML = originalText;
+    }, 800);
+  }
+
+  // Keyboard shortcut listener for '?' and Escape
+  window.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('shortcut-sheet-modal');
+    if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+      if (modal) {
+        modal.classList.toggle('hidden');
+      }
+    } else if (e.key === 'Escape') {
+      if (modal && !modal.classList.contains('hidden')) {
+        modal.classList.add('hidden');
+      }
+    }
+  });
+</script></main><footer class="w-full bg-surface-container-lowest py-space-xl shadow-[0_1px_8px_rgba(43,50,59,0.02)]"><div class="w-full px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-space-md text-on-surface-variant"><div class="flex items-center gap-space-md"><span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Aries Studio</span><span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Atmospheric Neural Canvas · Personal Edition</span></div><div class="flex items-center gap-space-lg font-label-md text-label-md"><a class="hover:text-on-surface transition-colors" data-path="timeline-view" href="#">Timeline</a><a class="hover:text-on-surface transition-colors" data-path="gallery-view" href="#">Gallery</a><a class="hover:text-on-surface transition-colors" data-path="status-and-edge-states" href="#">Telemetry</a><a class="hover:text-on-surface transition-colors" data-path="style-sheet-and-components" href="#">Design System</a></div><div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">© 2025 Aries Studio. High-fidelity generative atelier.</div></div></footer></body></html>

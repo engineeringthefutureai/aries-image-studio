@@ -1,0 +1,481 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import type { Generation } from '../types';
+import { sanitizeEnhancedPrompt } from '../utils/prompt';
+import {
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Heart,
+  Download,
+  Dices,
+  Sliders,
+  RotateCcw,
+  Copy,
+  Check,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  Sparkles,
+  Brain,
+  Info,
+  ChevronDown,
+  Trash2,
+} from 'lucide-react';
+
+interface LightboxProps {
+  generation: Generation | null;
+  onClose: () => void;
+  onPrev?: () => void;
+  onNext?: () => void;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+  onToggleFavorite: (id: string) => void;
+  onVary: (generation: Generation) => void;
+  onReuseSettings: (generation: Generation) => void;
+  onRerunExact: (generation: Generation) => void;
+  onRerunEnhanced?: (generation: Generation) => void;
+  onReuseEnhanced?: (generation: Generation) => void;
+  onDelete?: (id: string) => void;
+}
+
+export const Lightbox: React.FC<LightboxProps> = ({
+  generation,
+  onClose,
+  onPrev,
+  onNext,
+  hasPrev = false,
+  hasNext = false,
+  onToggleFavorite,
+  onVary,
+  onReuseSettings,
+  onRerunExact,
+  onRerunEnhanced,
+  onReuseEnhanced,
+  onDelete,
+}) => {
+  const [zoom, setZoom] = useState(1);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [copiedEnhanced, setCopiedEnhanced] = useState(false);
+  const [copiedSeed, setCopiedSeed] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
+
+  // Reset zoom and sub-panels when viewing a different generation
+  useEffect(() => {
+    setZoom(1);
+    setCopiedPrompt(false);
+    setCopiedEnhanced(false);
+    setCopiedSeed(false);
+    setShowThinking(false);
+  }, [generation?.id]);
+
+  // Keyboard navigation & actions
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (!generation) return;
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'ArrowLeft' && hasPrev && onPrev) {
+        onPrev();
+      } else if (e.key === 'ArrowRight' && hasNext && onNext) {
+        onNext();
+      } else if (e.key === 'f' || e.key === 'F') {
+        onToggleFavorite(generation.id);
+      } else if (e.key === '+' || e.key === '=') {
+        setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
+      } else if (e.key === '-' || e.key === '_') {
+        setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)));
+      } else if (e.key === '0') {
+        setZoom(1);
+      }
+    },
+    [generation, onClose, onPrev, onNext, hasPrev, hasNext, onToggleFavorite]
+  );
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  if (!generation || !generation.imageUrl) return null;
+
+  const handleCopyPrompt = () => {
+    navigator.clipboard.writeText(generation.prompt);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 2000);
+  };
+
+  const handleCopyEnhancedPrompt = () => {
+    const clean = sanitizeEnhancedPrompt(generation.enhancedPrompt);
+    if (clean) {
+      navigator.clipboard.writeText(clean);
+      setCopiedEnhanced(true);
+      setTimeout(() => setCopiedEnhanced(false), 2000);
+    }
+  };
+
+  const handleCopySeed = () => {
+    navigator.clipboard.writeText(generation.params.seed.toString());
+    setCopiedSeed(true);
+    setTimeout(() => setCopiedSeed(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col xl:flex-row bg-black/95 backdrop-blur-xl text-white select-none animate-in fade-in duration-200">
+      {/* Top Left Close & Header HUD on mobile */}
+      <div className="xl:hidden flex items-center justify-between p-4 border-b border-white/10 z-20">
+        <span className="font-mono text-xs text-white/70">
+          {generation.params.width} × {generation.params.height} · {generation.params.aspect}
+        </span>
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Main Artwork Stage Area */}
+      <div className="relative flex-1 flex items-center justify-center overflow-hidden p-4 sm:p-8 min-h-0">
+        {/* Navigation Chevron: Prev */}
+        {hasPrev && onPrev && (
+          <button
+            onClick={onPrev}
+            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/50 hover:bg-black/80 backdrop-blur-md text-white/90 hover:text-white flex items-center justify-center transition-all hover:scale-110 shadow-lg"
+            title="Previous image (←)"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        )}
+
+        {/* Navigation Chevron: Next */}
+        {hasNext && onNext && (
+          <button
+            onClick={onNext}
+            className="absolute right-4 xl:right-8 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/50 hover:bg-black/80 backdrop-blur-md text-white/90 hover:text-white flex items-center justify-center transition-all hover:scale-110 shadow-lg"
+            title="Next image (→)"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        )}
+
+        {/* Artwork Image Frame */}
+        <div
+          className="relative max-h-full max-w-full flex items-center justify-center transition-transform duration-200 ease-out cursor-grab active:cursor-grabbing"
+          style={{ transform: `scale(${zoom})` }}
+        >
+          <img
+            src={generation.imageUrl}
+            alt={generation.prompt}
+            className="max-h-[82vh] max-w-[85vw] xl:max-w-[65vw] object-contain rounded-xl shadow-2xl transition-all"
+            draggable={false}
+          />
+        </div>
+
+        {/* Floating Zoom & Canvas Controls */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-xl border border-white/15 shadow-xl text-xs font-mono">
+          <button
+            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+            className="p-1.5 rounded-full hover:bg-white/15 text-white/80 hover:text-white transition-colors"
+            title="Zoom out (-)"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <span className="w-12 text-center text-[11px] font-mono text-white/90">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
+            className="p-1.5 rounded-full hover:bg-white/15 text-white/80 hover:text-white transition-colors"
+            title="Zoom in (+)"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <div className="w-px h-3.5 bg-white/20 mx-1" />
+          <button
+            onClick={() => setZoom(1)}
+            className="flex items-center gap-1 px-2 py-1 rounded-full hover:bg-white/15 text-white/80 hover:text-white text-[11px] transition-colors"
+            title="Reset fit (0)"
+          >
+            <Maximize className="w-3.5 h-3.5" />
+            <span>Fit</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Right Details Inspector Panel */}
+      <aside className="w-full xl:w-[410px] flex-shrink-0 bg-[#161614] border-t xl:border-t-0 xl:border-l border-white/10 flex flex-col h-[40vh] xl:h-full z-30 select-text overflow-hidden">
+        <div className="p-4 sm:p-5 border-b border-white/10 bg-[#1a1a17] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <h3 className="font-['Plus_Jakarta_Sans'] font-semibold text-base text-white leading-none shrink-0">
+              Inspector
+            </h3>
+            <span className="inline-flex items-center h-[22px] px-2.5 font-mono text-[11px] font-medium rounded-full bg-white/10 text-white/75 border border-white/10 leading-none whitespace-nowrap shrink-0">
+              Qwen-Image 2.1
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => onToggleFavorite(generation.id)}
+              className={`p-2 rounded-lg transition-colors ${
+                generation.favorite
+                  ? 'bg-rose-500 text-white'
+                  : 'bg-white/10 hover:bg-white/20 text-white/80 hover:text-white'
+              }`}
+              title="Toggle favorite (F)"
+            >
+              <Heart className={`w-4 h-4 ${generation.favorite ? 'fill-current' : ''}`} />
+            </button>
+            <a
+              href={generation.imageUrl}
+              download={`${generation.id}.png`}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+              title="Download PNG"
+            >
+              <Download className="w-4 h-4" />
+            </a>
+            {onDelete && (
+              <button
+                onClick={() => {
+                  onDelete(generation.id);
+                  onClose();
+                }}
+                className="p-2 rounded-lg bg-white/10 hover:bg-rose-600/80 text-white/80 hover:text-white transition-colors"
+                title="Delete image"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="hidden xl:flex p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+              title="Close viewer (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Action Buttons Matrix */}
+        <div className="p-4 bg-[#141412] border-b border-white/10 grid grid-cols-3 gap-2">
+          <button
+            onClick={() => onVary(generation)}
+            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#a53705] hover:bg-[#b83e06] text-white transition-all group"
+          >
+            <Dices className="w-4 h-4 group-hover:rotate-45 transition-transform" />
+            <span className="text-xs font-semibold mt-1">Vary</span>
+            <span className="text-[10px] text-white/70">New seed</span>
+          </button>
+          <button
+            onClick={() => onReuseSettings(generation)}
+            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white transition-all group"
+          >
+            <Sliders className="w-4 h-4 group-hover:-translate-y-0.5 transition-transform" />
+            <span className="text-xs font-semibold mt-1">Reuse</span>
+            <span className="text-[10px] text-white/70">To composer</span>
+          </button>
+          <button
+            onClick={() => onRerunExact(generation)}
+            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white transition-all group"
+          >
+            <RotateCcw className="w-4 h-4 group-hover:-rotate-90 transition-transform" />
+            <span className="text-xs font-semibold mt-1">Rerun</span>
+            <span className="text-[10px] text-white/70">Same seed</span>
+          </button>
+        </div>
+
+        {/* Scrollable Inspector Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 text-xs text-white/90">
+          {/* Active Prompt Section */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-white/50">
+              <span>Prompt</span>
+              <button
+                onClick={handleCopyPrompt}
+                className="flex items-center gap-1 text-[#f38d58] hover:text-[#ff9d6a] transition-colors"
+              >
+                {copiedPrompt ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedPrompt ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <div className="p-3 rounded-xl bg-white/5 border border-white/10 font-sans text-xs sm:text-sm leading-relaxed text-white/95">
+              {generation.prompt}
+            </div>
+          </div>
+
+          {/* Enhanced Prompt & Reasoning (if available) */}
+          {generation.enhancedPrompt && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] font-mono uppercase tracking-wider text-amber-400/80">
+                <span className="flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" /> Enhanced Prompt
+                </span>
+                <div className="flex items-center gap-2">
+                  {onRerunEnhanced && (
+                    <button
+                      onClick={() => onRerunEnhanced(generation)}
+                      className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors font-medium normal-case"
+                      title="Rerun generation only, keeping enhanced prompt as is"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Rerun with this</span>
+                    </button>
+                  )}
+                  {onReuseEnhanced && (
+                    <button
+                      onClick={() => onReuseEnhanced(generation)}
+                      className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/15 text-white/80 transition-colors font-medium normal-case"
+                      title="Load enhanced prompt into composer"
+                    >
+                      <Sliders className="w-3 h-3" />
+                      <span>To composer</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleCopyEnhancedPrompt}
+                    className="flex items-center gap-1 text-[#f38d58] hover:text-[#ff9d6a] transition-colors normal-case"
+                  >
+                    {copiedEnhanced ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedEnhanced ? 'Copied' : 'Copy'}</span>
+                  </button>
+                  {generation.thinking && (
+                    <button
+                      onClick={() => setShowThinking((v) => !v)}
+                      className="flex items-center gap-1 text-[11px] text-amber-300 hover:underline normal-case"
+                    >
+                      <Brain className="w-3 h-3" />
+                      <span>{showThinking ? 'Hide' : 'Thinking'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-100 text-xs leading-relaxed">
+                {sanitizeEnhancedPrompt(generation.enhancedPrompt)}
+              </div>
+
+              {showThinking && generation.thinking && (
+                <div className="p-3 rounded-xl bg-black/40 border border-white/10 font-mono text-[11px] text-white/75 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  {generation.thinking}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Generation Specs Grid */}
+          <div className="space-y-2">
+            <div className="text-[11px] font-mono uppercase tracking-wider text-white/50">
+              Parameters
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-white/50">Dimensions</div>
+                <div className="font-semibold text-white mt-0.5">
+                  {generation.params.width} × {generation.params.height}
+                </div>
+                <div className="text-[10px] text-white/60">
+                  Ratio {generation.params.aspect}
+                  {generation.params.sizeMultiplier && generation.params.sizeMultiplier !== 'full'
+                    ? ` · ${generation.params.sizeMultiplier}`
+                    : ''}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="flex items-center justify-between text-[10px] text-white/50">
+                  <span>Seed</span>
+                  <button
+                    onClick={handleCopySeed}
+                    className="text-[#f38d58] hover:text-[#ff9d6a]"
+                    title="Copy seed"
+                  >
+                    {copiedSeed ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  </button>
+                </div>
+                <div className="font-semibold text-white mt-0.5">{generation.params.seed}</div>
+                <div className="text-[10px] text-white/60">manual seed</div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-white/50">Steps & Quality</div>
+                <div className="font-semibold text-white mt-0.5">
+                  {generation.params.steps} steps
+                </div>
+                <div className="text-[10px] text-white/60 capitalize">
+                  {generation.params.quality}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-white/50">Execution Time</div>
+                <div className="font-semibold text-white mt-0.5">
+                  {generation.timings?.total_s != null
+                    ? `${generation.timings.total_s.toFixed(1)}s`
+                    : 'N/A'}
+                </div>
+                <div className="text-[10px] text-white/60">
+                  {generation.timings?.s_per_step != null
+                    ? `${generation.timings.s_per_step.toFixed(2)}s/step`
+                    : 'dual Intel Arc'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Technical Section (Collapsible) */}
+          <div className="border-t border-white/10 pt-3">
+            <button
+              onClick={() => setShowTechnical((v) => !v)}
+              className="w-full flex items-center justify-between text-[11px] font-mono text-white/60 hover:text-white"
+            >
+              <span className="flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5" /> Pipeline Architecture
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${showTechnical ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {showTechnical && (
+              <div className="mt-2.5 p-3 rounded-xl bg-white/5 border border-white/10 font-mono text-[11px] space-y-1.5 text-white/75">
+                <div className="flex justify-between">
+                  <span className="text-white/50">Pipeline</span>
+                  <span>QwenImage21Pipeline</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/50">Execution</span>
+                  <span>Architecture v2 (Staged)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/50">Decode</span>
+                  <span>Untiled VAE Decode</span>
+                </div>
+                {generation.timings?.enhance_s != null && (
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Prompt Enhancer</span>
+                    <span>
+                      {generation.timings.enhance_s.toFixed(1)}s
+                      {generation.timings.generation_tps ? ` (${generation.timings.generation_tps.toFixed(1)} tok/s)` : ''}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-white/50">Hardware</span>
+                  <span>2× Intel Arc Pro B60</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/50">Executors</span>
+                  <span>GPU 0 (04:00.0) + GPU 1 (08:00.0)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/50">Created</span>
+                  <span>{new Date(generation.createdAt).toLocaleString()}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+};

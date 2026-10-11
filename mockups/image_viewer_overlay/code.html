@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_standard" name="shell-type"/><title>Aries Studio</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#e5e2db", "tertiary-fixed-dim": "#f0bd8b", "surface-container": "#f1eee7", "tertiary": "#7b542b", "on-tertiary-container": "#fffbff", "inverse-primary": "#ffb59c", "surface-bright": "#fcf9f2", "on-tertiary-fixed-variant": "#623f18", "tertiary-fixed": "#ffdcbd", "on-secondary-fixed": "#151c25", "tertiary-container": "#966c41", "surface-tint": "#a83907", "on-primary-fixed": "#380c00", "on-primary": "#ffffff", "secondary": "#585f69", "on-secondary": "#ffffff", "surface-variant": "#e5e2db", "surface-container-lowest": "#ffffff", "surface": "#fcf9f2", "on-error": "#ffffff", "on-error-container": "#93000a", "surface-container-low": "#f6f3ec", "on-surface": "#1c1c18", "error-container": "#ffdad6", "inverse-surface": "#31312c", "primary-fixed": "#ffdbcf", "primary-fixed-dim": "#ffb59c", "outline-variant": "#dfc0b6", "on-secondary-fixed-variant": "#404751", "on-secondary-container": "#5e656f", "primary-container": "#c64e1f", "secondary-fixed-dim": "#c0c7d2", "error": "#ba1a1a", "background": "#fcf9f2", "on-primary-fixed-variant": "#822800", "secondary-container": "#dce3ef", "on-tertiary": "#ffffff", "on-tertiary-fixed": "#2c1600", "on-surface-variant": "#58423a", "outline": "#8c7169", "surface-dim": "#dcdad3", "on-background": "#1c1c18", "inverse-on-surface": "#f3f0e9", "on-primary-container": "#fffbff", "secondary-fixed": "#dce3ef", "surface-container-high": "#ebe8e1", "primary": "#a53705" }, "borderRadius": { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, "spacing": { "space-lg": "1.5rem", "margin-desktop": "2.5rem", "margin-tablet": "1.5rem", "space-xl": "2.5rem", "space-sm": "0.5rem", "gutter": "1.25rem", "space-md": "1rem", "margin": "1rem", "gutter-desktop": "1.5rem", "space-xs": "0.25rem" }, "fontFamily": { "body-md": ["Inter"], "label-lg": ["Plus Jakarta Sans"], "code-tech-xs": ["JetBrains Mono"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "headline-xl": ["Plus Jakarta Sans"], "label-md": ["Inter"], "body-lg": ["Inter"], "headline-lg": ["Plus Jakarta Sans"], "body-sm": ["Inter"], "headline-lg-mobile": ["Plus Jakarta Sans"], "code-tech-sm": ["JetBrains Mono"], "headline-xl-mobile": ["Plus Jakarta Sans"] }, "fontSize": { "body-md": ["14px", { "lineHeight": "22px", "fontWeight": "400" }], "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }], "code-tech-xs": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-xl": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.03em", "fontWeight": "600" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "500" }], "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.005em", "fontWeight": "400" }], "headline-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "code-tech-sm": ["11px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-xl-mobile": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.025em", "fontWeight": "600" }] } } } };</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased"><header class="fixed top-0 left-0 right-0 z-50 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(43,50,59,0.04)]"><div class="h-16 w-full px-margin-desktop flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-md flex-shrink-0"><a class="flex items-center gap-space-sm group" data-path="timeline-view" href="#"><span class="flex items-center justify-center w-8 h-8 rounded-full bg-primary-container text-on-primary-container shadow-[0_2px_8px_-2px_rgba(43,50,59,0.04)]"><span class="material-symbols-outlined text-[18px]">flare</span></span><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface group-hover:text-primary transition-colors">Aries Studio</span></a><span class="font-code-tech-xs text-code-tech-xs px-space-xs py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">v2.1</span></div><div class="hidden xl:flex items-center gap-space-lg flex-1 justify-center max-w-4xl"><div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]"><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="timeline-view" href="#"><span class="material-symbols-outlined text-[15px]">stream</span><span>Timeline</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">T</span></a><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="gallery-view" href="#"><span class="material-symbols-outlined text-[15px]">grid_view</span><span>Gallery</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">G</span></a></div><nav class="flex items-center gap-space-xs bg-surface-container-low px-space-sm py-1 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" data-active-classes="bg-primary-container text-on-primary-container font-semibold"><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="timeline-view" href="#">Timeline View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="gallery-view" href="#">Gallery View</a><a aria-current="page" class="px-space-sm py-0.5 rounded-full transition-colors bg-primary-container text-on-primary-container font-semibold" data-path="image-viewer-overlay" href="#">Image Viewer Overlay</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="status-and-edge-states" href="#">Status & Edge States</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="style-sheet-and-components" href="#">Style Sheet & Components</a></nav></div><div class="flex items-center gap-space-sm flex-shrink-0"><div class="relative group"><button class="flex items-center gap-space-xs px-space-md py-1 rounded-full bg-surface-container-low hover:bg-surface-container transition-colors shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" type="button"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-code-tech-sm text-code-tech-sm text-on-surface font-medium">Ready</span><span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span></button><div class="absolute right-0 top-full mt-1.5 w-48 py-1 rounded-2xl bg-surface-container-lowest shadow-[0_12px_32px_-8px_rgba(43,50,59,0.08)] hidden group-hover:flex flex-col z-50"><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-primary"></span><span class="font-body-sm text-body-sm text-on-surface">Ready</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-tertiary"></span><span class="font-body-sm text-body-sm text-on-surface">Busy (3 queued)</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-secondary"></span><span class="font-body-sm text-body-sm text-on-surface">Loading model</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-outline-variant"></span><span class="font-body-sm text-body-sm text-on-surface">Asleep</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-error"></span><span class="font-body-sm text-body-sm text-on-surface">Error</span></div></div></div><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Toggle theme" type="button"><span class="material-symbols-outlined text-[18px]">light_mode</span></button><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors font-code-tech-xs text-code-tech-xs font-medium" title="Keyboard shortcuts" type="button"><span class="material-symbols-outlined text-[18px]">help_outline</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/></div></div></header><main class="w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full">
+<div class="relative w-full min-h-[calc(100vh-4rem)] flex flex-col xl:flex-row bg-inverse-surface text-inverse-on-surface overflow-hidden select-none" id="viewer-root">
+<!-- Top Ambient Floating Strip (Status & Breadcrumbs) -->
+<div class="absolute top-4 left-6 z-30 flex items-center gap-space-md pointer-events-auto">
+<div class="flex items-center gap-space-xs px-space-md py-1.5 rounded-full bg-surface-container-lowest/10 backdrop-blur-xl shadow-md">
+<a class="font-label-md text-label-md text-inverse-on-surface/70 hover:text-inverse-on-surface flex items-center gap-1 transition-colors" data-path="timeline-view" href="#">
+<span class="material-symbols-outlined text-[16px]">arrow_back</span>
+<span>Studio</span>
+</a>
+<span class="text-inverse-on-surface/30 font-code-tech-xs text-code-tech-xs">/</span>
+<span class="font-code-tech-xs text-code-tech-xs text-inverse-primary tracking-wide">ARTIFACT #48213-9</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-surface-container-lowest/15 text-inverse-on-surface/90">9:16 Vertical</span>
+</div>
+<div class="hidden sm:flex items-center gap-space-xs px-space-sm py-1 rounded-full bg-surface-container-lowest/5 backdrop-blur-md">
+<span class="inline-block w-1.5 h-1.5 rounded-full bg-primary-fixed"></span>
+<span class="font-code-tech-xs text-code-tech-xs text-inverse-on-surface/60">FP16 Tensor Core</span>
+</div>
+</div>
+<!-- Top Right Quick Controls -->
+<div class="absolute top-4 right-6 xl:right-[404px] z-30 flex items-center gap-space-sm pointer-events-auto transition-all duration-300" id="stage-top-controls">
+<!-- Fullscreen / Reset View -->
+<button class="flex items-center gap-1.5 px-space-md py-1.5 rounded-full bg-surface-container-lowest/10 hover:bg-surface-container-lowest/20 backdrop-blur-xl text-inverse-on-surface text-label-md font-label-md transition-all shadow-md active:scale-95" id="toggle-zoom-btn" type="button">
+<span class="material-symbols-outlined text-[16px]" id="zoom-icon">fit_screen</span>
+<span id="zoom-text">Fit Screen</span>
+<span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-lowest/20 ml-0.5">Z</span>
+</button>
+<!-- Sidebar Toggle for Mobile / Collapsible Mode -->
+<button class="flex items-center justify-center w-9 h-9 rounded-full bg-surface-container-lowest/10 hover:bg-surface-container-lowest/20 backdrop-blur-xl text-inverse-on-surface transition-all shadow-md active:scale-95" id="sidebar-toggle-btn" title="Toggle Inspector [I]" type="button">
+<span class="material-symbols-outlined text-[18px]">view_sidebar</span>
+</button>
+<!-- Close / Dismiss Overlay [Esc] -->
+<a class="flex items-center justify-center w-9 h-9 rounded-full bg-surface-container-lowest/10 hover:bg-surface-container-lowest/25 backdrop-blur-xl text-inverse-on-surface transition-all shadow-md active:scale-95" data-path="timeline-view" href="#" title="Close Overlay [Esc]">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</a>
+</div>
+<!-- MAIN STAGE / IMAGE CANVAS -->
+<div class="relative flex-1 flex items-center justify-center overflow-hidden p-4 sm:p-8 cursor-grab active:cursor-grabbing" id="image-viewport">
+<!-- Ambient Lighting Gradient Backdrops -->
+<div class="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-primary/10 blur-[120px] pointer-events-none"></div>
+<div class="absolute -bottom-40 right-20 w-[450px] h-[450px] rounded-full bg-tertiary-fixed-dim/5 blur-[140px] pointer-events-none"></div>
+<!-- Navigation Arrows Floating Left/Right -->
+<button class="absolute left-6 top-1/2 -translate-y-1/2 z-20 flex items-center justify-center w-12 h-12 rounded-full bg-surface-container-lowest/10 hover:bg-surface-container-lowest/20 backdrop-blur-xl text-inverse-on-surface/80 hover:text-inverse-on-surface shadow-lg transition-all active:scale-90 group" id="prev-image-btn" title="Previous Image [←]" type="button">
+<span class="material-symbols-outlined text-[24px] group-hover:-translate-x-0.5 transition-transform">chevron_left</span>
+</button>
+<button class="absolute right-6 xl:right-[404px] top-1/2 -translate-y-1/2 z-20 flex items-center justify-center w-12 h-12 rounded-full bg-surface-container-lowest/10 hover:bg-surface-container-lowest/20 backdrop-blur-xl text-inverse-on-surface/80 hover:text-inverse-on-surface shadow-lg transition-all active:scale-90 group" id="next-image-btn" title="Next Image [→]" type="button">
+<span class="material-symbols-outlined text-[24px] group-hover:translate-x-0.5 transition-transform">chevron_right</span>
+</button>
+<!-- Central Stage Image Frame -->
+<div class="relative max-h-[86vh] max-w-full flex items-center justify-center transition-transform duration-300 ease-out" id="image-wrapper" style="transform: scale(1);">
+<img alt="A towering weathered granite lighthouse standing steadfast against violent storm-tossed seas, bioluminescent turquoise waves crashing into volcanic rocks under ominous tempest clouds" class="max-h-[84vh] w-auto max-w-full object-contain rounded-DEFAULT shadow-[0_32px_80px_-16px_rgba(0,0,0,0.7)] pointer-events-none select-none transition-shadow duration-300" id="main-artwork" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAdjgZNRo1Ffi8ZEBMfY0P_SUfVOiJVg-pOf-Wky8cvqqWjHFUvuq0ZjlG1ZkwdY4W7qUkS0s3PwlPwsjUeBqq0DCKhWYWUblX7P2efT5aS01bpgcjP5DPd5KeBPj6dxR5jtREp_SQ8xC5JdkmNhHWtINOExabgpz-7pUx3gciUEJIow0mVPHX5DZH8b_bwINJZ6kOXcrfd_j5D8KFbbBFn12gVuYUJu8OqH7xBkYsTfw30482QqP1l"/>
+<!-- Floating Image HUD Overlays (Transient Monospace Specs) -->
+<div class="absolute bottom-4 left-4 z-10 flex items-center gap-2 px-space-md py-1 rounded-full bg-inverse-surface/80 backdrop-blur-md shadow-md text-inverse-on-surface/90 font-code-tech-xs text-code-tech-xs opacity-85 hover:opacity-100 transition-opacity">
+<span class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px] text-inverse-primary">photo_size_select_actual</span>
+<span>1536 × 2752</span>
+</span>
+<span class="text-inverse-on-surface/30">·</span>
+<span>40 steps</span>
+<span class="text-inverse-on-surface/30">·</span>
+<span class="text-primary-fixed">Euler-A</span>
+</div>
+</div>
+<!-- Bottom Floating Studio Canvas Controller -->
+<div class="absolute bottom-6 left-1/2 -translate-x-1/2 xl:-translate-x-[calc(50%+190px)] z-20 flex items-center gap-space-xs p-1.5 rounded-full bg-surface-container-lowest/10 backdrop-blur-2xl shadow-xl">
+<button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-surface-container-lowest/20 text-inverse-on-surface/80 hover:text-inverse-on-surface transition-colors" id="zoom-out-btn" title="Zoom Out [-]" type="button">
+<span class="material-symbols-outlined text-[18px]">remove</span>
+</button>
+<div class="px-space-sm font-code-tech-xs text-code-tech-xs text-inverse-on-surface/90 min-w-[50px] text-center" id="zoom-level-label">100%</div>
+<button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-surface-container-lowest/20 text-inverse-on-surface/80 hover:text-inverse-on-surface transition-colors" id="zoom-in-btn" title="Zoom In [+]" type="button">
+<span class="material-symbols-outlined text-[18px]">add</span>
+</button>
+<div class="w-px h-4 bg-inverse-on-surface/20 mx-1"></div>
+<button class="px-space-md py-1 rounded-full hover:bg-surface-container-lowest/20 text-inverse-on-surface/80 hover:text-inverse-on-surface font-label-md text-label-md flex items-center gap-1 transition-colors" id="reset-pan-btn" type="button">
+<span class="material-symbols-outlined text-[16px]">center_focus_strong</span>
+<span>Center</span>
+</button>
+</div>
+</div>
+<!-- RIGHT DETAILS INSPECTOR PANEL (380px Desktop) -->
+<aside class="w-full xl:w-[380px] flex-shrink-0 bg-surface-container-lowest shadow-2xl z-30 flex flex-col text-on-surface transition-all duration-300" id="details-panel">
+<!-- Panel Header & Quick Execution Matrix -->
+<div class="p-space-lg flex flex-col gap-space-md bg-surface-container-low shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="font-headline-sm text-headline-sm font-semibold tracking-tight">Inspector</span>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">Qwen-Image 2.1</span>
+</div>
+<div class="flex items-center gap-space-xs">
+<!-- Favorite Toggle -->
+<button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface hover:bg-surface-container text-on-surface-variant hover:text-primary transition-colors shadow-sm" id="fav-toggle-btn" title="Mark as Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]" id="fav-icon">star_border</span>
+</button>
+<!-- Download PNG -->
+<button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors shadow-sm" id="download-artifact-btn" title="Download High-Res PNG" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+</div>
+<!-- Primary Action Cluster -->
+<div class="grid grid-cols-3 gap-space-xs">
+<!-- Action: Vary -->
+<button class="group flex flex-col items-center justify-center py-2.5 px-space-xs rounded-DEFAULT bg-primary-container text-on-primary-container hover:brightness-105 active:scale-95 transition-all shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px] group-hover:rotate-45 transition-transform duration-300">auto_mode</span>
+<span class="font-label-lg text-label-lg font-semibold mt-0.5">Vary</span>
+<span class="font-code-tech-xs text-code-tech-xs text-primary-fixed/80">New Seed</span>
+</button>
+<!-- Action: Reuse Settings -->
+<button class="group flex flex-col items-center justify-center py-2.5 px-space-xs rounded-DEFAULT bg-surface-container hover:bg-surface-container-high text-on-surface active:scale-95 transition-all shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px] group-hover:-translate-y-0.5 transition-transform">tune</span>
+<span class="font-label-lg text-label-lg font-semibold mt-0.5">Reuse</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">To Prompt</span>
+</button>
+<!-- Action: Rerun Exact -->
+<button class="group flex flex-col items-center justify-center py-2.5 px-space-xs rounded-DEFAULT bg-surface-container hover:bg-surface-container-high text-on-surface active:scale-95 transition-all shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px] group-hover:rotate-180 transition-transform duration-500">replay</span>
+<span class="font-label-lg text-label-lg font-semibold mt-0.5">Rerun</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Seed #48213</span>
+</button>
+</div>
+</div>
+<!-- Panel Scrollable Body -->
+<div class="flex-1 overflow-y-auto p-space-lg flex flex-col gap-space-lg divide-y-0">
+<!-- PROMPT SECTION -->
+<div class="flex flex-col gap-space-sm">
+<div class="flex items-center justify-between">
+<span class="font-code-tech-xs text-code-tech-xs uppercase tracking-wider text-on-surface-variant font-semibold">Active Prompt</span>
+<button class="flex items-center gap-1 font-label-md text-label-md text-primary hover:text-on-primary-fixed-variant transition-colors group" id="copy-prompt-btn" type="button">
+<span class="material-symbols-outlined text-[15px] group-hover:scale-110 transition-transform">content_copy</span>
+<span id="copy-prompt-label">Copy Prompt</span>
+</button>
+</div>
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low text-on-surface shadow-sm relative group">
+<p class="font-body-md text-body-md leading-relaxed select-text" id="prompt-content-text">
+              A lighthouse on a cliff during a storm, waves crashing furiously against the jagged sea stacks, dramatic volumetric spotlight beaming through torrential rain and churning deep sapphire sea mist.
+            </p>
+<div class="mt-2.5 flex items-center gap-space-xs">
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant">--v 6.1</span>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant">--ar 9:16</span>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant">--s 750</span>
+</div>
+</div>
+<!-- Future AI Enhancement Accordion -->
+<div class="rounded-DEFAULT bg-surface-container-low overflow-hidden transition-all shadow-sm">
+<button class="w-full flex items-center justify-between p-space-md text-left hover:bg-surface-container transition-colors" id="toggle-enhancement-btn" type="button">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-[18px] text-tertiary">psychology</span>
+<span class="font-label-lg text-label-lg font-medium text-on-surface">AI Enhanced Prompt</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-code-tech-xs text-code-tech-xs px-1.5 py-0.5 rounded bg-tertiary-fixed text-on-tertiary-fixed">Experimental</span>
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant transition-transform duration-200" id="enhancement-chevron">expand_more</span>
+</div>
+</button>
+<div class="p-space-md pt-0 font-body-sm text-body-sm text-on-surface-variant hidden" id="enhancement-drawer">
+<div class="p-space-sm rounded bg-surface-container text-on-surface font-body-sm text-body-sm leading-relaxed mb-2">
+                Cinematic ultra-realistic 35mm photograph of an ancient stone lighthouse atop sheer basalt cliffs, raging oceanic squall, towering turquoise and seafoam waves crashing, atmospheric backlight, hyper-detailed spray droplets, volumetric mist, ISO 400.
+              </div>
+<div class="flex items-center justify-between text-code-tech-xs font-code-tech-xs text-on-surface-variant">
+<span>Synthesized via Aries-Synapse LLM</span>
+<button class="text-primary hover:underline font-label-md text-label-md" type="button">Apply to prompt</button>
+</div>
+</div>
+</div>
+</div>
+<!-- GENERATION SPECIFICATION MATRIX -->
+<div class="flex flex-col gap-space-sm pt-2">
+<div class="flex items-center justify-between">
+<span class="font-code-tech-xs text-code-tech-xs uppercase tracking-wider text-on-surface-variant font-semibold">Generation Telemetry</span>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Job ID: #QW-8419</span>
+</div>
+<div class="grid grid-cols-2 gap-space-xs">
+<!-- Seed Cell -->
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex flex-col justify-between shadow-sm">
+<div class="flex items-center justify-between text-on-surface-variant font-label-md text-label-md mb-1">
+<span>Seed</span>
+<button class="hover:text-primary transition-colors" id="copy-seed-btn" title="Copy Seed" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</button>
+</div>
+<div class="font-code-tech-sm text-code-tech-sm font-semibold text-on-surface tracking-wide" id="seed-val">48213</div>
+</div>
+<!-- Resolution Cell -->
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex flex-col justify-between shadow-sm">
+<span class="text-on-surface-variant font-label-md text-label-md mb-1">Dimensions</span>
+<div class="font-code-tech-sm text-code-tech-sm font-semibold text-on-surface">1536 × 2752</div>
+</div>
+<!-- Quality & Sampling -->
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex flex-col justify-between shadow-sm">
+<span class="text-on-surface-variant font-label-md text-label-md mb-1">Quality / Steps</span>
+<div class="font-code-tech-sm text-code-tech-sm font-semibold text-on-surface">Standard · 40 steps</div>
+</div>
+<!-- Precision Model -->
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex flex-col justify-between shadow-sm">
+<span class="text-on-surface-variant font-label-md text-label-md mb-1">Model Precision</span>
+<div class="font-code-tech-sm text-code-tech-sm font-semibold text-on-surface">Qwen 2.1 (bf16)</div>
+</div>
+</div>
+<!-- Execution Timing Metric Card -->
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex flex-col gap-space-xs shadow-sm">
+<div class="flex items-center justify-between text-on-surface-variant font-label-md text-label-md">
+<span class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[15px]">timer</span>
+<span>Render Timings</span>
+</span>
+<span class="font-code-tech-xs text-code-tech-xs text-primary font-medium">Total: 6m 41s</span>
+</div>
+<div class="w-full bg-surface-container-highest h-2 rounded-full overflow-hidden flex my-1">
+<div class="bg-secondary h-full" style="width: 62%" title="Queue Wait: 4m 10s"></div>
+<div class="bg-primary-container h-full" style="width: 38%" title="Compute: 2m 31s"></div>
+</div>
+<div class="grid grid-cols-3 text-center pt-1 font-code-tech-xs text-code-tech-xs text-on-surface-variant">
+<div>
+<span class="block text-on-surface font-medium">4m 10s</span>
+<span>waited</span>
+</div>
+<div>
+<span class="block text-on-surface font-medium">2m 31s</span>
+<span>generated</span>
+</div>
+<div>
+<span class="block text-on-surface font-medium">3.8 s/step</span>
+<span>inference</span>
+</div>
+</div>
+</div>
+<!-- Creation Timestamp -->
+<div class="flex items-center justify-between px-space-xs font-code-tech-xs text-code-tech-xs text-on-surface-variant">
+<span>Created: Sat 10 Oct 2026, 09:41</span>
+<span class="text-secondary font-medium">Node: us-west-4A</span>
+</div>
+</div>
+<!-- LINEAGE & PROVENANCE -->
+<div class="flex flex-col gap-space-sm pt-2">
+<span class="font-code-tech-xs text-code-tech-xs uppercase tracking-wider text-on-surface-variant font-semibold">Lineage & Provenance</span>
+<div class="p-space-md rounded-DEFAULT bg-surface-container-low flex items-center justify-between shadow-sm">
+<div class="flex items-center gap-space-md">
+<div class="w-9 h-9 rounded bg-surface-container-highest flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-[20px]">account_tree</span>
+</div>
+<div class="flex flex-col">
+<span class="font-label-lg text-label-lg font-semibold text-on-surface">Prompt Ancestry</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Derived from session item #42</span>
+</div>
+</div>
+<a class="font-label-md text-label-md text-primary hover:underline flex items-center gap-0.5" data-path="timeline-view" href="#">
+<span>View Tree</span>
+<span class="material-symbols-outlined text-[14px]">north_east</span>
+</a>
+</div>
+</div>
+<!-- ADVANCED TECHNICAL SPECIFICATIONS (Collapsible) -->
+<div class="rounded-DEFAULT bg-surface-container-low overflow-hidden shadow-sm">
+<button class="w-full flex items-center justify-between p-space-md text-left hover:bg-surface-container transition-colors" id="toggle-tech-specs-btn" type="button">
+<span class="font-label-lg text-label-lg font-medium text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant">terminal</span>
+<span>Kernel & Inference Pipeline</span>
+</span>
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant transition-transform duration-200" id="tech-specs-chevron">expand_more</span>
+</button>
+<div class="p-space-md pt-0 flex flex-col gap-2 font-code-tech-xs text-code-tech-xs text-on-surface-variant hidden" id="tech-specs-drawer">
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>CFG Scale</span>
+<span class="text-on-surface font-medium">7.0</span>
+</div>
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>Scheduler</span>
+<span class="text-on-surface font-medium">Euler Ancestral (Karras)</span>
+</div>
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>GPU Accelerator</span>
+<span class="text-on-surface font-medium">NVIDIA H100 SXM5 80GB</span>
+</div>
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>PyTorch Revision</span>
+<span class="text-on-surface font-medium">2.4.0+cu124-nightly</span>
+</div>
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>Clip Skip</span>
+<span class="text-on-surface font-medium">Layer 2</span>
+</div>
+<div class="flex justify-between py-1 bg-surface-container px-2 rounded">
+<span>VAE Model</span>
+<span class="text-on-surface font-medium">sdxl_vae_fp16_fix</span>
+</div>
+</div>
+</div>
+<!-- DANGER ZONE -->
+<div class="pt-4 flex flex-col gap-space-xs">
+<button class="w-full py-2.5 px-space-md rounded-DEFAULT bg-error-container text-on-error-container hover:bg-error hover:text-on-error font-label-md text-label-md font-medium transition-all flex items-center justify-center gap-1.5 active:scale-98 shadow-sm" id="trigger-delete-modal-btn" type="button">
+<span class="material-symbols-outlined text-[18px]">delete_forever</span>
+<span>Delete artifact permanently</span>
+</button>
+<span class="font-code-tech-xs text-code-tech-xs text-center text-on-surface-variant/70">
+            Irreversible operation. Purges generated weights and cached latents.
+          </span>
+</div>
+</div>
+</aside>
+<!-- INLINE CONFIRMATION MODAL OVERLAY (DANGER STATE) -->
+<div class="fixed inset-0 z-50 bg-inverse-surface/80 backdrop-blur-md flex items-center justify-center p-4 hidden" id="delete-confirmation-dialog">
+<div class="w-full max-w-md bg-surface-container-lowest rounded-DEFAULT p-space-xl shadow-2xl flex flex-col gap-space-md text-on-surface animate-in fade-in zoom-in-95 duration-150">
+<div class="flex items-center gap-space-md text-error">
+<span class="w-10 h-10 rounded-full bg-error-container flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-[24px]">warning</span>
+</span>
+<div>
+<h4 class="font-headline-sm text-headline-sm font-semibold">Delete Artifact?</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Artifact #48213 will be purged immediately.</p>
+</div>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant bg-surface-container-low p-space-md rounded-DEFAULT">
+          Are you sure you want to delete this iteration? Prompt parameters, high-res tensor latents, and lineage logs will be permanently deleted from the atelier storage pool.
+        </p>
+<div class="flex items-center justify-end gap-space-sm pt-2">
+<button class="px-space-lg py-2 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md transition-colors" id="cancel-delete-btn" type="button">
+            Cancel
+          </button>
+<button class="px-space-lg py-2 rounded-full bg-error text-on-error hover:brightness-110 font-label-md text-label-md font-medium transition-colors shadow-sm" id="confirm-delete-btn" type="button">
+            Yes, delete now
+          </button>
+</div>
+</div>
+</div>
+<!-- TOAST NOTIFICATION FOR USER ACTIONS -->
+<div class="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 px-space-lg py-2 rounded-full bg-surface-container-lowest text-on-surface shadow-2xl font-label-md text-label-md flex items-center gap-2 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none" id="action-toast">
+<span class="material-symbols-outlined text-[18px] text-primary" id="toast-icon">check_circle</span>
+<span id="toast-text">Prompt copied to clipboard</span>
+</div>
+</div>
+<script>
+    (function initViewerControls() {
+      // Elements
+      const imgWrapper = document.getElementById('image-wrapper');
+      const zoomText = document.getElementById('zoom-text');
+      const zoomIcon = document.getElementById('zoom-icon');
+      const zoomLevelLabel = document.getElementById('zoom-level-label');
+      const toggleZoomBtn = document.getElementById('toggle-zoom-btn');
+      const zoomInBtn = document.getElementById('zoom-in-btn');
+      const zoomOutBtn = document.getElementById('zoom-out-btn');
+      const resetPanBtn = document.getElementById('reset-pan-btn');
+      const viewport = document.getElementById('image-viewport');
+      
+      const copyPromptBtn = document.getElementById('copy-prompt-btn');
+      const copyPromptLabel = document.getElementById('copy-prompt-label');
+      const promptContentText = document.getElementById('prompt-content-text');
+      const copySeedBtn = document.getElementById('copy-seed-btn');
+      const seedVal = document.getElementById('seed-val');
+      
+      const favToggleBtn = document.getElementById('fav-toggle-btn');
+      const favIcon = document.getElementById('fav-icon');
+      
+      const enhancementBtn = document.getElementById('toggle-enhancement-btn');
+      const enhancementDrawer = document.getElementById('enhancement-drawer');
+      const enhancementChevron = document.getElementById('enhancement-chevron');
+      
+      const techSpecsBtn = document.getElementById('toggle-tech-specs-btn');
+      const techSpecsDrawer = document.getElementById('tech-specs-drawer');
+      const techSpecsChevron = document.getElementById('tech-specs-chevron');
+
+      const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+      const detailsPanel = document.getElementById('details-panel');
+      
+      const deleteModal = document.getElementById('delete-confirmation-dialog');
+      const triggerDeleteBtn = document.getElementById('trigger-delete-modal-btn');
+      const cancelDeleteBtn = document.getElementById('cancel-delete-btn');
+      const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
+      
+      const actionToast = document.getElementById('action-toast');
+      const toastText = document.getElementById('toast-text');
+
+      let currentScale = 1.0;
+      let isFit = true;
+      let isFavorite = false;
+
+      function showToast(msg) {
+        if (!actionToast) return;
+        toastText.textContent = msg;
+        actionToast.classList.remove('translate-y-24', 'opacity-0');
+        actionToast.classList.add('translate-y-0', 'opacity-100');
+        setTimeout(() => {
+          actionToast.classList.remove('translate-y-0', 'opacity-100');
+          actionToast.classList.add('translate-y-24', 'opacity-0');
+        }, 2200);
+      }
+
+      function updateScale(newScale) {
+        currentScale = Math.min(Math.max(newScale, 0.5), 3.0);
+        imgWrapper.style.transform = `scale(${currentScale})`;
+        zoomLevelLabel.textContent = `${Math.round(currentScale * 100)}%`;
+        if (currentScale === 1.0) {
+          isFit = true;
+          zoomText.textContent = 'Fit Screen';
+          zoomIcon.textContent = 'fit_screen';
+        } else {
+          isFit = false;
+          zoomText.textContent = 'Actual Size';
+          zoomIcon.textContent = 'aspect_ratio';
+        }
+      }
+
+      // Zoom Button Listeners
+      if (toggleZoomBtn) {
+        toggleZoomBtn.addEventListener('click', () => {
+          if (isFit) {
+            updateScale(1.8);
+          } else {
+            updateScale(1.0);
+          }
+        });
+      }
+
+      if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', () => updateScale(currentScale + 0.25));
+      }
+
+      if (zoomOutBtn) {
+        zoomOutBtn.addEventListener('click', () => updateScale(currentScale - 0.25));
+      }
+
+      if (resetPanBtn) {
+        resetPanBtn.addEventListener('click', () => updateScale(1.0));
+      }
+
+      // Copy Prompt
+      if (copyPromptBtn && promptContentText) {
+        copyPromptBtn.addEventListener('click', () => {
+          navigator.clipboard?.writeText(promptContentText.innerText.trim());
+          copyPromptLabel.textContent = 'Copied!';
+          showToast('Prompt copied to clipboard');
+          setTimeout(() => {
+            copyPromptLabel.textContent = 'Copy Prompt';
+          }, 2000);
+        });
+      }
+
+      // Copy Seed
+      if (copySeedBtn && seedVal) {
+        copySeedBtn.addEventListener('click', () => {
+          navigator.clipboard?.writeText(seedVal.innerText.trim());
+          showToast('Seed 48213 copied');
+        });
+      }
+
+      // Favorite toggle
+      if (favToggleBtn && favIcon) {
+        favToggleBtn.addEventListener('click', () => {
+          isFavorite = !isFavorite;
+          if (isFavorite) {
+            favIcon.textContent = 'star';
+            favIcon.style.fontVariationSettings = "'FILL' 1";
+            favToggleBtn.classList.add('text-primary');
+            showToast('Saved to Atelier Favorites');
+          } else {
+            favIcon.textContent = 'star_border';
+            favIcon.style.fontVariationSettings = "'FILL' 0";
+            favToggleBtn.classList.remove('text-primary');
+            showToast('Removed from Favorites');
+          }
+        });
+      }
+
+      // Accordion: AI Enhancement
+      if (enhancementBtn && enhancementDrawer && enhancementChevron) {
+        enhancementBtn.addEventListener('click', () => {
+          const isHidden = enhancementDrawer.classList.contains('hidden');
+          if (isHidden) {
+            enhancementDrawer.classList.remove('hidden');
+            enhancementChevron.classList.add('rotate-180');
+          } else {
+            enhancementDrawer.classList.add('hidden');
+            enhancementChevron.classList.remove('rotate-180');
+          }
+        });
+      }
+
+      // Accordion: Technical Specs
+      if (techSpecsBtn && techSpecsDrawer && techSpecsChevron) {
+        techSpecsBtn.addEventListener('click', () => {
+          const isHidden = techSpecsDrawer.classList.contains('hidden');
+          if (isHidden) {
+            techSpecsDrawer.classList.remove('hidden');
+            techSpecsChevron.classList.add('rotate-180');
+          } else {
+            techSpecsDrawer.classList.add('hidden');
+            techSpecsChevron.classList.remove('rotate-180');
+          }
+        });
+      }
+
+      // Sidebar Toggle
+      if (sidebarToggleBtn && detailsPanel) {
+        sidebarToggleBtn.addEventListener('click', () => {
+          detailsPanel.classList.toggle('hidden');
+        });
+      }
+
+      // Delete Modal
+      if (triggerDeleteBtn && deleteModal) {
+        triggerDeleteBtn.addEventListener('click', () => {
+          deleteModal.classList.remove('hidden');
+        });
+      }
+
+      if (cancelDeleteBtn && deleteModal) {
+        cancelDeleteBtn.addEventListener('click', () => {
+          deleteModal.classList.add('hidden');
+        });
+      }
+
+      if (confirmDeleteBtn && deleteModal) {
+        confirmDeleteBtn.addEventListener('click', () => {
+          deleteModal.classList.add('hidden');
+          showToast('Artifact #48213 deleted.');
+          setTimeout(() => {
+            window.location.hash = '#timeline-view';
+          }, 1200);
+        });
+      }
+
+      // Keyboard Shortcuts
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (!deleteModal.classList.contains('hidden')) {
+            deleteModal.classList.add('hidden');
+          }
+        } else if (e.key === 'z' || e.key === 'Z') {
+          toggleZoomBtn?.click();
+        } else if (e.key === 'i' || e.key === 'I') {
+          sidebarToggleBtn?.click();
+        } else if (e.key === 'ArrowLeft') {
+          document.getElementById('prev-image-btn')?.click();
+        } else if (e.key === 'ArrowRight') {
+          document.getElementById('next-image-btn')?.click();
+        }
+      });
+
+      // Carousel Simulation
+      document.getElementById('prev-image-btn')?.addEventListener('click', () => {
+        showToast('Viewing previous generated variation');
+      });
+      document.getElementById('next-image-btn')?.addEventListener('click', () => {
+        showToast('Viewing next generated variation');
+      });
+      document.getElementById('download-artifact-btn')?.addEventListener('click', () => {
+        showToast('Exporting lossless 1536×2752 PNG...');
+      });
+    })();
+  </script>
+</div></main><footer class="w-full bg-surface-container-lowest py-space-xl shadow-[0_1px_8px_rgba(43,50,59,0.02)]"><div class="w-full px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-space-md text-on-surface-variant"><div class="flex items-center gap-space-md"><span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Aries Studio</span><span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Atmospheric Neural Canvas · Personal Edition</span></div><div class="flex items-center gap-space-lg font-label-md text-label-md"><a class="hover:text-on-surface transition-colors" data-path="timeline-view" href="#">Timeline</a><a class="hover:text-on-surface transition-colors" data-path="gallery-view" href="#">Gallery</a><a class="hover:text-on-surface transition-colors" data-path="status-and-edge-states" href="#">Telemetry</a><a class="hover:text-on-surface transition-colors" data-path="style-sheet-and-components" href="#">Design System</a></div><div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">© 2025 Aries Studio. High-fidelity generative atelier.</div></div></footer></body></html>

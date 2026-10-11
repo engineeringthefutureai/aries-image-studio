@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_standard" name="shell-type"/><title>Aries Studio</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-highest": "#e5e2db", "tertiary-fixed-dim": "#f0bd8b", "surface-container": "#f1eee7", "tertiary": "#7b542b", "on-tertiary-container": "#fffbff", "inverse-primary": "#ffb59c", "surface-bright": "#fcf9f2", "on-tertiary-fixed-variant": "#623f18", "tertiary-fixed": "#ffdcbd", "on-secondary-fixed": "#151c25", "tertiary-container": "#966c41", "surface-tint": "#a83907", "on-primary-fixed": "#380c00", "on-primary": "#ffffff", "secondary": "#585f69", "on-secondary": "#ffffff", "surface-variant": "#e5e2db", "surface-container-lowest": "#ffffff", "surface": "#fcf9f2", "on-error": "#ffffff", "on-error-container": "#93000a", "surface-container-low": "#f6f3ec", "on-surface": "#1c1c18", "error-container": "#ffdad6", "inverse-surface": "#31312c", "primary-fixed": "#ffdbcf", "primary-fixed-dim": "#ffb59c", "outline-variant": "#dfc0b6", "on-secondary-fixed-variant": "#404751", "on-secondary-container": "#5e656f", "primary-container": "#c64e1f", "secondary-fixed-dim": "#c0c7d2", "error": "#ba1a1a", "background": "#fcf9f2", "on-primary-fixed-variant": "#822800", "secondary-container": "#dce3ef", "on-tertiary": "#ffffff", "on-tertiary-fixed": "#2c1600", "on-surface-variant": "#58423a", "outline": "#8c7169", "surface-dim": "#dcdad3", "on-background": "#1c1c18", "inverse-on-surface": "#f3f0e9", "on-primary-container": "#fffbff", "secondary-fixed": "#dce3ef", "surface-container-high": "#ebe8e1", "primary": "#a53705" }, "borderRadius": { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, "spacing": { "space-lg": "1.5rem", "margin-desktop": "2.5rem", "margin-tablet": "1.5rem", "space-xl": "2.5rem", "space-sm": "0.5rem", "gutter": "1.25rem", "space-md": "1rem", "margin": "1rem", "gutter-desktop": "1.5rem", "space-xs": "0.25rem" }, "fontFamily": { "body-md": ["Inter"], "label-lg": ["Plus Jakarta Sans"], "code-tech-xs": ["JetBrains Mono"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "headline-xl": ["Plus Jakarta Sans"], "label-md": ["Inter"], "body-lg": ["Inter"], "headline-lg": ["Plus Jakarta Sans"], "body-sm": ["Inter"], "headline-lg-mobile": ["Plus Jakarta Sans"], "code-tech-sm": ["JetBrains Mono"], "headline-xl-mobile": ["Plus Jakarta Sans"] }, "fontSize": { "body-md": ["14px", { "lineHeight": "22px", "fontWeight": "400" }], "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500" }], "code-tech-xs": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "headline-xl": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.03em", "fontWeight": "600" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "500" }], "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.005em", "fontWeight": "400" }], "headline-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.015em", "fontWeight": "600" }], "code-tech-sm": ["11px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-xl-mobile": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.025em", "fontWeight": "600" }] } } } };</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased"><header class="fixed top-0 left-0 right-0 z-50 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(43,50,59,0.04)]"><div class="h-16 w-full px-margin-desktop flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-md flex-shrink-0"><a class="flex items-center gap-space-sm group" data-path="timeline-view" href="#"><span class="flex items-center justify-center w-8 h-8 rounded-full bg-primary-container text-on-primary-container shadow-[0_2px_8px_-2px_rgba(43,50,59,0.04)]"><span class="material-symbols-outlined text-[18px]">flare</span></span><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface group-hover:text-primary transition-colors">Aries Studio</span></a><span class="font-code-tech-xs text-code-tech-xs px-space-xs py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-medium">v2.1</span></div><div class="hidden xl:flex items-center gap-space-lg flex-1 justify-center max-w-4xl"><div class="flex items-center bg-surface-container p-0.5 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]"><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="timeline-view" href="#"><span class="material-symbols-outlined text-[15px]">stream</span><span>Timeline</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">T</span></a><a class="flex items-center gap-1.5 px-space-md py-1 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all font-label-md text-label-md" data-path="gallery-view" href="#"><span class="material-symbols-outlined text-[15px]">grid_view</span><span>Gallery</span><span class="font-code-tech-xs text-code-tech-xs px-1 rounded bg-surface-container-highest text-on-surface-variant">G</span></a></div><nav class="flex items-center gap-space-xs bg-surface-container-low px-space-sm py-1 rounded-full shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" data-active-classes="bg-primary-container text-on-primary-container font-semibold"><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="timeline-view" href="#">Timeline View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="gallery-view" href="#">Gallery View</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="image-viewer-overlay" href="#">Image Viewer Overlay</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="status-and-edge-states" href="#">Status & Edge States</a><a class="px-space-sm py-0.5 rounded-full text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors font-label-md text-label-md" data-path="style-sheet-and-components" href="#">Style Sheet & Components</a></nav></div><div class="flex items-center gap-space-sm flex-shrink-0"><div class="relative group"><button class="flex items-center gap-space-xs px-space-md py-1 rounded-full bg-surface-container-low hover:bg-surface-container transition-colors shadow-[0_1px_3px_0_rgba(43,50,59,0.02)]" type="button"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-code-tech-sm text-code-tech-sm text-on-surface font-medium">Ready</span><span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span></button><div class="absolute right-0 top-full mt-1.5 w-48 py-1 rounded-2xl bg-surface-container-lowest shadow-[0_12px_32px_-8px_rgba(43,50,59,0.08)] hidden group-hover:flex flex-col z-50"><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-primary"></span><span class="font-body-sm text-body-sm text-on-surface">Ready</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-tertiary"></span><span class="font-body-sm text-body-sm text-on-surface">Busy (3 queued)</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-secondary"></span><span class="font-body-sm text-body-sm text-on-surface">Loading model</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-outline-variant"></span><span class="font-body-sm text-body-sm text-on-surface">Asleep</span></div><div class="px-3 py-1.5 flex items-center gap-2 hover:bg-surface-container-high cursor-pointer"><span class="h-2 w-2 rounded-full bg-error"></span><span class="font-body-sm text-body-sm text-on-surface">Error</span></div></div></div><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Toggle theme" type="button"><span class="material-symbols-outlined text-[18px]">light_mode</span></button><button class="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors font-code-tech-xs text-code-tech-xs font-medium" title="Keyboard shortcuts" type="button"><span class="material-symbols-outlined text-[18px]">help_outline</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/></div></div></header><main class="w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full">
+<!-- Interactive Style Sheet Container -->
+<div class="w-full px-margin md:px-margin-desktop py-space-xl space-y-space-xl max-w-7xl mx-auto">
+<!-- 1. Brand Header & Atelier Philosophy -->
+<section class="relative overflow-hidden rounded-xl bg-surface-container-low p-space-lg md:p-space-xl shadow-sm">
+<div class="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-space-xl">
+<div class="space-y-space-md max-w-2xl">
+<div class="inline-flex items-center gap-space-sm px-space-md py-1 rounded-full bg-surface-container-high text-primary font-code-tech-xs text-code-tech-xs uppercase tracking-wider">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+            Aries Design System · Specimen 2.1
+          </div>
+<div class="flex items-center gap-space-md">
+<img alt="Aries Brand Icon" class="w-14 h-14 rounded-2xl shadow-md object-cover bg-surface-container-highest" src="https://lh3.googleusercontent.com/aida/AEtjO1WlnV6SyEixPMdNMgnniLI91jHs3feroPCXAGPGu7pePuUmtlsFNGd5HHkf9A6C6TQ7E85NZL5UQQNEtFQNRDxjOqNaKWY6tvSyRIJGJJkuF9TFTeVdeyBQe44Ry6ebF13EZruTWpg-3gHzbb2RtKzYydv4QGpjo_Ma2ySodfBztrSwSSdPyOyD9_13F27OQ5vL9q5nrstsGF2ePCauLtOtUJffR3b427XCXPznveuQ25SxzIdftCn0RyA"/>
+<div>
+<h1 class="font-headline-xl text-headline-xl text-on-surface tracking-tight">Aries Studio</h1>
+<p class="font-code-tech-sm text-code-tech-sm text-on-surface-variant uppercase tracking-widest">Atmospheric Neural Canvas Tokens</p>
+</div>
+</div>
+<p class="font-body-lg text-body-lg text-on-surface-variant leading-relaxed">
+            A serene, architectural design language balancing the physical calm of an artist's atelier with the razor technical precision of generative imaging. Quiet surfaces allow synthetic artifacts to command pure focus.
+          </p>
+</div>
+<!-- 5 Core Tenets Badge Deck -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-sm lg:w-96">
+<div class="p-space-sm rounded bg-surface-container-lowest shadow-sm flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[20px] mt-0.5">filter_center_focus</span>
+<div>
+<span class="font-label-lg text-label-lg text-on-surface block font-semibold">Images are content</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Zero competitive chrome.</span>
+</div>
+</div>
+<div class="p-space-sm rounded bg-surface-container-lowest shadow-sm flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[20px] mt-0.5">cached</span>
+<div>
+<span class="font-label-lg text-label-lg text-on-surface block font-semibold">One step to vary</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Rapid lateral exploration.</span>
+</div>
+</div>
+<div class="p-space-sm rounded bg-surface-container-lowest shadow-sm flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-tertiary text-[20px] mt-0.5">spa</span>
+<div>
+<span class="font-label-lg text-label-lg text-on-surface block font-semibold">Calm while waiting</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Soothing, tactile feedback.</span>
+</div>
+</div>
+<div class="p-space-sm rounded bg-surface-container-lowest shadow-sm flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[20px] mt-0.5">terminal</span>
+<div>
+<span class="font-label-lg text-label-lg text-on-surface block font-semibold">Honest metadata</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Raw deterministic seeds.</span>
+</div>
+</div>
+<div class="sm:col-span-2 p-space-sm rounded bg-surface-container-lowest shadow-sm flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[20px] mt-0.5">tune</span>
+<div>
+<span class="font-label-lg text-label-lg text-on-surface block font-semibold">Few knobs, well chosen</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Restraint in UI parameters avoids sensory overload.</span>
+</div>
+</div>
+</div>
+</div>
+<div class="absolute -right-24 -bottom-24 w-96 h-96 rounded-full bg-primary-fixed/20 blur-3xl pointer-events-none"></div>
+</section>
+<!-- 2. Dual-Theme Color Matrix -->
+<section class="space-y-space-md">
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-space-xs">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">01 / Chromatic System</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Dual-mode calibrated neutrals with Cadmium Terracotta generative accents.</p>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">WCAG 2.1 AAA Compliant Contrast</span>
+</div>
+<!-- Comparison Matrix -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
+<!-- Light Mode Swatches -->
+<div class="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm space-y-space-md">
+<div class="flex items-center justify-between pb-space-xs">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-tertiary">light_mode</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Light Mode (Porcelain Atelier)</h3>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface">Active Theme</span>
+</div>
+<div class="grid grid-cols-2 sm:grid-cols-3 gap-space-sm">
+<div class="p-space-sm rounded-lg bg-surface shadow-inner flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Surface Base</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#FCF9F2</div>
+</div>
+<div class="p-space-sm rounded-lg bg-surface-container flex flex-col justify-between h-24 shadow-sm">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Surface Container</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#F1EEE7</div>
+</div>
+<div class="p-space-sm rounded-lg bg-surface-container-highest flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Container High</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#E5E2DB</div>
+</div>
+<div class="p-space-sm rounded-lg bg-primary text-on-primary flex flex-col justify-between h-24 shadow-md">
+<span class="font-label-md text-label-md font-semibold">Primary Terracotta</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-primary/80">#A53705 / #D95C2C</div>
+</div>
+<div class="p-space-sm rounded-lg bg-primary-fixed-dim text-on-primary-fixed flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Terracotta Fixed</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-primary-fixed-variant">#FFB59C</div>
+</div>
+<div class="p-space-sm rounded-lg bg-tertiary text-on-tertiary flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Raw Umber</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-tertiary/80">#7B542B</div>
+</div>
+</div>
+</div>
+<!-- Simulated Dark Obsidian Swatches -->
+<div class="p-space-lg rounded-xl bg-inverse-surface text-inverse-on-surface shadow-md space-y-space-md">
+<div class="flex items-center justify-between pb-space-xs">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-tertiary-fixed-dim">dark_mode</span>
+<h3 class="font-headline-sm text-headline-sm text-inverse-on-surface">Dark Mode (Obsidian Chamber)</h3>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface/10 text-inverse-on-surface">Dark Complement</span>
+</div>
+<div class="grid grid-cols-2 sm:grid-cols-3 gap-space-sm">
+<div class="p-space-sm rounded-lg bg-black text-white/90 flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Obsidian Base</span>
+<div class="font-code-tech-xs text-code-tech-xs text-white/50">#121214</div>
+</div>
+<div class="p-space-sm rounded-lg bg-zinc-900 text-white/90 flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Chamber Low</span>
+<div class="font-code-tech-xs text-code-tech-xs text-white/50">#1A1A1E</div>
+</div>
+<div class="p-space-sm rounded-lg bg-zinc-800 text-white/90 flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Muted Border</span>
+<div class="font-code-tech-xs text-code-tech-xs text-white/50">#27272A</div>
+</div>
+<div class="p-space-sm rounded-lg bg-primary text-on-primary flex flex-col justify-between h-24 shadow-sm">
+<span class="font-label-md text-label-md font-semibold">Terracotta Core</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-primary/80">#D95C2C</div>
+</div>
+<div class="p-space-sm rounded-lg bg-tertiary-container text-on-tertiary-container flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Umber Glow</span>
+<div class="font-code-tech-xs text-code-tech-xs text-on-tertiary-container/80">#966C41</div>
+</div>
+<div class="p-space-sm rounded-lg bg-zinc-700 text-white flex flex-col justify-between h-24">
+<span class="font-label-md text-label-md font-semibold">Muted Slate</span>
+<div class="font-code-tech-xs text-code-tech-xs text-white/60">#52525B</div>
+</div>
+</div>
+</div>
+</div>
+<!-- State Telemetry Colors -->
+<div class="p-space-md rounded-xl bg-surface-container-low shadow-sm">
+<h4 class="font-label-lg text-label-lg text-on-surface mb-space-sm">Status & Telemetry Channels</h4>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-space-sm">
+<div class="flex items-center gap-space-sm p-space-sm rounded bg-surface-container-lowest">
+<span class="w-3 h-3 rounded-full bg-emerald-500 shadow-sm"></span>
+<div>
+<div class="font-label-md text-label-md text-on-surface font-semibold">Engine Ready</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#10B981 · Active loop</div>
+</div>
+</div>
+<div class="flex items-center gap-space-sm p-space-sm rounded bg-surface-container-lowest">
+<span class="w-3 h-3 rounded-full bg-amber-500 shadow-sm"></span>
+<div>
+<div class="font-label-md text-label-md text-on-surface font-semibold">Queued & Busy</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#F59E0B · Latent steps</div>
+</div>
+</div>
+<div class="flex items-center gap-space-sm p-space-sm rounded bg-surface-container-lowest">
+<span class="w-3 h-3 rounded-full bg-error shadow-sm"></span>
+<div>
+<div class="font-label-md text-label-md text-on-surface font-semibold">Error / OOM</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#BA1A1A · VRAM breach</div>
+</div>
+</div>
+<div class="flex items-center gap-space-sm p-space-sm rounded bg-surface-container-lowest">
+<span class="w-3 h-3 rounded-full bg-secondary shadow-sm"></span>
+<div>
+<div class="font-label-md text-label-md text-on-surface font-semibold">Asleep / Hibernating</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">#585F69 · Zero Watts</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- 3. Typography & Micro-Hierarchies -->
+<section class="space-y-space-md">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">02 / Typography Hierarchy</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Plus Jakarta Sans for expressive atelier titles, JetBrains Mono for deterministic seeds.</p>
+</div>
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-lg">
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md items-baseline pb-space-md">
+<div class="md:col-span-3 font-code-tech-xs text-code-tech-xs text-on-surface-variant uppercase tracking-wider">
+            headline-xl / 40px -0.03em
+          </div>
+<div class="md:col-span-9 font-headline-xl text-headline-xl text-on-surface tracking-tight">
+            Atmospheric Synthetics
+          </div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md items-baseline pb-space-md">
+<div class="md:col-span-3 font-code-tech-xs text-code-tech-xs text-on-surface-variant uppercase tracking-wider">
+            headline-lg / 30px -0.02em
+          </div>
+<div class="md:col-span-9 font-headline-lg text-headline-lg text-on-surface">
+            Architectural Render Chamber
+          </div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md items-baseline pb-space-md">
+<div class="md:col-span-3 font-code-tech-xs text-code-tech-xs text-on-surface-variant uppercase tracking-wider">
+            headline-md / 22px -0.015em
+          </div>
+<div class="md:col-span-9 font-headline-md text-headline-md text-on-surface">
+            Spatial Depth Diffusion v4.8
+          </div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md items-baseline pb-space-md">
+<div class="md:col-span-3 font-code-tech-xs text-code-tech-xs text-on-surface-variant uppercase tracking-wider">
+            body-lg / 16px
+          </div>
+<div class="md:col-span-9 font-body-lg text-body-lg text-on-surface-variant max-w-2xl">
+            Diffuses high-frequency textures into soft sculptural forms, respecting the organic grain of terracotta clay and cast Brutalist plaster under overcast skylight illumination.
+          </div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md items-baseline">
+<div class="md:col-span-3 font-code-tech-xs text-code-tech-xs text-on-surface-variant uppercase tracking-wider">
+            code-tech-sm / Tabular Figures
+          </div>
+<div class="md:col-span-9 flex flex-wrap gap-space-md font-code-tech-sm text-code-tech-sm">
+<span class="px-space-sm py-1 rounded bg-surface-container font-medium text-on-surface">seed: 940182472910</span>
+<span class="px-space-sm py-1 rounded bg-surface-container font-medium text-on-surface">sampler: dpmpp_2m_sde_k</span>
+<span class="px-space-sm py-1 rounded bg-surface-container font-medium text-on-surface">cfg: 6.80</span>
+<span class="px-space-sm py-1 rounded bg-surface-container font-medium text-on-surface">steps: 42/42</span>
+<span class="px-space-sm py-1 rounded bg-surface-container font-medium text-on-surface">vram: 11.4GB / 24GB</span>
+</div>
+</div>
+</div>
+</section>
+<!-- 4. Interactive Component Specimen Gallery -->
+<section class="space-y-space-md">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">03 / Component Specimen Laboratory</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Production atomic UI primitives built strictly against the Aries design tokens.</p>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-lg">
+<!-- Left: Aspect Ratio Selectors & Action Bar -->
+<div class="lg:col-span-6 space-y-space-lg">
+<!-- Specimen A: Aspect Ratio Visual Selector -->
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-md">
+<div class="flex items-center justify-between">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Aspect Ratio Selector</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Iconic proportional geometry switches with active indicator</p>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface">§4.1 Selector</span>
+</div>
+<!-- Proportional Buttons -->
+<div class="grid grid-cols-4 sm:grid-cols-7 gap-space-xs" id="ratio-group">
+<!-- 1:1 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="1:1" type="button">
+<div class="w-6 h-6 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors flex items-center justify-center"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">1:1</span>
+</button>
+<!-- 4:3 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="4:3" type="button">
+<div class="w-7 h-5 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">4:3</span>
+</button>
+<!-- 3:4 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="3:4" type="button">
+<div class="w-5 h-7 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">3:4</span>
+</button>
+<!-- 3:2 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="3:2" type="button">
+<div class="w-7 h-4.5 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">3:2</span>
+</button>
+<!-- 2:3 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="2:3" type="button">
+<div class="w-4.5 h-7 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">2:3</span>
+</button>
+<!-- 16:9 Active Default -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-primary-fixed text-on-primary-fixed shadow-sm transition-all group" data-ratio="16:9" type="button">
+<div class="w-8 h-4.5 rounded-sm bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs font-semibold text-primary">16:9</span>
+</button>
+<!-- 9:16 -->
+<button class="ratio-btn flex flex-col items-center justify-center p-2 rounded-lg bg-surface-container hover:bg-surface-container-high transition-all group" data-ratio="9:16" type="button">
+<div class="w-4 h-8 rounded-sm bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="mt-1 font-code-tech-xs text-code-tech-xs text-on-surface font-medium">9:16</span>
+</button>
+</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant flex justify-between">
+<span>Resolution Target: <strong class="text-on-surface">1920 × 1080 px</strong></span>
+<span>Bucket 2.1 Latent Space</span>
+</div>
+</div>
+<!-- Specimen B: Artifact Tile Action Bar -->
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-md">
+<div class="flex items-center justify-between">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Tile Micro-Action Dock</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Hover-revealed toolbar docked over generated media artifacts</p>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface">Overlay UI</span>
+</div>
+<!-- Floating Action Bar Preview -->
+<div class="relative h-44 rounded-lg overflow-hidden bg-surface-container flex items-end justify-center p-space-md">
+<img class="absolute inset-0 w-full h-full object-cover" data-alt="Brutalist architectural sculpture made of terracotta and cream plaster, softly illuminated by natural north-facing daylight, architectural studio specimen photography, highly detailed museum aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDMBUFCY8yWu1llQI8mYtGm92QMYxDJgnUahlgBua361Gl73BG1xXKLOkkMLb_j5dwlICmxtKKQNa5TI_A5r73-9Bqda17X9hG5VL8t6TDpQkbs4ZsUOvA4_wI2dl2oVYAcpcH46uB25DIRGfQrFjugHeDnaj_WagW-b1gCnhPwlnE3E1loolNRXy654Aww4ZktdtnO-WlJc_gB3986ch_b-5IL2mEFLPiZKCh5kD7QPS0dZuYKnPzG"/>
+<div class="relative z-10 flex items-center gap-space-xs p-1.5 rounded-full bg-surface-container-lowest/90 backdrop-blur-md shadow-md">
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-container transition-all" title="Favorite" type="button">
+<span class="material-symbols-outlined text-[18px]">favorite</span>
+</button>
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-container transition-all" title="Vary laterally" type="button">
+<span class="material-symbols-outlined text-[18px]">auto_fix_high</span>
+</button>
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-container transition-all" title="Download PNG (Lossless)" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+<div class="w-px h-4 bg-outline-variant"></div>
+<button class="px-space-sm h-8 rounded-full flex items-center gap-1 text-on-primary bg-primary hover:bg-primary-container transition-all font-label-md text-label-md font-semibold" type="button">
+<span>Inspector</span>
+<span class="material-symbols-outlined text-[16px]">open_in_full</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Specimen C: Status Badges & Step Progress Bars -->
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-md">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Telemetry & Step Indicators</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Continuous diffusion progress bar with real-time ETA</p>
+</div>
+<!-- Progress Meter -->
+<div class="p-space-md rounded-lg bg-surface-container-low space-y-space-sm">
+<div class="flex items-center justify-between font-label-md text-label-md">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[18px] animate-spin">cyclone</span>
+<span class="font-semibold text-on-surface">Sampling Batch: Step 28 of 35</span>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs font-semibold text-primary">80.0% · 1.4s rem</span>
+</div>
+<div class="w-full h-2 rounded-full bg-surface-container-highest overflow-hidden">
+<div class="h-full bg-gradient-to-r from-primary to-tertiary rounded-full transition-all duration-300" style="width: 80%"></div>
+</div>
+<div class="flex justify-between items-center text-on-surface-variant font-code-tech-xs text-code-tech-xs pt-1">
+<span>Sampler: DPM++ 2M Karras</span>
+<span>Seed: 84920194</span>
+</div>
+</div>
+<!-- Micro Queue Chips -->
+<div class="flex flex-wrap gap-space-sm">
+<span class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-full bg-emerald-100 text-emerald-900 font-code-tech-xs text-code-tech-xs font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                Engine Ready
+              </span>
+<span class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-full bg-amber-100 text-amber-900 font-code-tech-xs text-code-tech-xs font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-amber-600 animate-ping"></span>
+                Queue: 3 Tasks
+              </span>
+<span class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-full bg-surface-container-high text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span class="material-symbols-outlined text-[13px]">memory</span>
+                TensorRT FP16
+              </span>
+</div>
+</div>
+</div>
+<!-- Right: Composer Variations & Alpha Pattern Specimen -->
+<div class="lg:col-span-6 space-y-space-lg">
+<!-- Specimen D: Prompt Composer Suite -->
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-md">
+<div class="flex items-center justify-between">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Prompt Atelier Composers</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Default state, tag-injected state, and Reference Strip</p>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface">§6 Composer</span>
+</div>
+<!-- 1. Default Clean Composer -->
+<div class="space-y-1">
+<span class="font-label-md text-label-md text-on-surface-variant block">State 01: Clean Workspace</span>
+<div class="p-space-md rounded-xl bg-surface-container-low shadow-inner space-y-space-sm">
+<input class="w-full bg-transparent font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none" placeholder="Describe the scene or architectural subject..." type="text"/>
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-xs text-on-surface-variant">
+<button class="p-1 rounded-full hover:bg-surface-container text-on-surface-variant hover:text-on-surface" title="Add Reference Image" type="button">
+<span class="material-symbols-outlined text-[18px]">add_photo_alternate</span>
+</button>
+<button class="p-1 rounded-full hover:bg-surface-container text-on-surface-variant hover:text-on-surface" title="Seed Locking" type="button">
+<span class="material-symbols-outlined text-[18px]">lock_open</span>
+</button>
+</div>
+<button class="px-space-md py-1.5 rounded-full bg-primary hover:bg-primary-container text-on-primary font-label-md text-label-md font-semibold transition-all shadow-sm flex items-center gap-1" type="button">
+<span>Synthesize</span>
+<span class="material-symbols-outlined text-[16px]">spark</span>
+</button>
+</div>
+</div>
+</div>
+<!-- 2. Filled with Reuse Tag & Negative Prompt -->
+<div class="space-y-1">
+<span class="font-label-md text-label-md text-on-surface-variant block">State 02: Active with Parameter Reuse Chips</span>
+<div class="p-space-md rounded-xl bg-surface-container-low shadow-inner space-y-space-sm">
+<div class="flex flex-wrap gap-1.5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed font-code-tech-xs text-code-tech-xs">
+<span>ref: seed #89412</span>
+<span class="material-symbols-outlined text-[12px] cursor-pointer hover:text-error">close</span>
+</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface font-code-tech-xs text-code-tech-xs">
+<span>aspect: 16:9</span>
+<span class="material-symbols-outlined text-[12px] cursor-pointer hover:text-error">close</span>
+</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface">
+                  Sunlit brutalist monastery in Andalusia, warm ochre rammed earth, monolithic arches, soft morning mist, 35mm photograph.
+                </p>
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-xs font-code-tech-xs text-code-tech-xs text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
+<span>Latent Cache Reused</span>
+</div>
+<button class="px-space-md py-1.5 rounded-full bg-primary hover:bg-primary-container text-on-primary font-label-md text-label-md font-semibold transition-all shadow-sm flex items-center gap-1" type="button">
+<span>Run Variant</span>
+<span class="material-symbols-outlined text-[16px]">refresh</span>
+</button>
+</div>
+</div>
+</div>
+<!-- 3. Future Reference Strip (§6.2 sketch) -->
+<div class="space-y-1">
+<span class="font-label-md text-label-md text-on-surface-variant block">State 03: §6.2 Multi-Image Reference Strip</span>
+<div class="p-space-md rounded-xl bg-surface-container-low shadow-inner space-y-space-sm">
+<div class="flex items-center gap-space-sm overflow-x-auto pb-1">
+<!-- Thumbnail 1 -->
+<div class="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden group shadow-sm bg-surface-container">
+<img class="w-full h-full object-cover" data-alt="Monolithic warm concrete architecture sample" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCq78D1hhXk0sr065cE7XsAo2QS-naKyOdSBSqVhajmZtJDxzfnOmFRJW2FL18i9HbBjV0pOHoapJjdH-V_Ah-edVlFQ9HQFD82Xl5hIWHpVgHHGv9Jr74l189KY44h_ExlpjtgIWUi5D0gLRpGyqvgLZjGDPdBEKNKDWterHOPyqoz8sDWt2BCiCrl7fXiYl4X1jm_fdDt2h9iRJOdp_qev41M3ebLvDU41hCRXoPGkIAqmFRiN9yY"/>
+<span class="absolute bottom-0 inset-x-0 bg-black/60 text-white font-code-tech-xs text-[9px] text-center py-0.5">0.75 wt</span>
+</div>
+<!-- Thumbnail 2 -->
+<div class="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden group shadow-sm bg-surface-container">
+<img class="w-full h-full object-cover" data-alt="Warm terracotta clay glaze sample with organic pores" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAhljD9UcGbzxx-XPChDk5i9mO6L4vvh7m9pFSBSuB1rD155wuFqzQV5btZ_WI0sFb-SLpZuCTpE_nU_BmV5TJznCyO_Oh9-lFQcZx67Wyx4vVc-86ebAhOXhzlvYMN7_ePsw687i7G7s4cfoPJFuWFQ3w7k3GbTbR0RdV0LPIJbTGQ2D0VNgUrZ_eAF2SmezRtN59tlT_mhwBaeOTlqcXlLyc-G6x75MIo0wkvQQWo2QHseUcFsQqG"/>
+<span class="absolute bottom-0 inset-x-0 bg-black/60 text-white font-code-tech-xs text-[9px] text-center py-0.5">0.40 wt</span>
+</div>
+<!-- Add Reference Slot -->
+<button class="flex-shrink-0 w-16 h-16 rounded-lg bg-surface-container-highest hover:bg-surface-container-high transition-colors flex flex-col items-center justify-center text-on-surface-variant" type="button">
+<span class="material-symbols-outlined text-[20px]">add</span>
+<span class="font-code-tech-xs text-[9px]">Add Ref</span>
+</button>
+</div>
+<div class="flex items-center justify-between text-on-surface-variant font-code-tech-xs text-code-tech-xs">
+<span>Cross-Attention Adapter · IP-Adapter Plus</span>
+<span>Weights Sum: 1.15</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Specimen E: Transparent Checkerboard Specimen -->
+<div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm space-y-space-md">
+<div class="flex items-center justify-between">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Alpha Transparency Matrix</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Calibrated studio checkerboard for cutouts, masks, and depth maps</p>
+</div>
+<span class="font-code-tech-xs text-code-tech-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface">PNG / WebP Alpha</span>
+</div>
+<!-- Stylized Alpha Canvas Preview -->
+<div class="relative h-44 rounded-xl overflow-hidden shadow-inner flex items-center justify-center p-space-md" style="background-image: linear-gradient(45deg, #e5e2db 25%, transparent 25%), linear-gradient(-45deg, #e5e2db 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e2db 75%), linear-gradient(-45deg, transparent 75%, #e5e2db 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0px; background-color: #f1eee7;">
+<!-- Floating Cutout Layer -->
+<div class="relative z-10 px-space-xl py-space-md rounded-2xl bg-surface-container-lowest/80 backdrop-blur-xl shadow-lg flex items-center gap-space-md">
+<span class="material-symbols-outlined text-primary text-[32px]">layers</span>
+<div>
+<div class="font-label-lg text-label-lg text-on-surface font-semibold">RGBA Depth Buffer Specimen</div>
+<div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Alpha channel preserved · 32-bit floating point</div>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-space-xs text-center font-code-tech-xs text-code-tech-xs text-on-surface-variant">
+<div class="p-1 rounded bg-surface-container">Tile size: 16px</div>
+<div class="p-1 rounded bg-surface-container">Tone: Stone Neutral</div>
+<div class="p-1 rounded bg-surface-container">Zero Glare</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- 5. Technical Token Map Footer Drawer -->
+<section class="bg-surface-container-low rounded-xl p-space-lg shadow-sm">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-md pb-space-md">
+<div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">System Architecture Parameters</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Immutable styling tokens exported for ComfyUI and React micro-frontends.</p>
+</div>
+<button class="px-space-md py-1.5 rounded-full bg-surface-container-highest hover:bg-surface-container text-on-surface font-code-tech-xs text-code-tech-xs font-medium transition-all flex items-center gap-1 self-start sm:self-auto" onclick="navigator.clipboard?.writeText(JSON.stringify({system: 'Aries v2.1', primary: '#a53705', surface: '#fcf9f2'}))" type="button">
+<span class="material-symbols-outlined text-[15px]">content_copy</span>
+<span>Copy Config Token JSON</span>
+</button>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-space-md font-code-tech-xs text-code-tech-xs">
+<div class="p-space-sm rounded-lg bg-surface-container-lowest shadow-sm space-y-1">
+<span class="text-primary font-semibold block">Elevation Stratification</span>
+<div class="text-on-surface-variant">Level 1: 0 2px 8px -2px rgba(43,50,59,0.04)</div>
+<div class="text-on-surface-variant">Level 2: 0 12px 32px -8px rgba(43,50,59,0.08)</div>
+<div class="text-on-surface-variant">Level 3: 0 24px 64px -12px rgba(22,21,20,0.18)</div>
+</div>
+<div class="p-space-sm rounded-lg bg-surface-container-lowest shadow-sm space-y-1">
+<span class="text-tertiary font-semibold block">Geometry Radii</span>
+<div class="text-on-surface-variant">Base Radius: 1.0rem (16px)</div>
+<div class="text-on-surface-variant">Large Radius: 2.0rem (32px)</div>
+<div class="text-on-surface-variant">Full Pill: 9999px (Controls & Chips)</div>
+</div>
+<div class="p-space-sm rounded-lg bg-surface-container-lowest shadow-sm space-y-1">
+<span class="text-secondary font-semibold block">Diffusion Grid Baseline</span>
+<div class="text-on-surface-variant">Spatial Unit: 4px baseline rhythm</div>
+<div class="text-on-surface-variant">Desktop Gutter: 1.5rem (24px)</div>
+<div class="text-on-surface-variant">Sidebar Dock: 380px locked column</div>
+</div>
+</div>
+</section>
+</div>
+<!-- Interactive State Controller Script -->
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const ratioButtons = document.querySelectorAll('.ratio-btn');
+      ratioButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          ratioButtons.forEach(b => {
+            b.classList.remove('bg-primary-fixed', 'text-on-primary-fixed', 'shadow-sm');
+            b.classList.add('bg-surface-container');
+            const icon = b.querySelector('div');
+            if (icon) {
+              icon.classList.remove('bg-primary');
+              icon.classList.add('bg-outline-variant');
+            }
+            const label = b.querySelector('span');
+            if (label) {
+              label.classList.remove('font-semibold', 'text-primary');
+              label.classList.add('text-on-surface');
+            }
+          });
+          btn.classList.remove('bg-surface-container');
+          btn.classList.add('bg-primary-fixed', 'text-on-primary-fixed', 'shadow-sm');
+          const activeIcon = btn.querySelector('div');
+          if (activeIcon) {
+            activeIcon.classList.remove('bg-outline-variant');
+            activeIcon.classList.add('bg-primary');
+          }
+          const activeLabel = btn.querySelector('span');
+          if (activeLabel) {
+            activeLabel.classList.add('font-semibold', 'text-primary');
+          }
+        });
+      });
+    });
+  </script>
+</div></main><footer class="w-full bg-surface-container-lowest py-space-xl shadow-[0_1px_8px_rgba(43,50,59,0.02)]"><div class="w-full px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-space-md text-on-surface-variant"><div class="flex items-center gap-space-md"><span class="font-headline-sm text-headline-sm text-on-surface font-semibold">Aries Studio</span><span class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">Atmospheric Neural Canvas · Personal Edition</span></div><div class="flex items-center gap-space-lg font-label-md text-label-md"><a class="hover:text-on-surface transition-colors" data-path="timeline-view" href="#">Timeline</a><a class="hover:text-on-surface transition-colors" data-path="gallery-view" href="#">Gallery</a><a class="hover:text-on-surface transition-colors" data-path="status-and-edge-states" href="#">Telemetry</a><a class="hover:text-on-surface transition-colors" data-path="style-sheet-and-components" href="#">Design System</a></div><div class="font-code-tech-xs text-code-tech-xs text-on-surface-variant">© 2025 Aries Studio. High-fidelity generative atelier.</div></div></footer></body></html>

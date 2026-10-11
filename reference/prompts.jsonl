@@ -1,0 +1,10 @@
+{"id": "smoke-1024", "prompt": "A red ceramic mug on a wooden table, morning light", "w": 1024, "h": 1024, "steps": 20, "seed": 1}
+{"id": "smoke-1024b", "prompt": "A tabby cat asleep on a stack of books", "w": 1024, "h": 1024, "steps": 20, "seed": 1}
+{"id": "text-neon", "prompt": "A neon shop sign that reads \"QWEN IMAGE 2.1\", rainy night, reflections on wet pavement", "seed": 42}
+{"id": "text-label", "prompt": "A glass jar with a handwritten paper label that says \"Homemade Plum Jam 2026\", kitchen shelf", "seed": 42}
+{"id": "count-shapes", "prompt": "Three red cubes and two blue spheres on a white table, studio lighting", "seed": 42}
+{"id": "hands", "prompt": "Close-up of two hands shuffling a deck of playing cards, shallow depth of field", "seed": 42}
+{"id": "portrait", "prompt": "Portrait of an elderly fisherman, Rembrandt lighting, weathered skin, 85mm photo", "seed": 42}
+{"id": "rgba-dragon", "prompt": "This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.", "seed": 42}
+{"id": "wide-16x9", "prompt": "Panoramic mountain lake at dawn, mist over the water, a single canoe", "w": 2752, "h": 1536, "seed": 42}
+{"id": "tall-9x16", "prompt": "A lighthouse on a cliff during a storm, waves crashing", "w": 1536, "h": 2752, "seed": 42}

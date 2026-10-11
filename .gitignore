@@ -1,0 +1,46 @@
+# Environment & virtualenvs
+.venv/
+venv/
+env/
+__pycache__/
+*.egg-info/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+
+# Rust (next major version)
+target/
+**/*.rs.bk
+
+# Node & Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data & temp files
+data/
+out/
+*.tmp
+*.tmp.png
+*.running
+*.failed
+*.db
+*.db-shm
+*.db-wal
+/state/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
