@@ -5,7 +5,7 @@ stage workers, their protocol, queue and failure semantics, and telemetry. SPEC.
 covers the product and the browser-facing API; HARDWARE.md covers the measurements
 behind the decisions here.
 
-**Implementation status (v0.2.0):** the manager, stage workers and web UI are built.
+**Implementation status (v0.2.1):** the manager, stage workers and web UI are built.
 The **Studio** service (§1) is not built yet: the browser talks to the manager
 directly and keeps history in browser storage. See §10.
 
@@ -46,7 +46,7 @@ Browser ──poll──▶ Studio (k3s)                     Manager (Aries, one
 | **Stage worker** | one model on one card; processes jobs of one stage | spawned per stage run; exits when idle |
 
 The manager is not exposed to the network beyond Studio. Browsers only ever talk to Studio.
-(Target design. In v0.2.0 the browser talks to the manager directly, and the manager
+(Target design. In v0.2.1 the browser talks to the manager directly, and the manager
 has no authentication: keep it on a trusted LAN.)
 
 ---
@@ -149,7 +149,7 @@ over a Unix socket:
 | worker | `claim` | ask for the next job of my stage |
 | manager | `job {id, paths, params}` or `none` | `none` → start the idle-grace timer |
 | worker | `progress {id, step, steps, s_per_step}` | denoise, every step |
-| worker | `progress {id, sub_stage, enhance_stats}` | enhance: `sub_stage` is `prefill` → `thinking` → `rewriting`; `enhance_stats` carries token counts and prefill/generation tokens per second; at most every 0.25 s plus on each sub-stage change |
+| worker | `progress {id, sub_stage, enhance_stats}` | enhance: `sub_stage` is `prefill` → `thinking` → `rewriting`; `enhance_stats` carries token counts, the token limit (`max_new_tokens`, 2048) and prefill/generation tokens per second; at most every 0.25 s plus on each sub-stage change |
 | worker | `done {id, timings, peak_vram}` | outputs written to the job's directory |
 | worker | `error {id, message}` | Python-level failure or cancellation; worker stays up |
 | worker | `heartbeat` | every 5 s; 30 s with no message at all → manager drops the worker |
@@ -213,7 +213,7 @@ reason) and runs GC immediately.
 | DELETE | `/jobs/{id}/image` | Acknowledge receipt → GC |
 | DELETE | `/jobs/{id}` | Acknowledge a stored job, or delete a finished one (active jobs: 400, cancel first) |
 | DELETE | `/jobs/failed` | Delete every failed job |
-| GET | `/status` | Cards (state, stage, sub-stage, VRAM, overflow), queue depth per stage, host RAM, decode RAM floor |
+| GET | `/status` | Cards (state, stage, sub-stage, VRAM, overflow), queue depth per stage, host RAM, decode RAM floor. A card's `vram_peak` covers its current or last worker run |
 | GET | `/health` | `/status` plus an overall `state`: `ready`, `busy` or `error` |
 | GET | `/stage_runs?limit=N` | Recent worker runs (§5) |
 | GET | `/metrics` | Prometheus |

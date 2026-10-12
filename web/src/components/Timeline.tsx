@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { type Generation, type AspectRatio, ASPECT_RATIOS } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { Logo } from './Logo';
+import { formatDuration, generationSeconds, queueSeconds } from '../utils/timings';
 import {
   Heart,
   Dices,
@@ -20,6 +21,11 @@ import {
   Trash2,
   Sliders,
 } from 'lucide-react';
+
+/** Enhancer token limit, for progress from workers that do not report `max_new_tokens`. */
+const DEFAULT_ENHANCE_TOKEN_LIMIT = 2048;
+/** Most enhancer runs finish around this share of the token limit: the bar's finish line. */
+const ENHANCE_EXPECTED_SHARE = 0.85;
 
 interface TimelineProps {
   generations: Generation[];
@@ -100,7 +106,7 @@ export const Timeline: React.FC<TimelineProps> = ({
             Aries Image Studio
           </h2>
           <p className="text-sm text-[#58423a] dark:text-[#a09088] mt-1.5 max-w-md">
-            Type a prompt below to create images with Qwen-Image 2.1 on dual Intel Arc GPUs. Or start with a sample:
+            Type a prompt below to create images with Qwen-Image 2.1. Or start with a sample:
           </p>
         </div>
 
@@ -144,6 +150,13 @@ export const Timeline: React.FC<TimelineProps> = ({
         const cleanEnhanced = sanitizeEnhancedPrompt(selectedGen.enhancedPrompt);
         const isThinkingOpen = !!expandedThinking[selectedGen.id];
         const generationTps = selectedGen.timings?.generation_tps || selectedGen.enhanceStats?.generation_tps || 0;
+        const genSeconds = generationSeconds(selectedGen.timings);
+        const waitSeconds = queueSeconds(selectedGen.timings);
+        const timeTitle =
+          genSeconds != null
+            ? `Generated in ${formatDuration(genSeconds)}` +
+              (waitSeconds != null ? ` · waited ${formatDuration(waitSeconds)} for a GPU` : '')
+            : undefined;
 
         return (
           <article
@@ -184,15 +197,18 @@ export const Timeline: React.FC<TimelineProps> = ({
                 </span>
 
                 {/* Timings */}
-                {selectedGen.timings?.total_s != null && (
-                  <span className="w-full px-1.5 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320] text-center text-[10px] font-medium">
-                    {selectedGen.timings.total_s.toFixed(1)}s
+                {genSeconds != null && (
+                  <span
+                    className="w-full px-1.5 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320] text-center text-[10px] font-medium"
+                    title={timeTitle}
+                  >
+                    {formatDuration(genSeconds)}
                   </span>
                 )}
 
-                {/* Precision & Hardware */}
+                {/* Precision */}
                 <span className="w-full px-1 py-0.5 rounded-md bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] text-center font-medium">
-                  bf16 · Arc
+                  bf16
                 </span>
               </div>
 
@@ -428,9 +444,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                   <span className="px-2 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320]">
                     seed {selectedGen.params.seed}
                   </span>
-                  {selectedGen.timings?.total_s != null && (
-                    <span className="px-2 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320]">
-                      {selectedGen.timings.total_s.toFixed(1)}s
+                  {genSeconds != null && (
+                    <span className="px-2 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320]" title={timeTitle}>
+                      {formatDuration(genSeconds)}
                     </span>
                   )}
                 </div>
@@ -653,15 +669,22 @@ const TileCard: React.FC<TileCardProps> = ({
   // 2. RUNNING STATE (Generating with live phases)
   if (gen.status === 'running') {
     const isEnhance = gen.phase === 'enhancing' || gen.stage === 'enhance';
-    // The enhancer reports sub-stages, not steps; show them as thirds of the bar.
-    const [enhanceLabel, enhancePct] =
-      gen.subStage === 'rewriting'
-        ? ['rewriting prompt', 95]
-        : gen.subStage === 'thinking'
-        ? ['thinking', 66]
-        : ['reading prompt', 33];
+    // Progress is tokens against the expected finish line (85 % of the token limit). Past
+    // it the bar turns indeterminate ("almost done") until the run ends, at the limit
+    // at the latest.
+    const enhanceLabel =
+      gen.subStage === 'rewriting' ? 'rewriting prompt' : gen.subStage === 'thinking' ? 'thinking' : 'reading prompt';
+    const enhanceTokens = gen.enhanceStats?.generated_tokens || 0;
+    const enhanceLimit = gen.enhanceStats?.max_new_tokens || DEFAULT_ENHANCE_TOKEN_LIMIT;
+    const enhanceTps = gen.enhanceStats?.generation_tps || 0;
+    const enhanceExpected = enhanceLimit * ENHANCE_EXPECTED_SHARE;
+    const enhanceAlmostDone = enhanceTokens >= enhanceExpected;
+    const enhancePct = Math.min(99, Math.round((enhanceTokens / enhanceExpected) * 100));
+    const enhanceEta = enhanceTps > 0 && !enhanceAlmostDone ? (enhanceExpected - enhanceTokens) / enhanceTps : null;
 
     const totalSteps = gen.totalSteps || gen.params.steps;
+    // Encode and decode report no steps: show an indeterminate bar rather than a frozen 0 %.
+    const hasSteps = (isEnhance && !enhanceAlmostDone) || gen.phase === 'denoising' || gen.stage === 'denoise';
     const pct = isEnhance ? enhancePct : Math.min(100, Math.round(((gen.step || 0) / totalSteps) * 100));
 
     const getPhaseDisplay = () => {
@@ -748,6 +771,7 @@ const TileCard: React.FC<TileCardProps> = ({
               {gen.enhanceStats?.generation_tps ? (
                 <div className="text-[10px] font-mono text-[#8c7169] dark:text-[#a09088] mt-0.5">
                   ✨ {gen.enhanceStats.generation_tps.toFixed(1)} T/s
+                  {enhanceEta != null && ` · ~${Math.round(enhanceEta)}s left`}
                 </div>
               ) : gen.enhanceStats?.prefill_tps ? (
                 <div className="text-[10px] font-mono text-[#8c7169] dark:text-[#a09088] mt-0.5">
@@ -769,18 +793,28 @@ const TileCard: React.FC<TileCardProps> = ({
           )}
 
           {/* Progress Bar */}
-          <div className="w-full max-w-[180px] mx-auto h-1.5 rounded-full bg-[#e5e2db] dark:bg-[#333330] overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                isEnhance
-                  ? 'bg-amber-500 animate-pulse'
-                  : 'bg-[#a53705]'
-              }`}
-              style={{ width: `${Math.max(5, pct)}%` }}
-            />
+          <div
+            className="w-full max-w-[180px] mx-auto h-1.5 rounded-full bg-[#e5e2db] dark:bg-[#333330] overflow-hidden"
+            role="progressbar"
+            aria-valuenow={hasSteps ? pct : undefined}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            {hasSteps ? (
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  isEnhance ? 'bg-amber-500 animate-pulse' : 'bg-[#a53705]'
+                }`}
+                style={{ width: `${Math.max(5, pct)}%` }}
+              />
+            ) : (
+              <div
+                className={`h-full w-1/3 rounded-full progress-indeterminate ${isEnhance ? 'bg-amber-500' : 'bg-[#a53705]'}`}
+              />
+            )}
           </div>
           <div className="text-[10px] font-mono text-[#8c7169] dark:text-[#a09088]">
-            {pct}% completed
+            {hasSteps ? `${pct}% completed` : isEnhance ? 'almost done…' : 'working…'}
           </div>
         </div>
 
@@ -837,7 +871,7 @@ const TileCard: React.FC<TileCardProps> = ({
               : gen.phase === 'denoising' || gen.stage === 'denoise'
               ? 'Queued for drawing (waiting for GPU)'
               : gen.phase === 'decoding' || gen.stage === 'decode'
-              ? 'Queued for untiled VAE decode'
+              ? 'Queued for decoding'
               : 'Waiting for generator to be ready'}
           </p>
         </div>

@@ -19,7 +19,7 @@ deploy/aries/            Docker Compose + Makefile for the backend on the GPU ho
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.2.0)
+## Current state (v0.2.1)
 
 - The browser talks to the manager directly (`/jobs`, `/status`, `/stage_runs`) and
   keeps history in localStorage/IndexedDB. The always-on **Studio** service from

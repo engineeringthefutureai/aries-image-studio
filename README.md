@@ -6,9 +6,9 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) on a home server with
 two Intel Arc Pro B60 GPUs. Single user, LAN only.
 
-**Version 0.2.0** — first public version. It works end to end on the hardware it was
-built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md).
+**Version 0.2.1.** It works end to end on the hardware it was built for; see
+[Limitations](#limitations) before deploying it anywhere else.
+Release notes: [0.2.1](docs/releases/v0.2.1.md) · [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
 

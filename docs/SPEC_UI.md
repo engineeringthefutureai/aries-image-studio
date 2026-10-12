@@ -92,10 +92,10 @@ looks stuck:
 | Phase | Typical length | What the tile says |
 |---|---|---|
 | Waking *(future)* | 10–30 s | "Waking generator" |
-| Enhancing | seconds, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt) and tokens/s |
-| Reading prompt | a few seconds | "Reading prompt" |
+| Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's 2048-token limit; past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest) |
+| Reading prompt | a few seconds | "Reading prompt" with an indeterminate bar (the encoder reports no steps) |
 | Drawing | most of the time | "Drawing", percent, live speed and time left ("6.40s/step · ~180s left") |
-| Finishing | 5–15 s | "Finishing" — decoding the full-size image; must not look frozen at 100 % |
+| Finishing | 5–15 s | "Finishing" with an indeterminate bar — decoding the full-size image; must not look frozen |
 
 Each stage runs in a freshly started worker, so a phase may begin with a few seconds
 of model loading; the tile shows the GPU running it.
@@ -149,8 +149,12 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   - Prompt (copy button) and, in future, enhanced prompt
   - Seed (copy button), size and aspect, steps / quality
   - Model name and precision (e.g. "Qwen-Image 2.1 · bf16")
-  - Timing: time in queue, generation time, seconds per step; expandable into the
-    breakdown (loading · reading prompt · drawing · finishing) and peak memory per card
+  - Total time (submit to done), and a Time breakdown: each stage's time (enhance with
+    tokens and tok/s, denoise with steps × s/step, decode with its mode), their sum as
+    generation time, then queue & model loading (the rest: waiting for a GPU, starting
+    workers, loading models) and the total
+  - Expandable pipeline details: stages, decode mode, the GPU that decoded it and peak
+    memory
   - Created date/time
   - Technical section, collapsed: device and software versions
 - **Actions**:
@@ -262,6 +266,7 @@ Seed       48213
 Size       1536 × 2752 (9:16)
 Quality    Standard · 40 steps
 Model      Qwen-Image 2.1 · bf16
-Timing     waited 4m 10s · generated 2m 31s · 3.8 s/step
+Time       enhance 1m 12s · encode 3.1s · denoise 2m 32s (40 × 3.8s) · decode 5.2s
+           generation 3m 52s · queue & model loading 4m 10s · total 8m 2s
 Created    Sat, 09:41
 ```

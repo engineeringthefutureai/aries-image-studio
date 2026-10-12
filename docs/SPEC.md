@@ -33,7 +33,7 @@ Browser ──HTTPS──▶ Studio (always on)  ──HTTP──▶  Manager (G
   stage in flight, never history.
 - Control plane in the cluster, GPU box as a replaceable agent.
 
-**Status (v0.2.0):** Studio is not built yet. The SPA talks to the manager directly and
+**Status (v0.2.1):** Studio is not built yet. The SPA talks to the manager directly and
 keeps history in the browser. The next major version adds Studio as a Rust server
 with SQLite storage.
 

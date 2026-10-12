@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { type Generation, type AspectRatio, ASPECT_RATIOS } from '../types';
+import { formatDuration, generationSeconds } from '../utils/timings';
 import {
   Heart,
   Dices,
@@ -277,10 +278,10 @@ export const Gallery: React.FC<GalleryProps> = ({
                       <span>seed {gen.params.seed}</span>
                       <span>·</span>
                       <span>{gen.params.steps} steps</span>
-                      {gen.timings?.total_s != null && (
+                      {generationSeconds(gen.timings) != null && (
                         <>
                           <span>·</span>
-                          <span>{gen.timings.total_s.toFixed(1)}s</span>
+                          <span>{formatDuration(generationSeconds(gen.timings)!)}</span>
                         </>
                       )}
                     </div>

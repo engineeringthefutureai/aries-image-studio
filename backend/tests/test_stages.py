@@ -22,7 +22,7 @@ import pytest
 from PIL import Image
 
 from aries_worker.client import WorkerSocketClient
-from aries_worker.stages.enhance import EnhanceCancelled, EnhanceProgressStreamer, EnhanceStageRunner, _parse_enhanced_json
+from aries_worker.stages.enhance import MAX_NEW_TOKENS, EnhanceCancelled, EnhanceProgressStreamer, EnhanceStageRunner, _parse_enhanced_json
 from aries_worker.stages.encode import EncodeStageRunner
 from aries_worker.stages.denoise import DenoiseStageRunner
 from aries_worker.stages.decode import DecodeStageRunner
@@ -172,6 +172,7 @@ def test_enhance_progress_streamer():
     stats = last["enhance_stats"]
     assert (stats["prompt_tokens"], stats["generated_tokens"]) == (50, 5)
     assert (stats["thought_tokens"], stats["reply_tokens"]) == (3, 2)
+    assert stats["max_new_tokens"] == MAX_NEW_TOKENS
     assert stats["generation_tps"] > 0
 
     cancelled = True

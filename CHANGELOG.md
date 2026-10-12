@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.1
+
+Release notes: [docs/releases/v0.2.1.md](docs/releases/v0.2.1.md).
+
+- The enhancer's token limit rises from 1536 to 2048. Many runs used to stop at the
+  limit; a run that hits it still counts as complete and keeps its prompt.
+- Enhance progress is generated tokens against the expected finish line (85 % of that
+  limit), with an estimated time left from the live speed, instead of fixed thirds
+  per sub-stage. A run that goes past it shows an indeterminate bar and "almost
+  done…".
+
+Fixes for the known issues in 0.2.0:
+
+- Reading prompt and Finishing show an indeterminate progress bar instead of a frozen
+  0 % (encode and decode report no steps).
+- Times shown on the timeline and gallery are generation time (the sum of the stage
+  times, enhance included). The inspector shows the total time and a breakdown: each
+  stage, generation time, queue & model loading, and total. Images from before 0.2.0
+  now show their generation time too instead of N/A.
+- The inspector reads the decode mode, per-stage times, peak VRAM and decoding GPU
+  from the job instead of showing fixed hardware text; the timeline's "bf16 · Arc" chip
+  is now "bf16".
+- Status panel: a card's peak VRAM covers its current or last worker run instead of
+  everything since the manager started, and the host RAM spill warning appears only
+  above 1 GB (the driver keeps a small baseline there).
+
 ## 0.2.0
 
 Release notes with screenshots: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md).

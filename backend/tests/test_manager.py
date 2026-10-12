@@ -803,3 +803,20 @@ async def test_worker_startup_failure_backs_off(tmp_env):
     await scheduler._monitor_worker_process("encode", 0, _DeadProcess(0))
     assert scheduler.card_startup_failures[0] == 0
     assert scheduler.pick_next_stage(0) == "encode"
+
+
+@pytest.mark.asyncio
+async def test_card_peak_vram_is_per_worker_run(tmp_env, monkeypatch):
+    """The card's peak is kept after a worker exits and reset when the next one starts."""
+    scheduler = CardScheduler(tmp_env["db"], num_cards=2)
+    scheduler.update_card_vram(0, {"peak": 26 * 1024 ** 3})
+    assert scheduler.get_status()["cards"][0]["vram_peak"] == 26 * 1024 ** 3
+
+    async def fake_exec(*args, **kwargs):
+        return _DeadProcess(0, pid=8888)
+
+    monkeypatch.setattr("aries_manager.scheduler.asyncio.create_subprocess_exec", fake_exec)
+    await scheduler.spawn_stage_worker("decode", 0)
+    assert scheduler.get_status()["cards"][0]["vram_peak"] == 0
+    scheduler.update_card_vram(0, {"peak": 7 * 1024 ** 3})
+    assert scheduler.get_status()["cards"][0]["vram_peak"] == 7 * 1024 ** 3

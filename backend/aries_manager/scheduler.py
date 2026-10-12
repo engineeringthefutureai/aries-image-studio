@@ -312,6 +312,8 @@ class CardScheduler:
         self.card_jobs_processed[card_idx] = 0
         self.card_exit_reasons[card_idx] = None
         self.card_eviction_depths[card_idx] = None
+        # Peak VRAM is per worker run: kept after exit, reset when the next one starts.
+        self.card_vram[card_idx]["peak"] = 0
         self._update_metrics()
 
         env = os.environ.copy()

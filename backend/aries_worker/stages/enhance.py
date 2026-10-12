@@ -34,7 +34,9 @@ Return one strictly valid JSON object on a single line, nothing before or after:
 {"rewritten_prompt": "<the description>", "wh_ratio": "<e.g. 3:2>"}"""
 
 
-MAX_NEW_TOKENS = 1536
+# Reasoning plus reply rarely needs more; a run that hits the limit is kept as is
+# (the salvaged prompt is already detailed). Also the finish line for progress.
+MAX_NEW_TOKENS = 2048
 THINK_END = "</think>"
 VALID_RATIOS = {"1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"}
 
@@ -170,12 +172,14 @@ class EnhanceProgressStreamer:
         progress_cb: Optional[Callable[..., None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         emit_interval: float = 0.25,
+        max_new_tokens: int = MAX_NEW_TOKENS,
     ):
         self.tokenizer = tokenizer
         self.prompt_tokens = prompt_tokens
         self.progress_cb = progress_cb
         self.cancel_check = cancel_check
         self.emit_interval = emit_interval
+        self.max_new_tokens = max_new_tokens
 
         self.t_start = time.monotonic()
         self.t_first_token: Optional[float] = None
@@ -247,6 +251,7 @@ class EnhanceProgressStreamer:
         return {
             "prompt_tokens": self.prompt_tokens,
             "generated_tokens": self.generated_tokens,
+            "max_new_tokens": self.max_new_tokens,
             "thought_tokens": self.thought_tokens,
             "reply_tokens": self.reply_tokens,
             "prefill_s": round(self.prefill_s, 3),
@@ -329,7 +334,7 @@ class EnhanceStageRunner:
             flush_xpu_cache()
 
         if streamer.generated_tokens >= MAX_NEW_TOKENS:
-            logger.warning("Enhancer output for %s hit max_new_tokens=%d and may be truncated", job_id, MAX_NEW_TOKENS)
+            logger.info("Enhancer output for %s hit max_new_tokens=%d; keeping it as is", job_id, MAX_NEW_TOKENS)
 
         generated_ids = [out_ids[len(in_ids):] for in_ids, out_ids in zip(input_ids, outputs)]
         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]

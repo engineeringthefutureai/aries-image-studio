@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Generation } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
+import { formatDuration, formatGiB, generationSeconds, queueSeconds } from '../utils/timings';
 import {
   X,
   ChevronLeft,
@@ -104,6 +105,35 @@ export const Lightbox: React.FC<LightboxProps> = ({
     setCopiedPrompt(true);
     setTimeout(() => setCopiedPrompt(false), 2000);
   };
+
+  const timings = generation.timings;
+  const genSeconds = generationSeconds(timings);
+  const waitSeconds = queueSeconds(timings);
+  const totalSeconds = timings?.total_s ?? genSeconds;
+  const timeRows: { label: string; seconds: number; detail?: string }[] = [];
+  if (timings?.enhance_s != null) {
+    timeRows.push({
+      label: 'Enhance',
+      seconds: timings.enhance_s,
+      detail: [
+        timings.generated_tokens != null ? `${timings.generated_tokens} tokens` : null,
+        timings.generation_tps ? `${timings.generation_tps.toFixed(1)} tok/s` : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    });
+  }
+  if (timings?.encode_s != null) timeRows.push({ label: 'Encode', seconds: timings.encode_s });
+  if (timings?.denoise_s != null) {
+    timeRows.push({
+      label: 'Denoise',
+      seconds: timings.denoise_s,
+      detail: timings.s_per_step != null ? `${timings.steps ?? generation.params.steps} × ${timings.s_per_step.toFixed(2)}s` : undefined,
+    });
+  }
+  if (timings?.decode_s != null) {
+    timeRows.push({ label: 'Decode', seconds: timings.decode_s, detail: timings.decode_mode });
+  }
 
   const handleCopyEnhancedPrompt = () => {
     const clean = sanitizeEnhancedPrompt(generation.enhancedPrompt);
@@ -407,20 +437,54 @@ export const Lightbox: React.FC<LightboxProps> = ({
               </div>
 
               <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
-                <div className="text-[10px] text-white/50">Execution Time</div>
+                <div className="text-[10px] text-white/50">Total Time</div>
                 <div className="font-semibold text-white mt-0.5">
-                  {generation.timings?.total_s != null
-                    ? `${generation.timings.total_s.toFixed(1)}s`
-                    : 'N/A'}
+                  {totalSeconds != null ? formatDuration(totalSeconds) : 'N/A'}
                 </div>
                 <div className="text-[10px] text-white/60">
-                  {generation.timings?.s_per_step != null
-                    ? `${generation.timings.s_per_step.toFixed(2)}s/step`
-                    : 'dual Intel Arc'}
+                  {timings?.total_s != null ? 'submit to done' : genSeconds != null ? 'stages only' : '—'}
                 </div>
               </div>
             </div>
           </div>
+
+          {/* Time breakdown: stage times add up to generation time; the rest is waiting */}
+          {timeRows.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-white/50">Time</div>
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10 font-mono text-[11px] space-y-1.5 text-white/75">
+                {timeRows.map((row) => (
+                  <div key={row.label} className="flex justify-between gap-3">
+                    <span className="text-white/50">{row.label}</span>
+                    <span className="text-right">
+                      {row.detail && <span className="text-white/40">{row.detail} · </span>}
+                      {formatDuration(row.seconds)}
+                    </span>
+                  </div>
+                ))}
+                {genSeconds != null && (
+                  <div className="flex justify-between gap-3 pt-1.5 border-t border-white/10 text-white">
+                    <span>Generation</span>
+                    <span>{formatDuration(genSeconds)}</span>
+                  </div>
+                )}
+                {waitSeconds != null && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-white/50" title="Waiting for a free GPU plus starting workers and loading models">
+                      Queue &amp; model loading
+                    </span>
+                    <span>{formatDuration(waitSeconds)}</span>
+                  </div>
+                )}
+                {timings?.total_s != null && (
+                  <div className="flex justify-between gap-3 font-semibold text-white">
+                    <span>Total</span>
+                    <span>{formatDuration(timings.total_s)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Technical Section (Collapsible) */}
           <div className="border-t border-white/10 pt-3">
@@ -443,30 +507,27 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   <span>QwenImage21Pipeline</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-white/50">Execution</span>
-                  <span>Architecture v2 (Staged)</span>
+                  <span className="text-white/50">Stages</span>
+                  <span>{generation.params.enhance ? 'enhance → ' : ''}encode → denoise → decode</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-white/50">Decode</span>
-                  <span>Untiled VAE Decode</span>
-                </div>
-                {generation.timings?.enhance_s != null && (
+                {timings?.decode_mode && (
                   <div className="flex justify-between">
-                    <span className="text-white/50">Prompt Enhancer</span>
-                    <span>
-                      {generation.timings.enhance_s.toFixed(1)}s
-                      {generation.timings.generation_tps ? ` (${generation.timings.generation_tps.toFixed(1)} tok/s)` : ''}
-                    </span>
+                    <span className="text-white/50">Decode</span>
+                    <span className="capitalize">{timings.decode_mode} VAE</span>
                   </div>
                 )}
-                <div className="flex justify-between">
-                  <span className="text-white/50">Hardware</span>
-                  <span>2× Intel Arc Pro B60</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/50">Executors</span>
-                  <span>GPU 0 (04:00.0) + GPU 1 (08:00.0)</span>
-                </div>
+                {generation.card != null && (
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Decoded on</span>
+                    <span>GPU {generation.card}</span>
+                  </div>
+                )}
+                {generation.peakVram != null && (
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Peak VRAM</span>
+                    <span>{formatGiB(generation.peakVram)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-white/50">Created</span>
                   <span>{new Date(generation.createdAt).toLocaleString()}</span>

@@ -96,6 +96,8 @@ export interface EnhanceStats {
   thought_tokens?: number;
   reply_tokens?: number;
   generated_tokens?: number;
+  /** The worker's token limit: the finish line for the progress bar. */
+  max_new_tokens?: number;
   prefill_s?: number;
   prefill_tps?: number;
   generation_tps?: number;
@@ -150,7 +152,10 @@ export interface Generation {
     variation?: boolean;
   };
   attempts?: number;
+  /** GPU running the current stage; for finished images, the GPU that decoded it. */
   card?: number;
+  /** Highest VRAM use of any stage of this job, in bytes. */
+  peakVram?: number;
   crashClass?: string;
 }
 

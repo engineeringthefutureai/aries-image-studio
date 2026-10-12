@@ -3,6 +3,9 @@ import type { WorkerHealth, StageRunItem } from '../types';
 import { X, Cpu, HardDrive, RefreshCw, Layers, Activity, AlertCircle, History } from 'lucide-react';
 import { fetchStageRunsApi } from '../services/api';
 
+// The driver keeps a few hundred MB in host RAM even when healthy; warn only above this.
+const SPILL_WARN_BYTES = 1024 ** 3;
+
 interface StatusModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -206,14 +209,18 @@ export const StatusModal: React.FC<StatusModalProps> = ({
                           />
                         </div>
                         <div className="flex justify-between items-center text-[10px] text-[#8c7169] dark:text-[#a09088] font-mono mt-1.5">
-                          <span>Peak: {formatBytes(peak)}</span>
+                          <span title="Highest allocation of the current or last worker run on this card">
+                            Peak (last run): {formatBytes(peak)}
+                          </span>
                           <span>Reserved: {formatBytes(reserved)}</span>
-                          {overflow > 0 ? (
+                          {overflow >= SPILL_WARN_BYTES ? (
                             <span className="text-amber-600 dark:text-amber-400 font-medium">
                               ⚠️ {formatBytes(overflow)} spill to host RAM
                             </span>
                           ) : (
-                            <span className="hidden sm:inline">No host RAM spill</span>
+                            <span className="hidden sm:inline">
+                              Spill: {overflow > 0 ? formatBytes(overflow) : 'none'}
+                            </span>
                           )}
                         </div>
                       </div>

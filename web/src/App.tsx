@@ -173,6 +173,8 @@ export function App() {
                       imageUrl: url,
                       completedAt: mJob.completed_at ? mJob.completed_at * 1000 : Date.now(),
                       timings: mJob.timings,
+                      card: mJob.card ?? undefined,
+                      peakVram: mJob.peak_vram || undefined,
                       enhancedPrompt,
                       thinking,
                       enhanceStats: mJob.enhance_stats || undefined,
