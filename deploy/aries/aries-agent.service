@@ -1,0 +1,27 @@
+[Unit]
+Description=Aries Image Studio Thin Agent (V3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aries
+Group=render
+SupplementaryGroups=video
+Environment="ZE_ENABLE_PCI_ID_DEVICE_ORDER=1"
+Environment="HF_HUB_OFFLINE=1"
+Environment="ARIES_AGENT_ID=aries"
+Environment="ARIES_BACKEND_KIND=xpu"
+Environment="ARIES_BACKEND_GRPC_URL=studio.lan:50051"
+Environment="ARIES_METRICS_LISTEN=0.0.0.0:9464"
+Environment="ARIES_METRICS_URL=http://aries.lan:9464/metrics"
+Environment="ARIES_MODEL_PATH=/srv/models/qwen-image-2.1"
+Environment="ARIES_ENHANCER_MODEL_PATH=/srv/models/qwen-image-2.1-pe-t2i"
+EnvironmentFile=-/etc/aries/agent.env
+ExecStart=/opt/aries-image-studio/.venv/bin/python -m aries_agent
+Restart=always
+RestartSec=3
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

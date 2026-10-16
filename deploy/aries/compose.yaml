@@ -1,21 +1,26 @@
-# Aries Image Studio backend: the manager plus the stage workers it spawns, one container.
+# Aries Image Studio V3 thin GPU agent + worker subprocesses.
 # Settings come from .env (see .env.example).
 services:
-  manager:
+  agent:
     build:
       context: ../../backend
       dockerfile: Dockerfile
-    image: aries-studio-backend:latest
-    container_name: aries-studio-manager
+    image: aries-image-studio-agent:latest
+    container_name: aries-image-studio-agent
     restart: on-failure
     environment:
       - ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR:-level_zero:0,1}
       - ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
       - HF_HUB_OFFLINE=1
-      - MODEL_PATH=/models/qwen-image-2.1
-      - ENHANCER_MODEL_PATH=/models/qwen-image-2.1-pe-t2i
-      - ARIES_DATA_DIR=/var/lib/aries-studio
-      - ARIES_SOCKET_PATH=/run/aries/manager.sock
+      - ARIES_AGENT_ID=${ARIES_AGENT_ID:-aries}
+      - ARIES_BACKEND_KIND=xpu
+      - ARIES_BACKEND_GRPC_URL=${ARIES_BACKEND_GRPC_URL:-studio.lan:50051}
+      - ARIES_AGENT_TOKEN=${ARIES_AGENT_TOKEN:?set ARIES_AGENT_TOKEN in .env}
+      - ARIES_METRICS_LISTEN=0.0.0.0:9464
+      - ARIES_METRICS_URL=${ARIES_METRICS_URL:-http://aries.lan:9464/metrics}
+      - ARIES_MODEL_PATH=/models/qwen-image-2.1
+      - ARIES_ENHANCER_MODEL_PATH=/models/qwen-image-2.1-pe-t2i
+      - ARIES_SCRATCH_DIR=/tmp/aries-agent
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -24,7 +29,6 @@ services:
     volumes:
       - ${MODELS_DIR:-/srv/models}/qwen-image-2.1:/models/qwen-image-2.1:ro
       - ${MODELS_DIR:-/srv/models}/qwen-image-2.1-pe-t2i:/models/qwen-image-2.1-pe-t2i:ro
-      - ${DATA_DIR:-/srv/aries-studio/data}:/var/lib/aries-studio
-      - /run/aries:/run/aries
+      - /tmp/aries-agent:/tmp/aries-agent
     ports:
-      - "${PORT:-8000}:8000"
+      - "${METRICS_PORT:-9464}:9464"

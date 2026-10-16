@@ -33,9 +33,12 @@ Browser ──HTTPS──▶ Studio (always on)  ──HTTP──▶  Manager (G
   stage in flight, never history.
 - Control plane in the cluster, GPU box as a replaceable agent.
 
-**Status (v0.2.1):** Studio is not built yet. The SPA talks to the manager directly and
-keeps history in the browser. The next major version adds Studio as a Rust server
-with SQLite storage.
+**Status (v0.3.0):** Studio exists as the Rust backend in `studio/` (ARCHITECTURE_V3.md):
+it owns jobs, images and provenance in SQLite, and GPU boxes run a thin agent instead of
+the manager. The SPA talks to its `/api` (ARCHITECTURE_V3.md §8), which is job-oriented
+rather than the generation/gallery API sketched in §4. The SPA keeps nothing in browser
+storage: jobs, images, favorites, turn grouping and preferences all load from Studio, so
+every browser shows the same history.
 
 ---
 
@@ -62,7 +65,8 @@ Each **turn** = one submission:
   - **Seed**: Random (default) or Locked with a value; batches use seed, seed+1, …
   - **Quality**: Standard (40 steps) · Draft (20) · Custom N
   - **Enhance** toggle: rewrite the prompt with the prompt enhancer before generating
-- Last-used settings persist per browser (localStorage, wrapped in try/catch)
+- Last-used settings (and the theme) are saved in Studio (`/api/preferences`), the same
+  in every browser
 
 ### 2.3 Gallery
 - Masonry grid of all finished images, newest first, infinite scroll (thumbnails)
@@ -125,11 +129,11 @@ generation
 
 Seed is **always stored as a concrete number**, even when the user chose Random.
 
-Every PNG carries a `tEXt` chunk `aries-studio` with the full JSON record, so files
-are self-describing outside the app (written by Studio; not implemented yet).
+Every PNG carries a `tEXt` chunk `aries-image-studio` with the full JSON record, so files
+are self-describing outside the app (written by Studio).
 
-Until Studio exists, the web UI keeps the same records in browser storage
-(localStorage for records, IndexedDB for images).
+The SPA stores no records itself: each job carries its UI metadata (turn id, aspect
+label, size and quality preset) and favorite flag in Studio.
 
 ---
 
@@ -149,7 +153,8 @@ Until Studio exists, the web UI keeps the same records in browser storage
 | GET | `/metrics` | Prometheus (§7.2) |
 | GET | `/images/{id}.png`, `/thumbs/{id}.webp` | Files (long cache headers) |
 
-The manager's own API (what the SPA uses today) is in ARCHITECTURE.md §7.
+The API the SPA uses today is the job API in ARCHITECTURE_V3.md §8; the table above is the
+fuller history API still planned on top of it.
 
 ---
 
@@ -163,7 +168,8 @@ The manager's own API (what the SPA uses today) is in ARCHITECTURE.md §7.
 | 16:9 / 9:16 | 2752 × 1536 / 1536 × 2752 |
 
 Default steps 40. The composer also offers ½ and ¼ size presets (each side scaled and
-rounded to a multiple of 16). No free-form sizes.
+rounded to a multiple of 32, which Qwen-Image-2.1 requires; Studio rejects other sizes at
+submit). No free-form sizes.
 
 ---
 
@@ -203,25 +209,25 @@ queued → [enhancing] → encoding → denoising (step n/N) → decoding → do
 - The phase a failure happened in is the single most useful diagnostic: every GPU
   failure seen during bring-up was in decode (HARDWARE.md §2).
 
-### 7.2 Studio `/metrics` (prefix `aries_studio_`, planned)
+### 7.2 Studio `/metrics`
 
-`queue_depth` (gauge), `queue_wait_seconds` (histogram), `generation_seconds`
-(histogram, submit → done, end to end), `generations_total{status}` (counter),
-`manager_reachable` (gauge),
-`storage_bytes{kind=image|thumb}` (gauge), `eta_error_seconds` (histogram of
-actual − predicted start, so the ETA model can be judged).
+Studio exports its own metrics and re-exports every agent's, labelled by `agent`
+(ARCHITECTURE_V3.md §9), so Prometheus scrapes one target. Planned additions:
+`eta_error_seconds` (histogram of actual − predicted start, so an ETA model can be
+judged) and an executor-state gauge (disabled, lent).
 
 ### 7.3 Alerts (planned)
 
-Guarded so a **sleeping GPU box never pages**: manager-side rules require
-`up{job="aries-manager"} == 1`.
+A **sleeping GPU box never pages**: Studio leaves a stale agent's series out instead of
+reporting it down, so rules over agent metrics simply stop matching.
 
-- A card `unavailable` for > 5 min (`aries_manager_card_state`).
-- `aries_manager_worker_crashes_total` increased — with stage and crash class.
+- An executor disabled for > 5 min (needs the executor-state gauge above).
+- `aries_worker_exits_total{class!="clean"}` increased — with stage and crash class.
 - Denoise s/step p50 > 1.5× its 7-day median, sustained 15 min (throttling, fan
   problem, driver regression).
-- Queue depth > 0 and the manager unreachable for > 30 min — work is stranded.
-- `aries_manager_host_available_bytes` < 4 GiB (swap is off; the OOM killer is next).
+- `aries_tasks_queued` > 0 while `aries_agent_connected` is 0 for > 30 min — work is
+  stranded.
+- `aries_host_ram_available_bytes` < 4 GiB (swap is off; the OOM killer is next).
 
 ### 7.4 Per-generation record
 

@@ -1,0 +1,20 @@
+# Aries Image Studio backend: web app, /api, artifact HTTP and the agents' gRPC gateway.
+# Settings come from .env (see .env.example). Build context is the repo root.
+services:
+  studio:
+    build:
+      context: ../..
+      dockerfile: studio/Dockerfile
+    image: aries-image-studio:latest
+    container_name: aries-image-studio
+    restart: unless-stopped
+    environment:
+      - ARIES_AGENT_TOKEN=${ARIES_AGENT_TOKEN:?set ARIES_AGENT_TOKEN in .env}
+      - ARIES_ARTIFACT_BASE_URL=${ARIES_ARTIFACT_BASE_URL:?set ARIES_ARTIFACT_BASE_URL in .env}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      # SQLite database, images and thumbnails. The container runs as uid 1000.
+      - ${STUDIO_DATA_DIR:-/var/lib/aries-image-studio}:/app/data
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${GRPC_PORT:-50051}:50051"

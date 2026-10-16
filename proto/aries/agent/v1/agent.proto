@@ -1,0 +1,244 @@
+syntax = "proto3";
+package aries.agent.v1;
+
+service AgentGateway {
+  // The agent dials out and holds this stream for its whole life.
+  // First AgentMessage must be Register; the backend answers Welcome or ends the call.
+  rpc Connect(stream AgentMessage) returns (stream BackendMessage);
+}
+
+// ---------- envelopes ----------
+
+message AgentMessage {
+  oneof msg {
+    Register      register       = 1;
+    ExecutorState executor_state = 2;
+    Progress      progress       = 3;
+    Done          done           = 4;
+    Failed        failed         = 5;
+    Rejected      rejected       = 6;   // assignment contradicts the declaration (§6.4)
+  }
+}
+
+message BackendMessage {
+  oneof msg {
+    Welcome     welcome      = 1;
+    StartWorker start_worker = 2;
+    Assign      assign       = 3;
+    Cancel      cancel       = 4;
+    Release     release      = 5;
+  }
+  reserved 6;  // was Drain (never sent)
+}
+
+// ---------- enums ----------
+
+enum Stage {
+  STAGE_UNSPECIFIED = 0;
+  STAGE_ENHANCE     = 1;
+  STAGE_ENCODE      = 2;
+  STAGE_DENOISE     = 3;
+  STAGE_DECODE      = 4;
+}
+
+enum DecodeMode {
+  DECODE_MODE_UNSPECIFIED = 0;
+  DECODE_MODE_UNTILED     = 1;
+  DECODE_MODE_TILED       = 2;   // declared, not supported yet
+}
+
+enum ExecutorStateKind {
+  EXECUTOR_STATE_UNSPECIFIED = 0;
+  EXECUTOR_STATE_IDLE        = 1;   // no worker
+  EXECUTOR_STATE_STARTING    = 2;   // worker spawned, model loading
+  EXECUTOR_STATE_READY       = 3;   // worker loaded, no task
+  EXECUTOR_STATE_BUSY        = 4;
+  EXECUTOR_STATE_STOPPING    = 5;
+  EXECUTOR_STATE_FAILED      = 6;   // worker died; agent returns to IDLE after reporting
+}
+
+enum FailureClass {
+  FAILURE_CLASS_UNSPECIFIED  = 0;
+  FAILURE_GPU_FAULT          = 1;
+  FAILURE_ENGINE_RESET       = 2;
+  FAILURE_WEDGED             = 3;
+  FAILURE_OOM_KILL           = 4;
+  FAILURE_PYTHON_ERROR       = 5;
+  FAILURE_DEVICE_MISMATCH    = 6;
+  FAILURE_UPLOAD_FAILED      = 7;
+  FAILURE_CANCELLED          = 8;
+}
+
+// ---------- registration ----------
+
+message ModelRef {
+  string id    = 1;   // "Qwen/Qwen-Image-2.1"
+  string rev   = 2;   // commit sha of the weights on disk
+  string dtype = 3;   // "bf16"
+}
+
+message StageCapability {
+  Stage               stage  = 1;
+  repeated string     models = 2;   // ModelRef.id values this stage can run
+  uint64              max_px = 3;   // 0 = no pixel limit (enhance, encode)
+  repeated DecodeMode modes  = 4;   // decode only
+}
+
+message Executor {
+  string                   id              = 1;   // "xpu0"
+  string                   device          = 2;   // PCI address or device name
+  uint64                   mem_total_bytes = 3;
+  repeated StageCapability stages          = 4;
+}
+
+message Requirement {
+  // Exactly one must be set. A Requirement with none set (an unknown kind from a newer
+  // agent arrives as an unknown field) makes the backend refuse the registration, so a
+  // limit is never silently ignored.
+  oneof kind {
+    uint64 host_ram_available_bytes     = 1;
+    uint32 max_concurrent_per_agent     = 2;
+    uint64 executor_mem_available_bytes = 3;
+  }
+}
+
+message Limit {
+  Stage                stage    = 1;
+  uint64               above_px = 2;
+  repeated Requirement requires = 3;
+}
+
+message RunningTask {
+  string task     = 1;
+  uint32 attempt  = 2;
+  string executor = 3;
+}
+
+message Register {
+  uint32               protocol             = 1;   // 1
+  string               agent                = 2;   // "aries"
+  string               agent_version        = 3;
+  string               backend_kind         = 4;   // "xpu" | "cuda" | "rocm" | "mps"
+  string               metrics_url          = 5;
+  uint64               host_ram_total_bytes = 6;
+  repeated ModelRef    models               = 7;
+  repeated Executor    executors            = 8;
+  repeated Limit       limits               = 9;
+  repeated RunningTask running              = 10;  // in flight after a reconnect (§7.3)
+}
+
+message Welcome {
+  uint32 protocol = 1;
+  string session  = 2;   // logged on both sides; new per connection
+}
+
+// ---------- work ----------
+
+message StartWorker {
+  string   executor = 1;
+  Stage    stage    = 2;
+  ModelRef model    = 3;
+}
+
+message ArtifactRef {
+  string name   = 1;   // "embeds.safetensors"
+  string url    = 2;   // GET for inputs, PUT for uploads
+  string sha256 = 3;   // inputs only
+  uint64 bytes  = 4;
+}
+
+message EnhanceParams { string prompt = 1; }
+
+message EncodeParams {
+  string prompt          = 1;   // the effective prompt, resolved by the backend
+  string prompt_source   = 2;   // "original" | "enhanced"
+  string negative_prompt = 3;   // set only when true_cfg_scale > 1
+  float  true_cfg_scale  = 4;   // > 1: encode also writes negative_prompt_embeds
+}
+
+message DenoiseParams {
+  uint32 width          = 1;
+  uint32 height         = 2;
+  uint32 steps          = 3;
+  uint64 seed           = 4;    // noise from torch.Generator("cpu")
+  float  true_cfg_scale = 5;
+}
+
+message DecodeParams { DecodeMode mode = 1; }
+
+message Assign {
+  string               task     = 1;
+  uint32               attempt  = 2;
+  string               executor = 3;
+  Stage                stage    = 4;
+  repeated ArtifactRef inputs   = 5;
+  repeated ArtifactRef uploads  = 6;
+  oneof params {
+    EnhanceParams enhance = 10;
+    EncodeParams  encode  = 11;
+    DenoiseParams denoise = 12;
+    DecodeParams  decode  = 13;
+  }
+}
+
+message Cancel  { string task = 1; uint32 attempt = 2; }
+message Release { string executor = 1; }
+
+// ---------- reports ----------
+
+message ExecutorState {
+  string            executor = 1;
+  ExecutorStateKind state    = 2;
+  Stage             stage    = 3;
+  uint32            pid      = 4;
+  double            load_s   = 5;   // set on STARTING -> READY
+  string            detail   = 6;
+}
+
+message Progress {
+  string task       = 1;
+  uint32 attempt    = 2;
+  uint32 step       = 3;
+  uint32 steps      = 4;
+  double s_per_step = 5;
+  // enhance only: "prefill" | "thinking" | "rewriting", and the worker's token stats
+  // (prompt_tokens, generated_tokens, thought_tokens, reply_tokens, max_new_tokens,
+  // prefill_tps, generation_tps, ...).
+  string              sub_stage = 6;
+  map<string, double> stats     = 7;
+}
+
+message Provenance {
+  string   agent          = 1;
+  string   executor       = 2;
+  string   device         = 3;
+  string   backend_kind   = 4;
+  ModelRef model          = 5;
+  string   torch_version  = 6;
+  string   worker_version = 7;
+}
+
+message Done {
+  string               task           = 1;
+  uint32               attempt        = 2;
+  repeated ArtifactRef artifacts      = 3;   // name, sha256, bytes of what was uploaded
+  map<string, double>  timings        = 4;   // "load_s", "encode_s", "save_s", ...
+  uint64               peak_mem_bytes = 5;
+  Provenance           provenance     = 6;
+}
+
+message Failed {
+  string       task            = 1;
+  uint32       attempt         = 2;
+  FailureClass failure_class   = 3;   // not "class": a Python keyword
+  string       detail          = 4;
+  int32        exit_code       = 5;
+  int32        signal          = 6;
+  string       kernel_log_tail = 7;
+}
+
+message Rejected {
+  string task    = 1;
+  uint32 attempt = 2;
+  string reason  = 3;
+}

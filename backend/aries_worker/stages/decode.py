@@ -1,4 +1,4 @@
-"""Decode stage: VAE on one card, latent.pt -> image.png (untiled or tiled)."""
+"""Decode stage: VAE on one card, latent.safetensors -> image.png (untiled or tiled)."""
 import logging
 import time
 from pathlib import Path
@@ -8,7 +8,7 @@ import torch
 from diffusers import AutoencoderKLQwenImage21
 from PIL import Image
 
-from aries_worker.stages.files import atomic_write
+from aries_worker.stages.files import atomic_write, load_safetensors_with_metadata
 from aries_worker.stages.loader import (
     flush_xpu_cache,
     get_device,
@@ -69,18 +69,17 @@ class DecodeStageRunner:
         t0 = time.monotonic()
         reset_peak_vram()
 
-        latent_path = Path(paths["latent_pt"])
+        latent_path = Path(paths["latent_safetensors"])
         if not latent_path.exists():
-            raise FileNotFoundError(f"Required latent.pt not found for job {job_id}: {latent_path}")
+            raise FileNotFoundError(f"Required latent file not found for job {job_id}: {latent_path}")
 
-        decode_mode = params.get("decode_mode", "untiled")
-        data = torch.load(latent_path, map_location=get_device(), weights_only=False)
-        if isinstance(data, dict):
-            latent = data["latent"]
-            width = int(data.get("width") or params["width"])
-            height = int(data.get("height") or params["height"])
-        else:
-            latent, width, height = data, int(params["width"]), int(params["height"])
+        decode_mode = params.get("decode_mode") or "untiled"
+        tensors, meta = load_safetensors_with_metadata(latent_path, device=get_device())
+        if "latent" not in tensors:
+            raise ValueError(f"{job_id}: latent.safetensors missing 'latent' tensor")
+        latent = tensors["latent"]
+        width = int(meta.get("width") or params["width"])
+        height = int(meta.get("height") or params["height"])
 
         if decode_mode == "tiled":
             self.vae.enable_tiling()
@@ -109,3 +108,4 @@ class DecodeStageRunner:
             }, get_peak_vram_bytes()
         finally:
             flush_xpu_cache()
+

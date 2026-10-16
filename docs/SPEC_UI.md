@@ -69,9 +69,9 @@ Each entry is a **turn** — one submission:
 | Element | Notes |
 |---|---|
 | Prompt | The text as typed. Can be long (up to a paragraph); truncate with expand. |
-| Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. |
+| Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. Its one action, "To composer", loads it into the composer with enhance off. |
 | Setting chips | e.g. `16:9 · seed 48213 · 40 steps · 2m 31s`. Compact, quiet. |
-| Image tiles | 1–4 images per turn (the user chose how many). Shown at their true aspect ratio. |
+| Image tiles | 1–4 images per turn (the user chose how many). Shown at their true aspect ratio. A batch is a grid, two across on wide screens and stacked below; every tile is visible without scrolling sideways. |
 | Lineage marker | When made from another image: "↳ variation of …" linking back to the source. |
 
 **Tile states** (each needs a design):
@@ -242,6 +242,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 - **Tablet**: same structure, narrower.
 - **Phone** (≥360 px): single column; composer docked at bottom with settings in a
   compact row or a sheet; viewer details as a bottom sheet; no horizontal scrolling.
+  The header shows the mark without the name and the status pill's one-word state.
 - Keyboard: `/` focuses the prompt · `T` / `G` switch views · `←`/`→` in the viewer ·
   `F` favorites · `+`/`-`/`0` zoom · `Esc` closes · `?` shows the shortcut sheet.
 - Visible focus states, WCAG AA contrast, all icon buttons labeled, progress

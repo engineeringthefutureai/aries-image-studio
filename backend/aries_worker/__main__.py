@@ -1,6 +1,6 @@
 """CLI entrypoint for aries_worker.
-Spawned by the manager, one process per (stage, card):
-  python -m aries_worker --stage <enhance|encode|denoise|decode> --card <n> --socket <path>
+Spawned by the agent, one process per (stage, executor):
+  python -m aries_worker --stage <enhance|encode|denoise|decode> --socket <path>
 """
 import argparse
 import asyncio
@@ -31,18 +31,16 @@ STAGE_RUNNERS = {
 def main():
     parser = argparse.ArgumentParser(description="Aries Image Studio Stage Worker")
     parser.add_argument("--stage", required=True, choices=sorted(STAGE_RUNNERS))
-    parser.add_argument("--card", required=True, type=int, help="Card index, as numbered by the manager")
-    parser.add_argument("--socket", required=True, help="Path to manager Unix domain socket")
-    parser.add_argument("--idle-grace", type=float, default=7.0, help="Seconds to wait while idle before exiting")
+    parser.add_argument("--socket", required=True, help="Path to the agent's Unix domain socket")
+    parser.add_argument("--idle-grace", type=float, default=3600.0, help="Seconds to wait while idle before exiting")
     args = parser.parse_args()
 
-    logger.info("Initializing stage worker for '%s' on card %d...", args.stage, args.card)
+    logger.info("Initializing stage worker for '%s'...", args.stage)
     runner = STAGE_RUNNERS[args.stage]()
     runner.load()  # load before connecting: `hello` means "ready to claim"
 
     client = WorkerSocketClient(
         stage=args.stage,
-        card=args.card,
         socket_path=args.socket,
         runner=runner,
         idle_grace=args.idle_grace,

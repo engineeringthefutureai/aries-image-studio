@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.3.0 (Architecture V3)
+
+Release notes: [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
+
+V3 replaces the manager with a Rust Studio backend and a thin GPU agent
+([docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md)). Fixes on top of the first V3 commits:
+
+- Jobs submitted from the UI keep the browser's id, so tiles update, finish and can be
+  cancelled; resubmitting an id is idempotent.
+- Denoise results are accepted (the backend expected a tensor named `latents`; workers
+  write `latent`). Tensor and field names now live in one contract file, checked by
+  tests on both sides.
+- `true_cfg_scale` defaults to 1.0 (no guidance, as in 0.2), and encode receives the scale
+  so jobs that set it get their negative embeddings.
+- ½ and ¼ size presets are multiples of 32, which Qwen-Image-2.1 needs (it floored 1264
+  to 1248 and Studio then rejected the PNG); Studio refuses other sizes at submit.
+- The prompt rewriter is told the job's aspect ratio, so a 2:3 job no longer gets a
+  "square-format" description.
+- Every composer preset is accepted: the agent's default size limit was 2048², below the
+  4:3, 3:2 and 16:9 presets.
+- An executor no longer gets a second task (and then disabled) when the agent's READY
+  after a result crosses the next assignment; stale rejections are ignored.
+- An agent that restarts or loses its connection no longer leaves jobs stuck: tasks it no
+  longer has are requeued on registration, and results produced while disconnected are
+  delivered after reconnecting.
+- A denoise backlog runs on both GPUs again.
+- Workers report the card torch actually opened (from its Level Zero UUID); the agent
+  refuses a worker on the wrong card.
+- Enhance progress (sub-stage, tokens, time left) and the rewriter's reasoning work under
+  V3; the inspector shows all stage timings again.
+- No default agent token on either side; `.env` is git-ignored. Model revisions are read
+  from the `hf download` metadata instead of made up. The agent honors
+  `ARIES_MODEL_PATH`/`ARIES_ENHANCER_MODEL_PATH` and `ARIES_METRICS_LISTEN`.
+- Worker output is logged at INFO, so tracebacks show up in the agent log.
+- Job history loads in three queries instead of two per job.
+
+Found by running the stack on the GPUs:
+
+- Encode results are accepted when the pipeline returns no attention mask (it does when
+  nothing is padded); the masks are optional in the contract.
+- The backend reads the agent's real metric names, so host RAM and card memory are no
+  longer seen as 0 (which blocked every full-size decode).
+- Retrying a job, or a rejected assignment, no longer reuses an attempt number; that
+  failed the assignment and stalled scheduling for every job.
+- The agent answers an idle worker's claims at once instead of blocking its socket
+  reader, which delayed results by minutes after an idle period.
+- Uploads the backend rejected (422) are not retried.
+
+After running it for real:
+
+- A worker keeps its card only while its own stage has queued work. An idle worker
+  switches at once to another stage's waiting work instead of waiting for work still
+  being prepared elsewhere, or for its idle grace; idle grace now applies only when
+  nothing else is waiting.
+- Studio's `/metrics` re-exports every agent's metrics with an `agent` label, so
+  Prometheus scrapes one target; a sleeping GPU box drops out instead of paging.
+- The agent reconnects reliably: a dead stream's request iterator could take the next
+  stream's Register, and the backend then refused every reconnect.
+- The web app keeps nothing in browser storage: history, images, favorites, turn grouping
+  and preferences (including the theme) load from Studio, so every browser shows the same
+  thing. New: `PATCH /api/jobs/{id}` (favorite), `GET`/`PUT /api/preferences`, job `meta`,
+  and `deleted` in `/api/jobs?changed_since=`. Grids use 1024 px thumbnails.
+- Dead code removed: the v0.2 manager (`backend/aries_manager`, still on the
+  `release/v0.2.1` branch) and its dependencies; the workers' `.pt` paths and `--card`;
+  the unused `Drain` message; the `worker_runs` table; the web app's `/status` fallback
+  and unused types, fields and phases; the duplicate root `Dockerfile` (a root
+  `.dockerignore` keeps the Studio build context small).
+- Denoise progress counts completed steps (the last report was 9/10).
+- Studio has a Compose file (`deploy/studio/`), and
+  [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md) covers building, deploying, configuring
+  and troubleshooting both sides; the README describes 0.3.0.
+- Timeline: a batch's tiles sit in a grid instead of a strip whose other tiles were
+  hidden behind the prompt; long prompts are clamped with "Show more"; the phone
+  header no longer overflows. "Rerun with this" is gone ("To composer" stays). The
+  header shows 0.3.0.
+- Everything is named Aries Image Studio: the Rust crate and binary are
+  `aries-image-studio`, the agent image and container `aries-image-studio-agent`, and
+  each PNG's metadata `tEXt` chunk is `aries-image-studio` (was `aries-studio`).
+
+Noise is now drawn on the CPU, so a seed from 0.2 no longer reproduces its image.
+
 ## 0.2.1
 
 Release notes: [docs/releases/v0.2.1.md](docs/releases/v0.2.1.md).

@@ -59,8 +59,8 @@ export function calculateDimensions(
   const base = ASPECT_RATIOS[aspect] || ASPECT_RATIOS['1:1'];
   const factor = SIZE_MULTIPLIERS[multiplier]?.factor ?? 1.0;
   return {
-    width: Math.round((base.width * factor) / 16) * 16,
-    height: Math.round((base.height * factor) / 16) * 16,
+    width: Math.round((base.width * factor) / 32) * 32,
+    height: Math.round((base.height * factor) / 32) * 32,
   };
 }
 
@@ -69,12 +69,10 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 export type JobPhase =
   | 'queued'
   | 'waking'
-  | 'loading_model'
   | 'enhancing'
   | 'encoding'
   | 'denoising'
   | 'decoding'
-  | 'saving'
   | 'done';
 
 export interface JobParams {
@@ -96,14 +94,12 @@ export interface EnhanceStats {
   thought_tokens?: number;
   reply_tokens?: number;
   generated_tokens?: number;
-  /** The worker's token limit: the finish line for the progress bar. */
   max_new_tokens?: number;
   prefill_s?: number;
   prefill_tps?: number;
   generation_tps?: number;
 }
 
-/** Per-stage timings merged by the manager as each stage finishes. */
 export interface JobTimings {
   total_s?: number;
   enhance_s?: number;
@@ -124,6 +120,22 @@ export interface JobTimings {
   reply_tokens?: number;
 }
 
+export interface StageProvenance {
+  agent: string;
+  executor: string;
+  device: string;
+  backend_kind: string;
+  model: {
+    id: string;
+    rev: string;
+    dtype: string;
+  };
+  torch_version: string;
+  worker_version: string;
+  timings?: Record<string, number>;
+  peak_mem_bytes?: number;
+}
+
 export interface Generation {
   id: string;
   batchId: string;
@@ -141,103 +153,161 @@ export interface Generation {
   secondsPerStep?: number;
   etaSeconds?: number;
   imageUrl?: string;
+  thumbUrl?: string;
   error?: string;
+  blockedReason?: string;
+  provenance?: Record<string, StageProvenance>;
   createdAt: number;
   completedAt?: number;
   timings?: JobTimings;
   favorite?: boolean;
-  lineage?: {
-    parentId?: string;
-    seed?: number;
-    variation?: boolean;
-  };
-  attempts?: number;
-  /** GPU running the current stage; for finished images, the GPU that decoded it. */
   card?: number;
-  /** Highest VRAM use of any stage of this job, in bytes. */
+  executor?: string;
   peakVram?: number;
-  crashClass?: string;
 }
 
-export interface GenerationTurn {
-  batchId: string;
-  prompt: string;
-  enhancedPrompt?: string;
-  thinking?: string;
-  createdAt: number;
-  params: JobParams;
-  generations: Generation[];
-}
-
+/** One executor as the header's status pill sees it. */
 export interface CardStatusInfo {
   card: number;
-  pci: string;
-  state: 'idle' | 'running' | 'unavailable' | string;
+  state: 'idle' | 'running' | 'unavailable';
   stage: string | null;
-  sub_stage?: EnhanceSubStage | null;
-  pid: number | null;
-  job_id?: string | null;
-  unavailable_reason: string | null;
-  vram_used?: number;
-  vram_reserved?: number;
-  vram_total?: number;
-  vram_peak?: number;
-  vram_overflow?: number;
 }
 
-export interface StageRunItem {
-  id: number;
-  job_id: string | null;
+export interface SystemStageCap {
   stage: string;
-  card: number;
-  pid: number;
-  started_at: number;
-  ended_at: number | null;
-  exit_code: number | null;
-  jobs_processed: number;
-  exit_reason: string | null;
-  queue_depths: Record<string, number> | null;
+  models: string[];
+  max_px: number;
+  modes?: string[];
 }
 
-/** Manager `/status` snapshot plus the derived overall state. */
+export interface SystemExecutorInfo {
+  key: string;
+  id: string;
+  agent_id: string;
+  device: string;
+  mem_total_bytes: number;
+  mem_used_bytes: number;
+  mem_available_bytes: number;
+  overflow_host_bytes: number;
+  stages: SystemStageCap[];
+  state: string;
+  current_stage?: string | null;
+  current_model_id?: string | null;
+  current_model_rev?: string | null;
+  current_task_id?: string | null;
+  worker_pid?: number | null;
+  load_s?: number | null;
+  disabled_reason?: string | null;
+  lent: boolean;
+  pending_lend: boolean;
+}
+
+export interface SystemAgentInfo {
+  id: string;
+  agent_version: string;
+  backend_kind: string;
+  metrics_url: string;
+  online: boolean;
+  host_ram_total_bytes: number;
+  host_ram_available_bytes: number;
+  scrape_age_s?: number | null;
+  scrape_stale: boolean;
+  executors: SystemExecutorInfo[];
+}
+
+export interface SystemQueueInfo {
+  stage: string;
+  queued: number;
+  running: number;
+  blocked: number;
+  oldest_wait_s: number;
+  blocked_reasons: string[];
+}
+
+export interface SizeCapability {
+  width: number;
+  height: number;
+  px: number;
+  servable_now: boolean;
+  servable_ever: boolean;
+  reason?: string | null;
+}
+
+export interface StageCapability {
+  stage: string;
+  servable_now: boolean;
+  servable_ever: boolean;
+  reason?: string | null;
+}
+
+export interface CapabilitiesInfo {
+  max_px_now: number;
+  max_px_ever: number;
+  enhance_now: boolean;
+  enhance_ever: boolean;
+  sizes: SizeCapability[];
+  stages: StageCapability[];
+}
+
 export interface WorkerHealth {
   state: 'ready' | 'busy' | 'error' | 'offline';
   cards?: CardStatusInfo[];
-  queue_depths?: Record<string, number>;
-  decode_ram_floor_bytes?: number;
-  host_available_ram_bytes?: number;
+  agents?: SystemAgentInfo[];
+  queues?: SystemQueueInfo[];
 }
 
-export interface ManagerJob {
+export interface V3TaskRecord {
   id: string;
+  job_id: string;
+  seq: number;
+  stage: string;
+  status: string;
+  attempts: number;
+  current_attempt: number;
+  assigned_agent?: string | null;
+  assigned_executor?: string | null;
+  blocked_reason?: string | null;
+  step: number;
+  steps: number;
+  s_per_step: number;
+  /** enhance only: live sub-stage and token stats from the worker */
+  sub_stage?: EnhanceSubStage | null;
+  stats?: EnhanceStats | null;
+  error_class?: string | null;
+  error_detail?: string | null;
+  queued_at?: number | null;
+  started_at?: number | null;
+  finished_at?: number | null;
+}
+
+export interface V3JobRecord {
+  id: string;
+  status: string;
   prompt: string;
   enhanced_prompt?: string | null;
   thinking?: string | null;
-  aspect: string;
+  negative_prompt: string;
+  /** UI metadata the SPA stored with the job (see services/api.ts JobMeta). */
+  meta?: Record<string, unknown>;
+  favorite?: boolean;
   width: number;
   height: number;
   steps: number;
   seed: number;
-  enhance: boolean | number;
-  decode_mode: string;
-  status: string;
-  stage: string;
-  sub_stage?: EnhanceSubStage | null;
-  attempts: number;
-  worker_pid?: number | null;
-  card?: number | null;
-  step?: number;
-  s_per_step?: number | null;
-  eta_s?: number | null;
-  timings?: JobTimings | null;
-  peak_vram?: number;
-  sha256?: string | null;
-  error?: string | null;
-  crash_class?: string | null;
-  enhance_stats?: EnhanceStats | null;
+  true_cfg_scale: number;
+  enhance: boolean;
+  wh_ratio?: string | null;
+  model_id?: string | null;
+  model_rev?: string | null;
+  error_class?: string | null;
+  error_detail?: string | null;
+  blocked_reason?: string | null;
+  version: number;
   created_at: number;
-  updated_at: number;
-  completed_at?: number | null;
+  started_at?: number | null;
+  finished_at?: number | null;
+  tasks: V3TaskRecord[];
+  provenance: Record<string, StageProvenance>;
 }
 
 export interface UserPreferences {
@@ -251,4 +321,3 @@ export interface UserPreferences {
   lockedSeed: number;
   enhance: boolean;
 }
-

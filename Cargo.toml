@@ -1,0 +1,3 @@
+[workspace]
+members = ["studio"]
+resolver = "2"

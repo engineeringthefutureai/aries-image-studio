@@ -34,7 +34,6 @@ interface LightboxProps {
   onVary: (generation: Generation) => void;
   onReuseSettings: (generation: Generation) => void;
   onRerunExact: (generation: Generation) => void;
-  onRerunEnhanced?: (generation: Generation) => void;
   onReuseEnhanced?: (generation: Generation) => void;
   onDelete?: (id: string) => void;
 }
@@ -50,7 +49,6 @@ export const Lightbox: React.FC<LightboxProps> = ({
   onVary,
   onReuseSettings,
   onRerunExact,
-  onRerunEnhanced,
   onReuseEnhanced,
   onDelete,
 }) => {
@@ -342,16 +340,6 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   <Sparkles className="w-3 h-3" /> Enhanced Prompt
                 </span>
                 <div className="flex items-center gap-2">
-                  {onRerunEnhanced && (
-                    <button
-                      onClick={() => onRerunEnhanced(generation)}
-                      className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors font-medium normal-case"
-                      title="Rerun generation only, keeping enhanced prompt as is"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>Rerun with this</span>
-                    </button>
-                  )}
                   {onReuseEnhanced && (
                     <button
                       onClick={() => onReuseEnhanced(generation)}
@@ -486,6 +474,46 @@ export const Lightbox: React.FC<LightboxProps> = ({
             </div>
           )}
 
+          {/* V3 Per-Stage Provenance Chain (§11.3) */}
+          {generation.provenance && Object.keys(generation.provenance).length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-white/50">
+                Provenance
+              </div>
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10 font-mono text-[11px] space-y-2 text-white/80">
+                {(['enhance', 'encode', 'denoise', 'decode'] as const).map((stage) => {
+                  const prov = generation.provenance?.[stage];
+                  if (!prov) return null;
+                  const shortRev = prov.model?.rev ? prov.model.rev.slice(0, 7) : '';
+                  const stageSeconds = prov.timings?.stage_s;
+                  return (
+                    <div key={stage} className="space-y-0.5 pb-1.5 last:pb-0 border-b last:border-b-0 border-white/5">
+                      <div className="flex items-center justify-between text-white">
+                        <span className="uppercase text-[10px] tracking-wider text-white/60">
+                          {stage}
+                        </span>
+                        <span>
+                          {prov.agent}/{prov.executor}{' '}
+                          <span className="text-white/50">({prov.backend_kind})</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-white/50">
+                        <span className="truncate max-w-[200px]" title={prov.model?.id}>
+                          {prov.model?.id}
+                          {shortRev ? `@${shortRev}` : ''}
+                        </span>
+                        <span>
+                          {stageSeconds != null ? formatDuration(stageSeconds) : ''}
+                          {prov.peak_mem_bytes ? ` · ${formatGiB(prov.peak_mem_bytes)}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Technical Section (Collapsible) */}
           <div className="border-t border-white/10 pt-3">
             <button
@@ -516,10 +544,10 @@ export const Lightbox: React.FC<LightboxProps> = ({
                     <span className="capitalize">{timings.decode_mode} VAE</span>
                   </div>
                 )}
-                {generation.card != null && (
+                {(generation.executor || generation.card != null) && (
                   <div className="flex justify-between">
                     <span className="text-white/50">Decoded on</span>
-                    <span>GPU {generation.card}</span>
+                    <span>{generation.executor || `GPU ${generation.card}`}</span>
                   </div>
                 )}
                 {generation.peakVram != null && (

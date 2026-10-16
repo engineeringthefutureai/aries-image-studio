@@ -26,6 +26,8 @@ import {
 const DEFAULT_ENHANCE_TOKEN_LIMIT = 2048;
 /** Most enhancer runs finish around this share of the token limit: the bar's finish line. */
 const ENHANCE_EXPECTED_SHARE = 0.85;
+// Prompts longer than this (e.g. an enhanced prompt sent back from the composer) are clamped.
+const LONG_PROMPT_CHARS = 280;
 
 interface TimelineProps {
   generations: Generation[];
@@ -35,7 +37,6 @@ interface TimelineProps {
   onRetry: (generation: Generation) => void;
   onCancel: (id: string) => void;
   onSelectPrompt: (prompt: string, aspect?: AspectRatio) => void;
-  onRerunEnhanced?: (generation: Generation) => void;
   onReuseEnhanced?: (generation: Generation) => void;
   onDelete?: (id: string) => void;
   onDeleteTurn?: (batchId: string) => void;
@@ -49,12 +50,12 @@ export const Timeline: React.FC<TimelineProps> = ({
   onRetry,
   onCancel,
   onSelectPrompt,
-  onRerunEnhanced,
   onReuseEnhanced,
   onDelete,
   onDeleteTurn,
 }) => {
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
+  const [expandedPrompt, setExpandedPrompt] = useState<Record<string, boolean>>({});
   const [selectedGenIdByTurn, setSelectedGenIdByTurn] = useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -149,6 +150,8 @@ export const Timeline: React.FC<TimelineProps> = ({
         const selectedIdx = turn.findIndex((g) => g.id === selectedGen.id);
         const cleanEnhanced = sanitizeEnhancedPrompt(selectedGen.enhancedPrompt);
         const isThinkingOpen = !!expandedThinking[selectedGen.id];
+        const isLongPrompt = selectedGen.prompt.length > LONG_PROMPT_CHARS;
+        const isPromptOpen = !!expandedPrompt[selectedGen.id];
         const generationTps = selectedGen.timings?.generation_tps || selectedGen.enhanceStats?.generation_tps || 0;
         const genSeconds = generationSeconds(selectedGen.timings);
         const waitSeconds = queueSeconds(selectedGen.timings);
@@ -219,12 +222,23 @@ export const Timeline: React.FC<TimelineProps> = ({
             </div>
 
             {/* 2. Center: Bounded-Height Image(s) Visual Tile */}
-            <div className="flex-initial min-w-0 max-w-full sm:max-w-[55%] md:max-w-[60%] flex items-center justify-start self-center sm:self-start">
-              <div className={`flex gap-3.5 py-2.5 px-1.5 ${turn.length > 1 ? 'overflow-x-auto max-w-full scrollbar-thin' : ''}`}>
+            <div
+              className={`flex-initial min-w-0 max-w-full sm:max-w-[55%] md:max-w-[60%] flex items-center justify-start self-center sm:self-start ${
+                turn.length > 1 ? 'w-full sm:w-[55%] md:w-[60%]' : ''
+              }`}
+            >
+              <div
+                className={
+                  turn.length > 1
+                    ? 'grid grid-cols-1 lg:grid-cols-2 gap-3.5 py-2.5 px-1.5 w-full justify-items-center'
+                    : 'flex gap-3.5 py-2.5 px-1.5'
+                }
+              >
                 {turn.map((gen) => (
                   <TileCard
                     key={gen.id}
                     gen={gen}
+                    compact={turn.length > 1}
                     isSelected={gen.id === selectedGen.id}
                     onSelect={() =>
                       setSelectedGenIdByTurn((prev) => ({
@@ -290,12 +304,24 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                 {/* Header with Prompt & Action buttons */}
                 <div className="flex items-start justify-between gap-3">
-                  <p
-                    data-turn-prompt
-                    className="font-['Inter'] font-medium text-sm sm:text-base text-[#1c1c18] dark:text-[#f3f0e9] leading-snug break-words"
-                  >
-                    {selectedGen.prompt}
-                  </p>
+                  <div className="min-w-0">
+                    <p
+                      data-turn-prompt
+                      className={`font-['Inter'] font-medium text-sm sm:text-base text-[#1c1c18] dark:text-[#f3f0e9] leading-snug break-words ${
+                        isLongPrompt && !isPromptOpen ? 'line-clamp-5' : ''
+                      }`}
+                    >
+                      {selectedGen.prompt}
+                    </p>
+                    {isLongPrompt && (
+                      <button
+                        onClick={() => setExpandedPrompt((prev) => ({ ...prev, [selectedGen.id]: !prev[selectedGen.id] }))}
+                        className="mt-1 text-[11px] text-[#a53705] dark:text-[#f38d58] hover:underline"
+                      >
+                        {isPromptOpen ? 'Show less' : 'Show more'}
+                      </button>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => handleCopyPrompt(selectedGen.prompt, selectedGen.id)}
@@ -319,13 +345,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                     )}
                   </div>
                 </div>
-
-                {/* Lineage */}
-                {selectedGen.lineage && (
-                  <div className="flex items-center gap-1.5 text-xs text-[#8c7169] dark:text-[#a09088] font-mono">
-                    <span>↳ variation of seed {selectedGen.lineage.seed}</span>
-                  </div>
-                )}
 
                 {/* Pending Enhancement Indicator */}
                 {selectedGen.params.enhance && !cleanEnhanced && selectedGen.status !== 'failed' && (
@@ -357,16 +376,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
-                        {onRerunEnhanced && selectedGen.status === 'done' && (
-                          <button
-                            onClick={() => onRerunEnhanced(selectedGen)}
-                            className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 dark:text-amber-300 font-medium transition-colors"
-                            title="Rerun generation only, keeping this enhanced prompt as is"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>Rerun with this</span>
-                          </button>
-                        )}
                         {onReuseEnhanced && (
                           <button
                             onClick={() => onReuseEnhanced(selectedGen)}
@@ -519,6 +528,8 @@ export const Timeline: React.FC<TimelineProps> = ({
 interface TileCardProps {
   gen: Generation;
   isSelected?: boolean;
+  /** Batch tile: fills its grid column, no taller than a single tile. */
+  compact?: boolean;
   onSelect?: () => void;
   onOpenLightbox: () => void;
   onToggleFavorite: () => void;
@@ -531,6 +542,7 @@ interface TileCardProps {
 const TileCard: React.FC<TileCardProps> = ({
   gen,
   isSelected,
+  compact,
   onSelect,
   onOpenLightbox,
   onToggleFavorite,
@@ -541,6 +553,10 @@ const TileCard: React.FC<TileCardProps> = ({
 }) => {
   const aspectConfig = ASPECT_RATIOS[gen.params.aspect] || ASPECT_RATIOS['1:1'];
   const aspectRatioStyle = `${aspectConfig.ratioWidth} / ${aspectConfig.ratioHeight}`;
+  const tileHeight = compact ? 'w-full' : 'h-[190px] sm:h-[220px] md:h-[240px]';
+  const tileStyle: React.CSSProperties = compact
+    ? { aspectRatio: aspectRatioStyle, maxWidth: `${(240 * aspectConfig.ratioWidth) / aspectConfig.ratioHeight}px` }
+    : { aspectRatio: aspectRatioStyle };
 
   // 1. DONE STATE
   if (gen.status === 'done') {
@@ -548,10 +564,10 @@ const TileCard: React.FC<TileCardProps> = ({
       return (
         <div
           onClick={onSelect}
-          className={`h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 rounded-xl bg-[#f1eee7] dark:bg-[#232320] flex flex-col justify-between p-3.5 cursor-pointer transition-all ${
+          className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f1eee7] dark:bg-[#232320] flex flex-col justify-between p-3.5 cursor-pointer transition-all ${
             isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db] dark:border-[#2e2e2a]'
           }`}
-          style={{ aspectRatio: aspectRatioStyle }}
+          style={tileStyle}
         >
           <div className="flex justify-between items-center text-xs text-[#8c7169] dark:text-[#a09088]">
             <span className="font-mono text-[11px] font-medium">{gen.params.aspect}</span>
@@ -585,14 +601,15 @@ const TileCard: React.FC<TileCardProps> = ({
           if (onSelect) onSelect();
         }}
         onDoubleClick={onOpenLightbox}
-        className={`group relative h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 overflow-hidden rounded-xl bg-[#f1eee7] dark:bg-[#232320] shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer ${
+        className={`group relative ${tileHeight} max-w-full shrink-0 overflow-hidden rounded-xl bg-[#f1eee7] dark:bg-[#232320] shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer ${
           isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db] dark:border-[#2e2e2a]'
         }`}
-        style={{ aspectRatio: aspectRatioStyle }}
+        style={tileStyle}
       >
         <img
-          src={gen.imageUrl}
+          src={gen.thumbUrl || gen.imageUrl}
           alt={gen.prompt}
+          loading="lazy"
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-102"
         />
 
@@ -691,16 +708,12 @@ const TileCard: React.FC<TileCardProps> = ({
       switch (gen.phase) {
         case 'waking':
           return 'Waking generator';
-        case 'loading_model':
-          return 'Loading model';
         case 'encoding':
           return 'Reading prompt';
         case 'denoising':
           return 'Drawing';
         case 'decoding':
           return 'Finishing';
-        case 'saving':
-          return 'Saving';
         default:
           return gen.stage === 'encode'
             ? 'Reading prompt'
@@ -715,10 +728,10 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 rounded-xl bg-[#f6f3ec] dark:bg-[#20201d] flex flex-col justify-between p-3.5 shadow-xs cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f6f3ec] dark:bg-[#20201d] flex flex-col justify-between p-3.5 shadow-xs cursor-pointer transition-all ${
           isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db] dark:border-[#2e2e2a]'
         }`}
-        style={{ aspectRatio: aspectRatioStyle }}
+        style={tileStyle}
       >
         <div className="flex justify-between items-center text-xs text-[#8c7169] dark:text-[#a09088]">
           <div className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
@@ -832,12 +845,12 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 rounded-xl bg-[#f8f6f0] dark:bg-[#1e1e1b] flex flex-col justify-between p-3.5 cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f8f6f0] dark:bg-[#1e1e1b] flex flex-col justify-between p-3.5 cursor-pointer transition-all ${
           isSelected
             ? 'ring-2 ring-amber-500 shadow-md border-solid border-amber-500/40'
             : 'border border-dashed border-[#dfdcce] dark:border-[#33332d]'
         }`}
-        style={{ aspectRatio: aspectRatioStyle }}
+        style={tileStyle}
       >
         <div className="flex justify-between items-center text-xs text-[#8c7169] dark:text-[#a09088]">
           <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 font-mono text-[10px] font-semibold">
@@ -857,14 +870,32 @@ const TileCard: React.FC<TileCardProps> = ({
         </div>
 
         <div className="my-auto text-center space-y-2 px-3">
-          <div className="w-8 h-8 mx-auto rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center text-[#8c7169]">
-            <Loader2 className="w-4 h-4 animate-spin" />
+          <div
+            className={`w-8 h-8 mx-auto rounded-full flex items-center justify-center ${
+              gen.blockedReason
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                : 'bg-black/5 dark:bg-white/5 text-[#8c7169]'
+            }`}
+          >
+            {gen.blockedReason ? (
+              <AlertCircle className="w-4 h-4" />
+            ) : (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            )}
           </div>
           <div className="font-['Plus_Jakarta_Sans'] font-medium text-sm text-[#1c1c18] dark:text-[#f3f0e9]">
-            Queued
+            {gen.blockedReason ? 'Waiting' : 'Queued'}
           </div>
-          <p className="text-xs text-[#8c7169] dark:text-[#a09088] max-w-[190px] mx-auto leading-relaxed">
-            {gen.phase === 'enhancing' || gen.stage === 'enhance'
+          <p
+            className={`text-xs max-w-[190px] mx-auto leading-relaxed ${
+              gen.blockedReason
+                ? 'text-amber-700 dark:text-amber-300 font-medium'
+                : 'text-[#8c7169] dark:text-[#a09088]'
+            }`}
+          >
+            {gen.blockedReason
+              ? gen.blockedReason
+              : gen.phase === 'enhancing' || gen.stage === 'enhance'
               ? 'Queued for prompt enhancement'
               : gen.phase === 'encoding' || gen.stage === 'encode'
               ? 'Queued for text encoding'
@@ -877,7 +908,7 @@ const TileCard: React.FC<TileCardProps> = ({
         </div>
 
         <div className="text-[10px] font-mono text-center text-[#8c7169] dark:text-[#a09088]">
-          seed #{gen.params.seed} · Waiting for GPU
+          seed #{gen.params.seed} · {gen.blockedReason ? 'Blocked' : 'Waiting for GPU'}
         </div>
       </div>
     );
@@ -890,10 +921,10 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 rounded-xl bg-rose-500/5 dark:bg-rose-500/10 flex flex-col justify-between p-3.5 text-center cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-rose-500/5 dark:bg-rose-500/10 flex flex-col justify-between p-3.5 text-center cursor-pointer transition-all ${
           isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-rose-500/20'
         }`}
-        style={{ aspectRatio: aspectRatioStyle }}
+        style={tileStyle}
       >
         <div className="text-left text-xs font-mono text-[#8c7169] dark:text-[#a09088]">
           <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-400 font-mono text-[10px] font-semibold">
@@ -951,10 +982,10 @@ const TileCard: React.FC<TileCardProps> = ({
       onClick={() => {
         if (onSelect) onSelect();
       }}
-      className={`h-[190px] sm:h-[220px] md:h-[240px] max-w-full shrink-0 rounded-xl bg-[#f6f3ec]/60 dark:bg-[#20201d]/60 flex flex-col justify-between p-3.5 text-center cursor-pointer transition-all ${
+      className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f6f3ec]/60 dark:bg-[#20201d]/60 flex flex-col justify-between p-3.5 text-center cursor-pointer transition-all ${
         isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db]/50 dark:border-[#2e2e2a]/50'
       }`}
-      style={{ aspectRatio: aspectRatioStyle }}
+      style={tileStyle}
     >
       <div className="text-left text-xs font-mono text-[#8c7169]">
         <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 font-mono text-[10px] font-semibold">

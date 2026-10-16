@@ -4,6 +4,7 @@ import {
   type JobParams,
   type UserPreferences,
   type SizeMultiplier,
+  type CapabilitiesInfo,
   ASPECT_RATIOS,
   SIZE_MULTIPLIERS,
   calculateDimensions,
@@ -16,6 +17,7 @@ interface ComposerProps {
   onSubmit: (prompt: string, params: JobParams) => void;
   isSubmitting: boolean;
   workerState?: string;
+  capabilities?: CapabilitiesInfo | null;
   prefilledPrompt?: string | null;
   prefilledAspect?: AspectRatio | null;
   onClearPrefill?: () => void;
@@ -39,6 +41,7 @@ export const Composer: React.FC<ComposerProps> = ({
   onUpdatePreferences,
   onSubmit,
   isSubmitting,
+  capabilities,
   prefilledPrompt,
   prefilledAspect,
   onClearPrefill,
@@ -227,19 +230,37 @@ export const Composer: React.FC<ComposerProps> = ({
                         const item = SIZE_MULTIPLIERS[key];
                         const isSelected = (preferences.sizeMultiplier || 'full') === key;
                         const dims = calculateDimensions(preferences.aspect, key);
+                        const px = dims.width * dims.height;
+                        const everMaxPx = capabilities?.max_px_ever ?? 0;
+                        const nowMaxPx = capabilities?.max_px_now ?? 0;
+                        const isNeverServable =
+                          capabilities != null && everMaxPx > 0 && px > everMaxPx;
+                        const isTemporarilyUnavailable =
+                          capabilities != null && !isNeverServable && everMaxPx > 0 && px > nowMaxPx;
 
                         return (
                           <button
                             key={key}
                             type="button"
+                            disabled={isNeverServable}
+                            title={
+                              isNeverServable
+                                ? `No registered executor supports ${dims.width}×${dims.height} (max ${everMaxPx} px)`
+                                : isTemporarilyUnavailable
+                                ? `Capable executor currently offline, lent, or disabled — job will wait in queue`
+                                : undefined
+                            }
                             onClick={() => {
+                              if (isNeverServable) return;
                               onUpdatePreferences({ sizeMultiplier: key });
                               setIsScaleOpen(false);
                             }}
-                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#a53705] text-white shadow-2xs font-semibold'
-                                : 'hover:bg-[#f1eee7] dark:hover:bg-[#292925] text-[#1c1c18] dark:text-[#f3f0e9]'
+                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-all ${
+                              isNeverServable
+                                ? 'opacity-40 cursor-not-allowed'
+                                : isSelected
+                                ? 'bg-[#a53705] text-white shadow-2xs font-semibold cursor-pointer'
+                                : 'hover:bg-[#f1eee7] dark:hover:bg-[#292925] text-[#1c1c18] dark:text-[#f3f0e9] cursor-pointer'
                             }`}
                           >
                             <div className="flex flex-col">
@@ -254,6 +275,11 @@ export const Composer: React.FC<ComposerProps> = ({
                                 >
                                   {item.badge}
                                 </span>
+                                {isTemporarilyUnavailable && (
+                                  <span className="text-[9px] font-mono px-1 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                                    queued
+                                  </span>
+                                )}
                               </div>
                               <span
                                 className={`text-[10px] ${
@@ -377,7 +403,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     ? 'bg-amber-500/10 text-amber-900 dark:text-amber-300 border-amber-500/30'
                     : 'bg-[#f1eee7] dark:bg-[#232320] text-[#8c7169] dark:text-[#a09088] border-transparent hover:text-[#1c1c18] dark:hover:text-[#f3f0e9]'
                 }`}
-                title="Enhance prompt before generating (runs Qwen-Image-2.1-PE on GPU 1)"
+                title="Enhance prompt before generating (Qwen-Image-2.1-PE rewrites it on a free GPU)"
               >
                 <Sparkles
                   className={`w-3.5 h-3.5 ${

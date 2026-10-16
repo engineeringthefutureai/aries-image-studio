@@ -1,0 +1,8 @@
+{
+  "_comment": "Agent /metrics names the backend scrapes for live limits and the system panel. backend/tests/test_contract.py checks the agent exports them; studio/tests/contract_test.rs checks the backend parses them.",
+  "host_ram_available_bytes": "aries_host_ram_available_bytes",
+  "executor_mem_used_bytes": "aries_executor_mem_used_bytes",
+  "executor_mem_total_bytes": "aries_executor_mem_total_bytes",
+  "executor_mem_overflow_bytes": "aries_executor_mem_overflow_bytes",
+  "executor_label": "executor"
+}

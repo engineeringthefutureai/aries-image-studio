@@ -193,7 +193,7 @@ export const Gallery: React.FC<GalleryProps> = ({
               {/* Media Container */}
               <div className="relative w-full overflow-hidden" style={{ aspectRatio: aspectRatioStyle }}>
                 <img
-                  src={gen.imageUrl}
+                  src={gen.thumbUrl || gen.imageUrl}
                   alt={gen.prompt}
                   loading="lazy"
                   className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-103"

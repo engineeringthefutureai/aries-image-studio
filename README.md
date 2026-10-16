@@ -6,9 +6,11 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) on a home server with
 two Intel Arc Pro B60 GPUs. Single user, LAN only.
 
-**Version 0.2.1.** It works end to end on the hardware it was built for; see
-[Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.2.1](docs/releases/v0.2.1.md) · [0.2.0](docs/releases/v0.2.0.md).
+**Version 0.3.0.** A Rust Studio server owns jobs, history and images, and a thin
+agent on the GPU host runs the pipeline. It works end to end on the hardware it was
+built for; see [Limitations](#limitations) before deploying it anywhere else.
+Release notes: [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+[0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
 
@@ -24,7 +26,7 @@ Release notes: [0.2.1](docs/releases/v0.2.1.md) · [0.2.0](docs/releases/v0.2.0.
 - **Gallery and lightbox**: favorites, search, zoom, vary, rerun exact, reuse settings,
   download.
 - **Status panel**: each GPU's state, current stage and VRAM; queue depth per stage;
-  host RAM; recent worker runs and why they exited.
+  host RAM.
 - **Crash-tolerant backend**: each pipeline stage runs in its own process on one card,
   with intermediate results on disk. A GPU fault costs one stage, which is retried
   once; a card that wedges is taken out of rotation while the other keeps working.
@@ -33,123 +35,115 @@ Release notes: [0.2.1](docs/releases/v0.2.1.md) · [0.2.0](docs/releases/v0.2.0.
 ## How it works
 
 ```
-Browser (web/)  ──HTTP poll──▶  Manager (backend/aries_manager)        one process
-  timeline, gallery,              • job queue + state machine (SQLite)
-  history in browser storage      • card scheduler
-                                  • per-job files: embeds → latent → PNG
-                                  • spawns ▼ one stage worker per card
-                                Stage worker (backend/aries_worker)    one process each
-                                  enhance │ encode │ denoise │ decode — one model, one card
+Browser (web/) ──HTTP──▶ Studio (studio/, Rust)                       always on, no GPU
+  timeline, gallery        • web app + /api, SQLite job state, image store
+                           • scheduler: which stage runs on which card
+                           • gRPC gateway ◀── agents dial in
+                                   ▲
+                                   │ gRPC + artifact HTTP
+                           Agent (backend/aries_agent)                 on the GPU host
+                             • declares cards, models, live memory (/metrics)
+                             • spawns ▼ one stage worker per card
+                           Stage worker (backend/aries_worker)         one process each
+                             enhance │ encode │ denoise │ decode — one model, one card
 ```
 
 A job moves through `enhance` (optional) → `encode` → `denoise` → `decode`. Each stage
-loads one model on one card in a fresh process; the process exits when idle, which is
-the only reliable way to give all memory back on this stack. The scheduler gives a
-free card to the stage whose oldest job has waited longest, so a backlog runs two
-denoises in parallel while a trickle keeps one card denoising and the other cycling
-the short stages. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+loads one model on one card in a fresh process, and the process exits when idle: on
+this stack that is the only reliable way to give all memory back. Studio gives a free
+card to the stage whose work has waited longest, so a backlog runs two denoises in
+parallel. Intermediate results (`.safetensors`) travel through Studio over HTTP, so a
+failed stage is retried from its inputs. Details:
+[docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md).
 
 ## Requirements
 
-- Linux with the `xe` driver and Level Zero runtime; tested on Ubuntu 26.04 with
-  2× Intel Arc Pro B60 (24 GB). An untiled 2048² decode needs a 24 GB card to itself.
-- Docker with Compose.
-- ~50 GB of model weights on local disk (the backend never downloads at runtime).
-- A current Node.js LTS to build the web app.
+- GPU host: Linux with the `xe` driver and Level Zero runtime; tested on Ubuntu 26.04
+  with 2× Intel Arc Pro B60 (24 GB). An untiled 2048² decode needs a 24 GB card to
+  itself.
+- Docker with Compose, on the GPU host and on the Studio host (they can be the same
+  machine).
+- ~50 GB of model weights on local disk (nothing downloads at runtime).
 
 Host setup, dependency order and every failure mode seen so far:
 [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ## Quick start
 
-**Backend** (on the GPU host):
+Full instructions, including one-machine setups, building from source and
+troubleshooting: **[docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md)**.
 
 ```bash
+# GPU host: weights
 hf download Qwen/Qwen-Image-2.1        --local-dir /srv/models/qwen-image-2.1
 hf download Qwen/Qwen-Image-2.1-PE-T2I --local-dir /srv/models/qwen-image-2.1-pe-t2i
 
+# Studio host
+cd deploy/studio
+cp .env.example .env      # ARIES_AGENT_TOKEN (openssl rand -hex 32), ARIES_ARTIFACT_BASE_URL
+sudo install -d -o 1000 -g 1000 /var/lib/aries-image-studio
+docker compose up -d --build
+
+# GPU host
 cd deploy/aries
-cp .env.example .env      # adjust device selector, model and data directories
+cp .env.example .env      # same token, ARIES_BACKEND_GRPC_URL, ARIES_METRICS_URL
 make build up
-make health               # {"status": "ok", "state": "ready", ...}
 ```
 
-**Web** (anywhere that can reach the manager):
-
-```bash
-cd web
-npm ci
-VITE_BACKEND_URL=http://<gpu-host>:8000 npm run dev    # http://localhost:5173
-```
-
-For a static deployment, `npm run build` and serve `web/dist/` behind a reverse proxy
-that forwards `/jobs`, `/status` and `/stage_runs` to the manager.
+Open `http://<studio-host>:8080`.
 
 ## Configuration
 
-The manager reads its settings from the environment (`backend/aries_manager/config.py`):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `MODEL_PATH` | `/models/qwen-image-2.1` | Qwen-Image-2.1 weights (diffusers format) |
-| `ENHANCER_MODEL_PATH` | `/models/qwen-image-2.1-pe-t2i` | Prompt enhancer weights |
-| `ONEAPI_DEVICE_SELECTOR` | — | Level Zero devices to use, e.g. `level_zero:0,1` |
-| `ARIES_NUM_CARDS` | `2` | Number of cards to schedule |
-| `ARIES_DATA_DIR` | `/var/lib/aries-studio` | SQLite database and per-job files |
-| `ARIES_SOCKET_PATH` | `/run/aries/manager.sock` | Unix socket for stage workers |
-| `ARIES_IDLE_GRACE_SECONDS` | `15` | Idle time before a worker exits |
-| `ARIES_ENHANCE_IDLE_GRACE_SECONDS` | `300` | Same, for the enhancer |
-| `ARIES_MAX_WAIT_SECONDS` | `600` | Wait after which a busy card switches to a starving stage |
-| `ARIES_DECODE_RAM_FLOOR_BYTES` | 6 GiB | Host RAM required before an untiled decode |
-| `ARIES_DISK_WATERMARK_RATIO` | `0.80` | Refuse new jobs above this disk usage |
-| `ARIES_TTL_DAYS` | `7` | Delete finished images never fetched after this |
+Both sides read environment variables, set through each `deploy/*/.env`. The
+essentials are the shared `ARIES_AGENT_TOKEN` and three addresses: Studio's gRPC port
+for the agent, Studio's HTTP base for artifact transfer, and the agent's `/metrics` for
+Studio. Every variable is listed in
+[docs/BUILD_AND_RUN.md §10](docs/BUILD_AND_RUN.md#10-configuration-reference).
 
 ## Development
 
 ```bash
-cd backend
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pytest                  # stage tests mock torch/diffusers; no GPU needed
-
-cd ../web
-npm ci && npm run build && npm run lint
+cd studio && cargo test                              # Rust: API, scheduler, contract tests
+cd backend && pip install -e ".[dev]" && pytest      # mocks torch/diffusers; no GPU needed
+cd web && npm ci && npm run build && npm run lint
+VITE_BACKEND_URL=http://<studio-host>:8080 npm run dev   # hot reload on :5173
 ```
+
+Running Studio and the agent from source: [docs/BUILD_AND_RUN.md §9](docs/BUILD_AND_RUN.md#9-build-from-source-development).
 
 ## Repository layout
 
 ```
-backend/        Python: aries_manager (API, queue, scheduler) and aries_worker (stages)
-web/            React + TypeScript + Tailwind single-page app
-deploy/aries/   Docker Compose + Makefile for the backend on the GPU host
-docs/           Specs, architecture and hardware notes
-mockups/        UI mockups (visual reference)
-reference/      Batch scripts that validated the pipeline on the hardware
+studio/          Rust Studio server: API, scheduler, SQLite, image store, gRPC gateway
+backend/         Python: aries_agent (GPU agent) and aries_worker (stage workers)
+proto/           gRPC protocol, artifact and metric contracts shared by both sides
+web/             React + TypeScript + Tailwind single-page app
+deploy/studio/   Docker Compose for Studio
+deploy/aries/    Docker Compose + Makefile (and a systemd unit) for the agent
+docs/            Specs, architecture, hardware notes, build and run guide
+mockups/         UI mockups (visual reference)
+reference/       Batch scripts that validated the pipeline on the hardware
 ```
 
 | Doc | Covers |
 |---|---|
-| [docs/SPEC.md](docs/SPEC.md) | Product, UX, data model, browser-facing API |
+| [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md) | Building, deploying, configuring and troubleshooting |
+| [docs/SPEC.md](docs/SPEC.md) | Product, UX, data model |
 | [docs/SPEC_UI.md](docs/SPEC_UI.md) | UI behavior: states, interactions, keyboard, accessibility |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Staged execution: manager, workers, protocol, failures, telemetry |
+| [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | Studio, agents, protocol, scheduling, failures, API |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The 0.2 manager design |
 | [docs/HARDWARE.md](docs/HARDWARE.md) | Measurements, setup and failure modes on Intel Arc |
 | [docs/releases/](docs/releases/) | Release notes |
 
 ## Limitations
 
-- **No authentication.** The browser talks to the manager directly; keep it on a
-  trusted network.
-- **History lives in the browser** (localStorage and IndexedDB): it is per browser and
-  lost if site data is cleared.
-- The manager must be reachable to submit jobs; nothing queues while the GPU host is
-  off.
+- **No user authentication.** Anyone who can reach Studio's port can use it; keep it on
+  a trusted network. Agents authenticate with a shared token.
 - Built and tested only on Intel Arc (XPU). Other accelerators would need changes in
   the stage workers.
 
 ## Roadmap
 
-- **Next major version:** a Rust Studio server — always on, owns history, gallery and
-  images in SQLite, accepts jobs while the GPU host sleeps — replacing browser storage.
 - Prometheus alert rules and a Grafana dashboard.
 - Wake-on-submit and lending cards to other GPU workloads.
 - Edit with reference images, fast mode, live preview (docs/SPEC.md §8).

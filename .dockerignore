@@ -1,0 +1,8 @@
+# Build context for studio/Dockerfile (repo root). It needs Cargo.toml, Cargo.lock,
+# proto/, studio/ and web/; dependencies and build output are rebuilt inside.
+.git
+**/node_modules
+**/target
+web/dist
+**/__pycache__
+**/.env

@@ -4,26 +4,21 @@ import type {
   JobParams,
   UserPreferences,
   WorkerHealth,
+  CapabilitiesInfo,
   AspectRatio,
 } from './types';
-import {
-  loadGenerations,
-  saveGenerations,
-  loadPreferences,
-  savePreferences,
-  storeImageBlob,
-  deleteImageBlob,
-  restoreGenerationImageUrls,
-} from './services/storage';
+import { DEFAULT_PREFERENCES } from './services/preferences';
 import {
   fetchWorkerHealth,
+  fetchCapabilitiesApi,
   submitBatchJobsApi,
-  fetchCurrentJobsApi,
+  fetchJobsApi,
   cancelJobApi,
-  fetchJobImageBlob,
-  acknowledgeJobImageApi,
-  mapStatusToPhase,
-  fetchJobDetailApi,
+  retryJobApi,
+  deleteJobApi,
+  setFavoriteApi,
+  fetchPreferencesApi,
+  savePreferencesApi,
   type JobSubmission,
 } from './services/api';
 import { sanitizeEnhancedPrompt } from './utils/prompt';
@@ -38,9 +33,14 @@ import { StatusModal } from './components/StatusModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
+const newestFirst = (a: Generation, b: Generation) => b.createdAt - a.createdAt;
+
 export function App() {
-  const [generations, setGenerations] = useState<Generation[]>(() => loadGenerations());
-  const [preferences, setPreferences] = useState<UserPreferences>(() => loadPreferences());
+  // Everything shown comes from Studio: jobs (with images, favorites and UI metadata) and
+  // preferences. Nothing is kept in browser storage.
+  const [generations, setGenerations] = useState<Generation[]>([]);
+  const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [activeView, setActiveView] = useState<'timeline' | 'gallery'>('timeline');
 
   // Latest generations for the poll loop, without re-subscribing the effect
@@ -49,14 +49,12 @@ export function App() {
     generationsRef.current = generations;
   }, [generations]);
 
-  // In-flight image download tracker
-  const fetchingImageIdsRef = useRef<Set<string>>(new Set());
-
   // Ref to trigger job poll immediately on submission
   const pollJobsRef = useRef<(() => Promise<void>) | null>(null);
 
-  // Backend telemetry & connectivity
+  // Backend telemetry, capabilities & connectivity
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth>({ state: 'offline' });
+  const [capabilities, setCapabilities] = useState<CapabilitiesInfo | null>(null);
 
   // Active generation tracking
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -70,50 +68,41 @@ export function App() {
   const [prefilledPrompt, setPrefilledPrompt] = useState<string | null>(null);
   const [prefilledAspect, setPrefilledAspect] = useState<AspectRatio | null>(null);
 
-  // Sync generations & preferences to local storage
+  // Preferences: load once from Studio, then save each change (debounced). Nothing is
+  // saved before the load, so defaults never overwrite what Studio has.
   useEffect(() => {
-    saveGenerations(generations);
-  }, [generations]);
-
-  useEffect(() => {
-    savePreferences(preferences);
-    if (preferences.theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [preferences]);
-
-  // Hydrate full-resolution image blobs from local IndexedDB across page refreshes
-  useEffect(() => {
-    let isCancelled = false;
-    restoreGenerationImageUrls(generationsRef.current).then((hydrated) => {
-      if (isCancelled) return;
-      const urlMap = new Map<string, string>();
-      for (const item of hydrated) {
-        if (item.imageUrl) {
-          urlMap.set(item.id, item.imageUrl);
-        }
+    let cancelled = false;
+    const load = async () => {
+      const saved = await fetchPreferencesApi();
+      if (cancelled) return;
+      if (saved === null) {
+        setTimeout(load, 3000); // Studio unreachable: retry
+        return;
       }
-      setGenerations((prev) =>
-        prev.map((g) => {
-          const restoredUrl = urlMap.get(g.id);
-          if (restoredUrl && !g.imageUrl) {
-            return { ...g, imageUrl: restoredUrl };
-          }
-          return g;
-        })
-      );
-    });
+      setPreferences({ ...DEFAULT_PREFERENCES, ...saved });
+      setPreferencesLoaded(true);
+    };
+    load();
     return () => {
-      isCancelled = true;
+      cancelled = true;
     };
   }, []);
 
-  // Periodic Health Polling
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', preferences.theme === 'dark');
+    if (!preferencesLoaded) return;
+    const timer = setTimeout(() => savePreferencesApi(preferences), 300);
+    return () => clearTimeout(timer);
+  }, [preferences, preferencesLoaded]);
+
+  // Periodic Health & Capabilities Polling
   const checkHealth = useCallback(async () => {
-    const health = await fetchWorkerHealth();
+    const [health, caps] = await Promise.all([
+      fetchWorkerHealth(),
+      fetchCapabilitiesApi(),
+    ]);
     setWorkerHealth(health);
+    if (caps) setCapabilities(caps);
   }, []);
 
   useEffect(() => {
@@ -129,122 +118,37 @@ export function App() {
     );
   }, []);
 
-  // Job polling (ARCHITECTURE.md §7): every 1 s while anything is active, every 10 s
-  // when idle, and on tab focus. Finished images are fetched, stored locally, then
-  // acknowledged so the manager can delete its copy.
+  // Job sync (ARCHITECTURE_V3.md §8): a full load first, then only what changed since the
+  // last version (plus deletions); every 1 s while anything is active, every 10 s when
+  // idle, and on tab focus.
   useEffect(() => {
     let isCancelled = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
     let isPolling = false;
+    let version: number | undefined;
 
     const pollJobs = async () => {
       if (isPolling || isCancelled) return;
       isPolling = true;
 
       try {
-        const activeJobs = await fetchCurrentJobsApi();
+        const page = await fetchJobsApi(version);
         if (isCancelled) return;
-
-        const managerJobMap = new Map();
-        for (const job of activeJobs) {
-          managerJobMap.set(job.id, job);
-        }
-
-        const currentGenerations = generationsRef.current;
-        for (const gen of currentGenerations) {
-          const mJob = managerJobMap.get(gen.id);
-
-          if (mJob) {
-            const rawEnhanced = mJob.enhanced_prompt || gen.enhancedPrompt;
-            const enhancedPrompt = rawEnhanced ? sanitizeEnhancedPrompt(rawEnhanced) : undefined;
-            const thinking = mJob.thinking || gen.thinking;
-
-            if (mJob.status === 'stored') {
-              if (gen.status !== 'done' && !fetchingImageIdsRef.current.has(mJob.id)) {
-                fetchingImageIdsRef.current.add(mJob.id);
-                (async () => {
-                  try {
-                    const { blob, url } = await fetchJobImageBlob(mJob.id);
-                    await storeImageBlob(mJob.id, blob);
-                    await acknowledgeJobImageApi(mJob.id);
-                    updateGeneration(mJob.id, {
-                      status: 'done',
-                      phase: 'done',
-                      imageUrl: url,
-                      completedAt: mJob.completed_at ? mJob.completed_at * 1000 : Date.now(),
-                      timings: mJob.timings,
-                      card: mJob.card ?? undefined,
-                      peakVram: mJob.peak_vram || undefined,
-                      enhancedPrompt,
-                      thinking,
-                      enhanceStats: mJob.enhance_stats || undefined,
-                    });
-                  } catch (err) {
-                    console.warn(`Failed to pull stored image for ${mJob.id}:`, err);
-                  } finally {
-                    fetchingImageIdsRef.current.delete(mJob.id);
-                  }
-                })();
-              } else if (
-                gen.status === 'done' &&
-                ((enhancedPrompt && gen.enhancedPrompt !== enhancedPrompt) ||
-                  (thinking && gen.thinking !== thinking))
-              ) {
-                updateGeneration(mJob.id, {
-                  enhancedPrompt,
-                  thinking,
-                });
-              }
-            } else if (mJob.status === 'failed') {
-              if (gen.status !== 'failed') {
-                updateGeneration(mJob.id, {
-                  status: 'failed',
-                  error: mJob.error || 'Stage execution failed',
-                  crashClass: mJob.crash_class || undefined,
-                  enhancedPrompt,
-                  thinking,
-                });
-              }
-            } else if (mJob.status === 'cancelled') {
-              if (gen.status !== 'cancelled') {
-                updateGeneration(mJob.id, { status: 'cancelled' });
-              }
-            } else {
-              const phase = mapStatusToPhase(mJob.status);
-              const common = {
-                phase,
-                stage: mJob.stage,
-                subStage: mJob.sub_stage || undefined,
-                totalSteps: mJob.steps || gen.params.steps,
-                enhancedPrompt,
-                thinking,
-                enhanceStats: mJob.enhance_stats || undefined,
-              };
-
-              if (phase === 'queued') {
-                updateGeneration(mJob.id, {
-                  ...common,
-                  status: 'queued',
-                  card: undefined,
-                  step: 0,
-                  secondsPerStep: undefined,
-                  etaSeconds: undefined,
-                });
-              } else {
-                updateGeneration(mJob.id, {
-                  ...common,
-                  status: 'running',
-                  step: mJob.step || 0,
-                  secondsPerStep: mJob.s_per_step ?? undefined,
-                  etaSeconds: mJob.eta_s ?? undefined,
-                  card: mJob.card ?? undefined,
-                });
-              }
-            }
-          }
-        }
+        const full = version === undefined;
+        version = page.version;
+        const changed = new Map(page.jobs.map((g) => [g.id, g]));
+        const deleted = new Set(page.deleted);
+        setGenerations((prev) => {
+          // A full load replaces everything except jobs just submitted from this tab that
+          // Studio has not listed yet; an incremental one patches changed jobs in.
+          const kept = prev.filter((g) => {
+            if (deleted.has(g.id) || changed.has(g.id)) return false;
+            return full ? g.status === 'queued' && !g.completedAt && Date.now() - g.createdAt < 30_000 : true;
+          });
+          return [...kept, ...changed.values()].sort(newestFirst);
+        });
       } catch {
-        // Manager offline or network hiccup; retry next interval
+        // Studio offline or network hiccup; retry next interval
       } finally {
         isPolling = false;
         if (!isCancelled) {
@@ -261,7 +165,6 @@ export function App() {
     pollJobsRef.current = pollJobs;
     pollJobs();
 
-    // Refresh immediately on tab focus per ARCHITECTURE.md §7
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         pollJobs();
@@ -274,35 +177,7 @@ export function App() {
       if (timerId) clearTimeout(timerId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [updateGeneration]);
-
-  // Backfill enhanced prompt & thinking for historical generations if missing
-  const checkedEnhancedIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const missingEnhanced = generations.filter(
-      (g) =>
-        g.params.enhance &&
-        !g.enhancedPrompt &&
-        (g.status === 'done' || g.status === 'failed') &&
-        !checkedEnhancedIdsRef.current.has(g.id)
-    );
-    if (missingEnhanced.length === 0) return;
-
-    for (const gen of missingEnhanced) {
-      checkedEnhancedIdsRef.current.add(gen.id);
-      fetchJobDetailApi(gen.id)
-        .then((job) => {
-          if (job && (job.enhanced_prompt || job.thinking)) {
-            const clean = job.enhanced_prompt ? sanitizeEnhancedPrompt(job.enhanced_prompt) : undefined;
-            updateGeneration(gen.id, {
-              enhancedPrompt: clean,
-              thinking: job.thinking || undefined,
-            });
-          }
-        })
-        .catch(() => {});
-    }
-  }, [generations, updateGeneration]);
+  }, []);
 
   // Submit one turn: `count` jobs with consecutive seeds, sent as one batch
   const handleSubmitTurn = async (prompt: string, params: JobParams) => {
@@ -334,13 +209,17 @@ export function App() {
       payloads.push({
         id: jobId,
         prompt,
-        aspect: params.aspect,
         width: params.width,
         height: params.height,
         steps: params.steps,
         seed,
         enhance: params.enhance || false,
-        decode_mode: 'untiled',
+        meta: {
+          batch_id: batchId,
+          aspect: params.aspect,
+          size_multiplier: params.sizeMultiplier,
+          quality: params.quality,
+        },
       });
     }
 
@@ -355,7 +234,7 @@ export function App() {
         for (const gen of newGenerations) {
           updateGeneration(gen.id, {
             status: 'failed',
-            error: res.error || 'Failed to submit job to Manager',
+            error: res.error || 'Failed to submit job',
           });
         }
       } else {
@@ -374,17 +253,21 @@ export function App() {
     }
   };
 
-  // Cancel Job on Manager
   const handleCancelJob = async (jobId: string) => {
     await cancelJobApi(jobId);
     updateGeneration(jobId, { status: 'cancelled' });
+    pollJobsRef.current?.();
   };
 
   // Toggle Favorite
-  const handleToggleFavorite = (id: string) => {
-    setGenerations((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, favorite: !g.favorite } : g))
-    );
+  const handleToggleFavorite = async (id: string) => {
+    const gen = generationsRef.current.find((g) => g.id === id);
+    if (!gen) return;
+    const favorite = !gen.favorite;
+    updateGeneration(id, { favorite });
+    if (!(await setFavoriteApi(id, favorite))) {
+      updateGeneration(id, { favorite: !favorite });
+    }
   };
 
   // Vary: Same prompt & params, new random seed
@@ -399,17 +282,6 @@ export function App() {
   // Rerun Exact: Same prompt, exact same seed
   const handleRerunExact = (gen: Generation) => {
     handleSubmitTurn(gen.prompt, { ...gen.params });
-  };
-
-  // Rerun Enhanced: Rerun generation only, keeping the enhanced prompt as is (skips re-enhancement)
-  const handleRerunEnhanced = (gen: Generation) => {
-    const promptText = sanitizeEnhancedPrompt(gen.enhancedPrompt);
-    if (!promptText) return;
-    handleSubmitTurn(promptText, {
-      ...gen.params,
-      enhance: false, // Run generation directly with enhanced prompt
-    });
-    if (lightboxGenId) setLightboxGenId(null);
   };
 
   // Reuse Enhanced Settings: Load enhanced prompt into Composer with enhance disabled
@@ -430,14 +302,20 @@ export function App() {
     if (lightboxGenId) setLightboxGenId(null);
   };
 
-  // Retry Failed Job
-  const handleRetry = (gen: Generation) => {
-    handleSubmitTurn(gen.prompt, { ...gen.params });
+  // Retry Failed Job (V3: re-queues failed task in place if intermediate artifacts still exist, else re-submits)
+  const handleRetry = async (gen: Generation) => {
+    const ok = await retryJobApi(gen.id);
+    if (ok) {
+      updateGeneration(gen.id, { status: 'queued', phase: 'queued', error: undefined });
+      pollJobsRef.current?.();
+    } else {
+      handleSubmitTurn(gen.prompt, { ...gen.params });
+    }
   };
 
   // Delete a single generation card
   const handleDeleteGeneration = async (id: string) => {
-    await deleteImageBlob(id);
+    if (!(await deleteJobApi(id))) return;
     setGenerations((prev) => prev.filter((g) => g.id !== id));
     if (lightboxGenId === id) {
       setLightboxGenId(null);
@@ -447,11 +325,12 @@ export function App() {
   // Delete an entire turn / batch
   const handleDeleteTurn = async (batchId: string) => {
     const toDelete = generations.filter((g) => g.batchId === batchId);
+    const deleted = new Set<string>();
     for (const g of toDelete) {
-      await deleteImageBlob(g.id);
+      if (await deleteJobApi(g.id)) deleted.add(g.id);
     }
-    setGenerations((prev) => prev.filter((g) => g.batchId !== batchId));
-    if (toDelete.some((g) => g.id === lightboxGenId)) {
+    setGenerations((prev) => prev.filter((g) => !deleted.has(g.id)));
+    if (lightboxGenId && deleted.has(lightboxGenId)) {
       setLightboxGenId(null);
     }
   };
@@ -547,7 +426,6 @@ export function App() {
               onRetry={handleRetry}
               onCancel={handleCancelJob}
               onSelectPrompt={handleSelectSamplePrompt}
-              onRerunEnhanced={handleRerunEnhanced}
               onReuseEnhanced={handleReuseEnhanced}
               onDelete={handleDeleteGeneration}
               onDeleteTurn={handleDeleteTurn}
@@ -571,6 +449,7 @@ export function App() {
         onSubmit={handleSubmitTurn}
         isSubmitting={isSubmitting}
         workerState={workerHealth.state}
+        capabilities={capabilities}
         prefilledPrompt={prefilledPrompt}
         prefilledAspect={prefilledAspect}
         onClearPrefill={() => {
@@ -606,7 +485,6 @@ export function App() {
           onVary={handleVary}
           onReuseSettings={handleReuseSettings}
           onRerunExact={handleRerunExact}
-          onRerunEnhanced={handleRerunEnhanced}
           onReuseEnhanced={handleReuseEnhanced}
           onDelete={handleDeleteGeneration}
         />

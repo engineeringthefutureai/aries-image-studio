@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  - local: ["python3", "-m", "grpc_tools.protoc"]
+    out: backend
+    opt:
+      - python_out=backend
+      - grpc_python_out=backend

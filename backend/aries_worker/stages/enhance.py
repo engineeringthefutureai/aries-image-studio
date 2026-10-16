@@ -140,7 +140,7 @@ def _parse_enhanced_json(result_text: str, original_prompt: str) -> Dict[str, An
 
 
 class EnhanceCancelled(Exception):
-    """Raised from the streamer when the manager cancels the job."""
+    """Raised from the streamer when the agent cancels the job."""
 
 
 def _flatten_ids(value: Any) -> Iterator[int]:

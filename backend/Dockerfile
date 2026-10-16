@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common gpg-agent ca-certificates curl git \
+        software-properties-common gpg-agent ca-certificates curl git pciutils \
     && add-apt-repository -y ppa:kobuk-team/intel-graphics \
     && apt-get update && apt-get install -y --no-install-recommends \
         libze1 libze-intel-gpu1 intel-opencl-icd python3 python3-venv \
@@ -22,20 +22,25 @@ RUN uv venv --python 3.12 /opt/venv
 RUN uv pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu
 
 # Install supporting ML packages and git diffusers
-RUN uv pip install "transformers>=5.17" accelerate safetensors pillow psutil
+RUN uv pip install "transformers>=5.17" accelerate safetensors pillow
 RUN uv pip install "git+https://github.com/huggingface/diffusers.git"
 
-# Install API and telemetry packages
-RUN uv pip install fastapi "uvicorn[standard]" prometheus-client
+# Install V3 thin agent and worker dependencies (gRPC, protobuf, httpx, prometheus-client)
+RUN uv pip install "grpcio>=1.84.0" "protobuf>=7.35.1" "httpx>=0.27.0" "prometheus-client>=0.20.0" "safetensors>=0.4.0"
 
 # Assert torch build is the XPU build
 RUN python -c "import torch; assert '+xpu' in torch.__version__, f'Unexpected torch version: {torch.__version__}'"
 
 WORKDIR /app
-COPY aries_manager/ /app/aries_manager/
+COPY pyproject.toml /app/
+COPY aries/ /app/aries/
+COPY aries_agent/ /app/aries_agent/
 COPY aries_worker/ /app/aries_worker/
 
-EXPOSE 8000
+RUN uv pip install --no-deps -e /app
 
-# faulthandler: a GPU fault can kill the process; leave a Python stack behind.
-CMD ["python", "-X", "faulthandler", "-m", "aries_manager", "--host", "0.0.0.0", "--port", "8000"]
+# Expose agent Prometheus metrics port (default 9464)
+EXPOSE 9464
+
+# Run the thin agent process
+CMD ["python", "-X", "faulthandler", "-m", "aries_agent"]

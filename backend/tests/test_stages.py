@@ -3,14 +3,9 @@ from unittest.mock import MagicMock, patch
 
 # In CPU test environments without Intel XPU / PyTorch wheels installed,
 # inject test doubles for external ML packages so stage runner units can be tested.
-mock_torch = MagicMock()
-mock_torch.xpu.is_available.return_value = False
-mock_torch.xpu.device_count.return_value = 0
-sys.modules["torch"] = mock_torch
-sys.modules["diffusers"] = MagicMock()
-sys.modules["transformers"] = MagicMock()
-sys.modules["transformers.generation"] = MagicMock()
-sys.modules["transformers.generation.streamers"] = MagicMock()
+import _ml_stubs
+
+mock_torch = _ml_stubs.install()
 
 import asyncio
 import json
@@ -223,102 +218,71 @@ def test_enhance_runner_progress_cb(test_job_dir):
 
 
 def test_encode_runner_execution(test_job_dir):
-    """Test EncodeStageRunner saving embeds.pt."""
+    """EncodeStageRunner encodes the prompt Studio resolved and writes embeds.safetensors."""
     runner = EncodeStageRunner()
-
     mock_pipe = MagicMock()
-    mock_embeds = MagicMock()
-    mock_embeds.shape = [1, 20, 4096]
-    mock_embeds.cpu.return_value = "cpu_embeds"
-    mock_mask = MagicMock()
-    mock_mask.cpu.return_value = "cpu_mask"
-    mock_pad = MagicMock()
-    mock_pad.cpu.return_value = "cpu_pad"
-
-    mock_pipe.encode_prompt.return_value = (mock_embeds, mock_mask, mock_pad)
+    mock_pipe.encode_prompt.return_value = (MagicMock(), MagicMock(), MagicMock())
     runner.pipe = mock_pipe
-    runner.device = "xpu:0"
+    paths = {"embeds_safetensors": str(test_job_dir / "embeds.safetensors")}
 
-    paths = {
-        "embeds_pt": str(test_job_dir / "embeds.pt"),
-        "enhanced_json": str(test_job_dir / "enhanced.json"),  # file does not exist
-    }
+    with patch("aries_worker.stages.encode.atomic_safetensors_save", return_value=64) as save:
+        timings, _ = runner.run_job(
+            "job-456", paths, {"prompt": "enhanced neon alley", "prompt_source": "enhanced"}
+        )
+        assert "encode_s" in timings and "save_s" in timings
+        assert timings["prompt_source"] == "enhanced"
+        tensors, path = save.call_args[0]
+        assert set(tensors) == {"prompt_embeds", "prompt_embeds_mask", "image_pad_mask"}
+        assert save.call_args[1]["metadata"]["prompt"] == "enhanced neon alley"
+        assert str(path) == paths["embeds_safetensors"]
 
-    with patch("torch.save") as mock_save:
-        mock_save.side_effect = lambda obj, f: f.write(b"dummy")
-
-        # 1. Without enhance flag (default): encodes original prompt, ignores non-existent enhanced.json
-        timings, peak = runner.run_job("job-456", paths, {"prompt": "cyberpunk alley", "enhance": False})
-        assert "encode_s" in timings
-        assert "save_s" in timings
-        mock_save.assert_called_once()
-        saved_dict = mock_save.call_args[0][0]
-        assert saved_dict["prompt_embeds"] == "cpu_embeds"
-        assert saved_dict["prompt_source"] == "original"
-        assert saved_dict["prompt"] == "cyberpunk alley"
-
-        # 2. With enhance=True and missing file: must raise FileNotFoundError
-        mock_save.reset_mock()
-        with pytest.raises(FileNotFoundError):
-            runner.run_job("job-456", paths, {"prompt": "cyberpunk alley", "enhance": True})
-
-        # 3. With enhance=True and present file: encodes rewritten prompt
-        enh_file = Path(paths["enhanced_json"])
-        enh_file.write_text(json.dumps({"rewritten_prompt": "enhanced neon cyberpunk alley"}))
-        timings_enh, peak_enh = runner.run_job("job-456", paths, {"prompt": "cyberpunk alley", "enhance": True})
-        assert timings_enh["prompt_source"] == "enhanced"
-        saved_dict_enh = mock_save.call_args[0][0]
-        assert saved_dict_enh["prompt"] == "enhanced neon cyberpunk alley"
-        assert saved_dict_enh["prompt_source"] == "enhanced"
+    with pytest.raises(ValueError):
+        runner.run_job("job-456", paths, {"prompt": ""})
 
 
 def test_denoise_runner_execution(test_job_dir):
-    """Test DenoiseStageRunner progress reporting, latent saving, and embeds.pt removal."""
+    """DenoiseStageRunner reports progress and writes latent.safetensors."""
     runner = DenoiseStageRunner()
-
-    # Create dummy embeds.pt
-    embeds_path = test_job_dir / "embeds.pt"
-    embeds_path.write_bytes(b"dummy_embeds_content")
-
+    embeds_path = test_job_dir / "embeds.safetensors"
+    embeds_path.write_bytes(b"x")
     mock_pipe = MagicMock()
-    mock_latent = MagicMock()
-    mock_latent.detach.return_value.cpu.return_value = "cpu_latent"
-    mock_pipe.return_value.images = mock_latent
+
+    def fake_pipe(**kwargs):
+        for step in range(kwargs["num_inference_steps"]):
+            kwargs["callback_on_step_end"](mock_pipe, step, None, {})
+        out = MagicMock()
+        out.images.detach.return_value.cpu.return_value = MagicMock()
+        return out
+
+    mock_pipe.side_effect = fake_pipe
     runner.pipe = mock_pipe
-    runner.is_loaded = True
-
-    paths = {
-        "embeds_pt": str(embeds_path),
-        "latent_pt": str(test_job_dir / "latent.pt"),
-    }
-
+    paths = {"embeds_safetensors": str(embeds_path), "latent_safetensors": str(test_job_dir / "latent.safetensors")}
     progress_reports = []
 
-    def on_progress(step, steps, sps):
-        progress_reports.append((step, steps, sps))
-
-    with patch("torch.load") as mock_load, patch("torch.save") as mock_save, patch("torch.Generator"):
-        mock_save.side_effect = lambda obj, f: f.write(b"dummy")
-        mock_load.return_value = {"prompt_embeds": "fake_emb"}
-        timings, peak = runner.run_job(
+    with (
+        patch("aries_worker.stages.denoise.load_safetensors_with_metadata") as load,
+        patch("aries_worker.stages.denoise.atomic_safetensors_save", return_value=64) as save,
+        patch("torch.Generator"),
+    ):
+        load.return_value = ({"prompt_embeds": MagicMock()}, {"prompt_source": "original"})
+        timings, _ = runner.run_job(
             "job-789",
             paths,
             {"steps": 10, "seed": 42, "width": 2048, "height": 2048},
-            progress_cb=on_progress,
+            progress_cb=lambda step, steps, sps: progress_reports.append((step, steps)),
         )
 
-        assert "denoise_s" in timings
-        assert timings["steps"] == 10
-        mock_save.assert_called_once()
-        # Check embeds.pt was unlinked
-        assert not embeds_path.exists()
+    assert "denoise_s" in timings and timings["steps"] == 10
+    assert progress_reports[-1] == (10, 10)
+    save.assert_called_once()
+    assert save.call_args[1]["metadata"]["seed"] == "42"
 
 
 def test_decode_runner_execution(test_job_dir):
-    """Test DecodeStageRunner loading latent.pt and writing image.png."""
+    """DecodeStageRunner unpacks a packed latent from latent.safetensors and writes image.png."""
     runner = DecodeStageRunner()
 
-    latent_path = test_job_dir / "latent.pt"
+    latent_path = test_job_dir / "latent.safetensors"
     latent_path.write_bytes(b"dummy_latent_content")
 
     mock_vae = MagicMock()
@@ -326,7 +290,7 @@ def test_decode_runner_execution(test_job_dir):
     runner.is_loaded = True
 
     paths = {
-        "latent_pt": str(latent_path),
+        "latent_safetensors": str(latent_path),
         "image_png": str(test_job_dir / "image.png"),
     }
 
@@ -352,15 +316,14 @@ def test_decode_runner_execution(test_job_dir):
     fake_3d_latents.transpose.return_value.reshape.return_value = fake_5d_latents
     fake_3d_latents.to.return_value = fake_3d_latents
 
-    with patch("torch.load") as mock_load, patch("PIL.Image.fromarray") as mock_fromarray:
+    with (
+        patch("aries_worker.stages.decode.load_safetensors_with_metadata") as mock_load,
+        patch("PIL.Image.fromarray") as mock_fromarray,
+    ):
         fake_img = Image.new("RGB", (64, 64), color="blue")
         mock_fromarray.return_value = fake_img
 
-        mock_load.return_value = {
-            "latent": fake_3d_latents,
-            "width": 64,
-            "height": 64,
-        }
+        mock_load.return_value = ({"latent": fake_3d_latents}, {"width": "64", "height": "64"})
 
         timings, peak = runner.run_job(
             "job-decode",
@@ -385,6 +348,8 @@ async def test_worker_socket_client_full_cycle(test_job_dir):
         line = await reader.readline()
         hello = json.loads(line.decode("utf-8"))
         assert hello["event"] == "hello"
+        assert "pci" in hello
+        assert isinstance(hello["devices"], list)
 
         # 2. Read claim
         line = await reader.readline()
@@ -427,7 +392,6 @@ async def test_worker_socket_client_full_cycle(test_job_dir):
 
     client = WorkerSocketClient(
         stage="encode",
-        card=0,
         socket_path=str(sock_path),
         runner=mock_runner,
         idle_grace=1.0,
@@ -436,3 +400,95 @@ async def test_worker_socket_client_full_cycle(test_job_dir):
     await client.run()
     server.close()
     await server.wait_closed()
+
+
+def test_v3_safetensors_encode_and_denoise(test_job_dir):
+    """Test V3 safetensors path for encode (with resolved prompt_source and metadata) and denoise (with CPU generator)."""
+    runner = EncodeStageRunner()
+    mock_pipe = MagicMock()
+    mock_embeds = MagicMock()
+    mock_embeds.cpu.return_value.contiguous.return_value = "contig_embeds"
+    mock_mask = MagicMock()
+    mock_mask.cpu.return_value.contiguous.return_value = "contig_mask"
+    mock_pipe.encode_prompt.return_value = (mock_embeds, mock_mask, None)
+    runner.pipe = mock_pipe
+
+    embeds_path = test_job_dir / "embeds.safetensors"
+    with patch("aries_worker.stages.encode.atomic_safetensors_save") as mock_st_save:
+        mock_st_save.return_value = 512
+        timings, _ = runner.run_job(
+            "task-enc-v3",
+            {"embeds_safetensors": str(embeds_path)},
+            {
+                "prompt": "resolved enhanced prompt",
+                "prompt_source": "enhanced",
+                "model_id": "Qwen/Qwen-Image-2.1",
+                "model_rev": "rev123",
+                "model_dtype": "bf16",
+            },
+        )
+        assert timings["prompt_source"] == "enhanced"
+        mock_st_save.assert_called_once()
+        tensors_arg, path_arg = mock_st_save.call_args[0]
+        meta_arg = mock_st_save.call_args[1]["metadata"]
+        assert tensors_arg["prompt_embeds"] == "contig_embeds"
+        assert meta_arg["prompt"] == "resolved enhanced prompt"
+        assert meta_arg["prompt_source"] == "enhanced"
+        assert meta_arg["model"] == "Qwen/Qwen-Image-2.1"
+        assert meta_arg["rev"] == "rev123"
+        assert meta_arg["dtype"] == "bf16"
+
+    # Denoise with safetensors and CPU generator check
+    den_runner = DenoiseStageRunner()
+    den_pipe = MagicMock()
+    mock_lat = MagicMock()
+    mock_lat.detach.return_value.cpu.return_value.contiguous.return_value = "contig_latent"
+    den_pipe.return_value.images = mock_lat
+    den_runner.pipe = den_pipe
+
+    embeds_path.write_bytes(b"fake_safetensors")
+    latent_path = test_job_dir / "latent.safetensors"
+    with (
+        patch("aries_worker.stages.denoise.load_safetensors_with_metadata") as mock_st_load,
+        patch("aries_worker.stages.denoise.atomic_safetensors_save") as mock_st_save_den,
+        patch("torch.Generator") as mock_gen_cls,
+    ):
+        mock_st_load.return_value = (
+            {"prompt_embeds": "fake_emb"},
+            {"prompt_source": "enhanced", "model": "Qwen/Qwen-Image-2.1", "rev": "rev123", "dtype": "bf16"},
+        )
+        mock_st_save_den.return_value = 2048
+        den_timings, _ = den_runner.run_job(
+            "task-den-v3",
+            {"embeds_safetensors": str(embeds_path), "latent_safetensors": str(latent_path)},
+            {"width": 2048, "height": 2048, "steps": 20, "seed": 777, "true_cfg_scale": 1.0},
+        )
+        # Verify noise generator was created on "cpu" per V3 §3.1
+        mock_gen_cls.assert_called_once_with("cpu")
+        assert den_timings["prompt_source"] == "enhanced"
+        mock_st_save_den.assert_called_once()
+
+
+
+def test_pci_from_level_zero_uuid():
+    from aries_worker.stages.loader import pci_from_level_zero_uuid
+
+    # As reported by torch.xpu on the two Arc Pro B60 cards of the reference host.
+    assert pci_from_level_zero_uuid("868011e2-0000-0000-0400-000000000000") == "0000:04:00.0"
+    assert pci_from_level_zero_uuid("868011e2-0000-0000-0800-000000000000") == "0000:08:00.0"
+    assert pci_from_level_zero_uuid("de10f0ab-0000-0000-0100-000000000000") == ""  # not Intel
+    assert pci_from_level_zero_uuid("garbage") == ""
+
+
+def test_probe_xpu_devices_ignores_phantom_count(monkeypatch):
+    """device_count() says 2 under a one-card selector; only index 0 opens."""
+    from aries_worker.stages import loader
+
+    def props(idx):
+        if idx > 0:
+            raise RuntimeError("The device index is out of range. It must be in [0, 1)")
+        return MagicMock(uuid="868011e2-0000-0000-0800-000000000000")
+
+    monkeypatch.setattr(loader.torch.xpu, "device_count", lambda: 2)
+    monkeypatch.setattr(loader.torch.xpu, "get_device_properties", props)
+    assert loader.probe_xpu_devices() == ["0000:08:00.0"]

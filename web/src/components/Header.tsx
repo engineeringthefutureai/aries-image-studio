@@ -27,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (workerHealth.state === 'offline') {
       return {
         label: 'Backend Offline',
+        short: 'Offline',
         dotClass: 'bg-rose-500',
         bgClass: 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-500/30',
         ping: true,
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (workerHealth.state === 'error') {
       return {
         label: 'Hardware Error',
+        short: 'Error',
         dotClass: 'bg-red-500',
         bgClass: 'bg-red-500/10 text-red-800 dark:text-red-300 border-red-500/30',
         ping: false,
@@ -47,6 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
       const summary = runningCards.map((c) => `GPU ${c.card}: ${c.stage}`).join(', ');
       return {
         label: `Busy (${summary})`,
+        short: 'Busy',
         dotClass: 'bg-amber-500',
         bgClass: 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20',
         ping: true,
@@ -56,6 +59,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (workerHealth.state === 'busy') {
       return {
         label: 'Busy',
+        short: 'Busy',
         dotClass: 'bg-amber-500',
         bgClass: 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20',
         ping: true,
@@ -64,6 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
 
     return {
       label: 'Ready',
+      short: 'Ready',
       dotClass: 'bg-emerald-500',
       bgClass: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border-emerald-500/20',
       ping: false,
@@ -74,12 +79,12 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#e5e2db] dark:border-[#272724] bg-[#fcf9f2]/85 dark:bg-[#151512]/85 backdrop-blur-md transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-4">
         {/* Brand / Logo */}
         <div className="flex items-center gap-3">
           <Logo className="w-9 h-9 shrink-0 drop-shadow-sm" />
           <div className="flex items-center gap-2">
-            <span className="font-['Plus_Jakarta_Sans'] font-bold text-lg text-[#1c1c18] dark:text-[#fcf9f2] tracking-tight">
+            <span className="hidden sm:inline font-['Plus_Jakarta_Sans'] font-bold text-lg text-[#1c1c18] dark:text-[#fcf9f2] tracking-tight whitespace-nowrap">
               Aries Image Studio
             </span>
             <span className="font-mono text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded-full bg-[#ebe8e1] dark:bg-[#252522] text-[#8c7169] dark:text-[#a09088] leading-none hidden sm:inline-flex items-center">
@@ -92,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center bg-[#f1eee7] dark:bg-[#20201d] p-1 rounded-full border border-[#e5e2db]/50 dark:border-[#2d2d2a]">
           <button
             onClick={() => onViewChange('timeline')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
               activeView === 'timeline'
                 ? 'bg-[#a53705] text-white shadow-sm'
                 : 'text-[#58423a] dark:text-[#a09088] hover:text-[#1c1c18] dark:hover:text-[#fcf9f2]'
@@ -106,7 +111,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onViewChange('gallery')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
               activeView === 'gallery'
                 ? 'bg-[#a53705] text-white shadow-sm'
                 : 'text-[#58423a] dark:text-[#a09088] hover:text-[#1c1c18] dark:hover:text-[#fcf9f2]'
@@ -121,12 +126,12 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Right Actions: Status Pill, Theme, Shortcuts */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Status Pill */}
           <button
             onClick={onOpenStatus}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors shadow-2xs hover:opacity-90 ${statusInfo.bgClass}`}
-            title="Click to view hardware telemetry and queue status"
+            title={`${statusInfo.label}. Click to view hardware telemetry and queue status`}
           >
             <span className="relative flex h-2 w-2">
               {statusInfo.ping && (
@@ -136,7 +141,9 @@ export const Header: React.FC<HeaderProps> = ({
               )}
               <span className={`relative inline-flex rounded-full h-2 w-2 ${statusInfo.dotClass}`} />
             </span>
-            <span>{statusInfo.label}</span>
+            {/* Full detail ("Busy (GPU 0: denoise, …)") only where it fits */}
+            <span className="whitespace-nowrap lg:hidden">{statusInfo.short}</span>
+            <span className="whitespace-nowrap hidden lg:inline">{statusInfo.label}</span>
             {workerHealth.state === 'offline' && <AlertTriangle className="w-3.5 h-3.5 ml-0.5" />}
           </button>
 
@@ -152,7 +159,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Keyboard Shortcuts Dialog */}
           <button
             onClick={onOpenShortcuts}
-            className="w-8 h-8 rounded-full flex items-center justify-center bg-[#f1eee7] dark:bg-[#20201d] text-[#58423a] dark:text-[#a09088] hover:text-[#1c1c18] dark:hover:text-[#fcf9f2] transition-colors"
+            className="w-8 h-8 rounded-full hidden sm:flex items-center justify-center bg-[#f1eee7] dark:bg-[#20201d] text-[#58423a] dark:text-[#a09088] hover:text-[#1c1c18] dark:hover:text-[#fcf9f2] transition-colors"
             title="Keyboard shortcuts (?)"
           >
             <HelpCircle className="w-4 h-4" />

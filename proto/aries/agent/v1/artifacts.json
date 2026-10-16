@@ -1,0 +1,48 @@
+{
+  "_comment": "Stage artifact contract between the Python stage workers and the Rust backend's upload checks. backend/tests/test_contract.py checks the workers write this; studio/tests/contract_test.rs checks the backend requires exactly this. Optional masks are omitted when the pipeline returns None (no padding).",
+  "enhanced.json": {
+    "fields": [
+      "rewritten_prompt"
+    ],
+    "optional_fields": [
+      "wh_ratio",
+      "thinking"
+    ]
+  },
+  "embeds.safetensors": {
+    "tensors": [
+      "prompt_embeds"
+    ],
+    "optional_tensors": [
+      "prompt_embeds_mask",
+      "image_pad_mask"
+    ],
+    "tensors_when_cfg": [
+      "negative_prompt_embeds"
+    ],
+    "optional_tensors_when_cfg": [
+      "negative_prompt_embeds_mask"
+    ],
+    "metadata": [
+      "prompt",
+      "prompt_source",
+      "model",
+      "rev",
+      "dtype"
+    ]
+  },
+  "latent.safetensors": {
+    "tensors": [
+      "latent"
+    ],
+    "metadata": [
+      "model",
+      "rev",
+      "dtype",
+      "width",
+      "height",
+      "seed",
+      "steps"
+    ]
+  }
+}
