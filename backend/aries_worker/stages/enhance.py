@@ -277,11 +277,14 @@ class EnhanceStageRunner:
         logger.info("Loading Qwen-Image-2.1-PE-T2I from %s...", model_path)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        # bf16, or a torchao-quantized checkpoint (its config carries the quantization);
+        # device_map puts the weights straight on the card either way.
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
+            device_map=get_device(),
             trust_remote_code=True,
-        ).to(get_device())
+        )
 
         self.load_s = round(time.monotonic() - t0, 3)
         logger.info("Enhance model loaded in %.2fs", self.load_s)

@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
-import { type Generation, type AspectRatio, ASPECT_RATIOS } from '../types';
+import { type Generation, type AspectRatio, ASPECT_RATIOS, SIZE_MULTIPLIERS } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
+import { groupTurns } from '../utils/turns';
 import { Logo } from './Logo';
+import { BatchCarousel } from './BatchCarousel';
+import { PageLoader } from './PageLoader';
 import { formatDuration, generationSeconds, queueSeconds } from '../utils/timings';
 import {
   Heart,
@@ -19,7 +22,7 @@ import {
   AlertCircle,
   Loader2,
   Trash2,
-  Sliders,
+  Grid2x2,
 } from 'lucide-react';
 
 /** Enhancer token limit, for progress from workers that do not report `max_new_tokens`. */
@@ -29,17 +32,55 @@ const ENHANCE_EXPECTED_SHARE = 0.85;
 // Prompts longer than this (e.g. an enhanced prompt sent back from the composer) are clamped.
 const LONG_PROMPT_CHARS = 280;
 
+/**
+ * Settings that can differ between a turn's images (the composer's rows), as short text.
+ * Enhance and tiling show as icons instead (✦, ⊞), only when on.
+ */
+const DIFF_LABELS: ((g: Generation) => string)[] = [
+  (g) => g.params.aspect,
+  (g) => SIZE_MULTIPLIERS[g.params.sizeMultiplier || 'full'].badge,
+  (g) => `${g.params.steps}st`,
+];
+
+/** What sets an image apart from the rest of its turn, e.g. "3:2 12st" (empty if nothing). */
+const turnDiffLabel = (turn: Generation[], gen: Generation) =>
+  DIFF_LABELS.filter((label) => new Set(turn.map(label)).size > 1)
+    .map((label) => label(gen))
+    .join(' ');
+
+/** A batch pill's tooltip: everything about the image, spelled out. */
+const pillTitle = (gen: Generation, idx: number) =>
+  [
+    `Image ${idx + 1}`,
+    `seed ${gen.params.seed}`,
+    `${gen.params.aspect} ${SIZE_MULTIPLIERS[gen.params.sizeMultiplier || 'full'].label}`,
+    `${gen.params.steps} steps`,
+    gen.params.enhance && 'enhanced',
+    gen.params.tiling && 'tiled',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+/** `sizes` for a done tile: its width at the tile heights (190 / 220 / 240 px) per breakpoint. */
+const tileSizes = (ratio: number) =>
+  `(min-width: 768px) ${Math.ceil(240 * ratio)}px, (min-width: 640px) ${Math.ceil(220 * ratio)}px, ${Math.ceil(190 * ratio)}px`;
+
 interface TimelineProps {
   generations: Generation[];
   onOpenLightbox: (generation: Generation) => void;
   onToggleFavorite: (id: string) => void;
+  /** Fill the composer from an image with a new (random) seed. */
   onVary: (generation: Generation) => void;
+  /** Retry a failed or cancelled job in place. */
   onRetry: (generation: Generation) => void;
+  /** Fill the composer from an image with its seed locked. */
+  onRerun: (generation: Generation) => void;
   onCancel: (id: string) => void;
   onSelectPrompt: (prompt: string, aspect?: AspectRatio) => void;
-  onReuseEnhanced?: (generation: Generation) => void;
   onDelete?: (id: string) => void;
   onDeleteTurn?: (batchId: string) => void;
+  /** Studio's first job list has not arrived yet: show a loader, not the starter. */
+  loading?: boolean;
 }
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -48,36 +89,28 @@ export const Timeline: React.FC<TimelineProps> = ({
   onToggleFavorite,
   onVary,
   onRetry,
+  onRerun,
   onCancel,
   onSelectPrompt,
-  onReuseEnhanced,
   onDelete,
   onDeleteTurn,
+  loading = false,
 }) => {
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [expandedPrompt, setExpandedPrompt] = useState<Record<string, boolean>>({});
   const [selectedGenIdByTurn, setSelectedGenIdByTurn] = useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Group generations by batchId - reverse chronological (newest on top)
-  const turns = React.useMemo(() => {
-    const map = new Map<string, Generation[]>();
-    for (const gen of generations) {
-      const arr = map.get(gen.batchId) || [];
-      arr.push(gen);
-      map.set(gen.batchId, arr);
-    }
-    // Return sorted newest to oldest for timeline
-    return Array.from(map.values()).sort(
-      (a, b) => (b[0]?.createdAt || 0) - (a[0]?.createdAt || 0)
-    );
-  }, [generations]);
+  // Turns newest on top, each turn's images in send order (the viewer steps in this order too)
+  const turns = React.useMemo(() => groupTurns(generations), [generations]);
 
   const handleCopyPrompt = (prompt: string, id: string) => {
     navigator.clipboard.writeText(prompt);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
+
+  if (loading && turns.length === 0) return <PageLoader />;
 
   if (turns.length === 0) {
     const suggestions = [
@@ -209,6 +242,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                   </span>
                 )}
 
+                {/* VAE tiling (advanced) */}
+                {selectedGen.params.tiling && (
+                  <span className="w-full px-1 py-0.5 rounded-md bg-[#f1eee7] dark:bg-[#232320] text-[10px] text-center" title="Decoded with VAE tiling">
+                    tiled
+                  </span>
+                )}
+
                 {/* Precision */}
                 <span className="w-full px-1 py-0.5 rounded-md bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] text-center font-medium">
                   bf16
@@ -224,28 +264,21 @@ export const Timeline: React.FC<TimelineProps> = ({
             {/* 2. Center: Bounded-Height Image(s) Visual Tile */}
             <div
               className={`flex-initial min-w-0 max-w-full sm:max-w-[55%] md:max-w-[60%] flex items-center justify-start self-center sm:self-start ${
-                turn.length > 1 ? 'w-full sm:w-[55%] md:w-[60%]' : ''
+                turn.length > 1 ? 'w-full' : ''
               }`}
             >
-              <div
-                className={
-                  turn.length > 1
-                    ? 'grid grid-cols-1 lg:grid-cols-2 gap-3.5 py-2.5 px-1.5 w-full justify-items-center'
-                    : 'flex gap-3.5 py-2.5 px-1.5'
-                }
-              >
-                {turn.map((gen) => (
+              {(() => {
+                const select = (gen: Generation) =>
+                  setSelectedGenIdByTurn((prev) => ({
+                    ...prev,
+                    [primary.batchId]: gen.id,
+                  }));
+                const tiles = turn.map((gen) => (
                   <TileCard
                     key={gen.id}
                     gen={gen}
-                    compact={turn.length > 1}
                     isSelected={gen.id === selectedGen.id}
-                    onSelect={() =>
-                      setSelectedGenIdByTurn((prev) => ({
-                        ...prev,
-                        [primary.batchId]: gen.id,
-                      }))
-                    }
+                    onSelect={() => select(gen)}
                     onOpenLightbox={() => onOpenLightbox(gen)}
                     onToggleFavorite={() => onToggleFavorite(gen.id)}
                     onVary={() => onVary(gen)}
@@ -253,8 +286,20 @@ export const Timeline: React.FC<TimelineProps> = ({
                     onCancel={() => onCancel(gen.id)}
                     onDelete={onDelete ? () => onDelete(gen.id) : undefined}
                   />
-                ))}
-              </div>
+                ));
+                return turn.length > 1 ? (
+                  <BatchCarousel
+                    selectedIndex={selectedIdx}
+                    // Scroll only for an image the user picked, not as images finish.
+                    followSelection={Boolean(selectedGenIdByTurn[primary.batchId])}
+                    onSelect={(i) => select(turn[i])}
+                  >
+                    {tiles}
+                  </BatchCarousel>
+                ) : (
+                  <div className="flex gap-3.5 py-2.5 px-1.5">{tiles}</div>
+                );
+              })()}
             </div>
 
             {/* 3. Right: Content Details (Prompt, Enhanced Prompt, Reasoning & Toolbar) */}
@@ -269,7 +314,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                     <div className="flex flex-wrap items-center gap-1.5">
                       {turn.map((gen, idx) => {
                         const isCurrent = gen.id === selectedGen.id;
-                        const hasPrompt = Boolean(gen.enhancedPrompt);
+                        const enhanced = Boolean(gen.params.enhance || gen.enhancedPrompt);
+                        const diff = turnDiffLabel(turn, gen);
+                        const iconCls = `w-2.5 h-2.5 ${isCurrent ? 'text-amber-100' : 'text-amber-600 dark:text-amber-400'}`;
                         return (
                           <button
                             key={gen.id}
@@ -284,17 +331,14 @@ export const Timeline: React.FC<TimelineProps> = ({
                                 ? 'bg-amber-500 text-white font-semibold shadow-xs'
                                 : 'bg-[#f1eee7] dark:bg-[#232320] text-[#58423a] dark:text-[#a09088] hover:bg-[#e5e2db] dark:hover:bg-[#2e2e2a]'
                             }`}
-                            title={`Inspect image ${idx + 1} (Seed #${gen.params.seed})`}
+                            title={pillTitle(gen, idx)}
+                            aria-label={pillTitle(gen, idx)}
                           >
                             <span>#{idx + 1}</span>
-                            <span className="opacity-75 text-[10px]">({gen.params.seed})</span>
-                            {hasPrompt && (
-                              <Sparkles
-                                className={`w-2.5 h-2.5 ${
-                                  isCurrent ? 'text-amber-200' : 'text-amber-600 dark:text-amber-400'
-                                }`}
-                              />
-                            )}
+                            <span className="opacity-75 text-[10px]">{gen.params.seed}</span>
+                            {diff && <span className="opacity-90 text-[10px]">{diff}</span>}
+                            {enhanced && <Sparkles className={iconCls} />}
+                            {gen.params.tiling && <Grid2x2 className={iconCls} />}
                           </button>
                         );
                       })}
@@ -376,16 +420,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
-                        {onReuseEnhanced && (
-                          <button
-                            onClick={() => onReuseEnhanced(selectedGen)}
-                            className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[#58423a] dark:text-[#a09088] transition-colors"
-                            title="Load enhanced prompt into composer"
-                          >
-                            <Sliders className="w-3 h-3" />
-                            <span>To composer</span>
-                          </button>
-                        )}
                         <button
                           onClick={() => handleCopyPrompt(cleanEnhanced, `${selectedGen.id}-enh`)}
                           className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169] dark:text-[#a09088] transition-colors"
@@ -469,15 +503,15 @@ export const Timeline: React.FC<TimelineProps> = ({
                       <button
                         onClick={() => onVary(selectedGen)}
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#f1eee7] dark:bg-[#232320] hover:bg-[#e5e2db] dark:hover:bg-[#2e2e2a] text-[#1c1c18] dark:text-[#f3f0e9] transition-colors"
-                        title="Vary seed"
+                        title="Vary: fill the composer from this image with a new seed"
                       >
                         <Dices className="w-3.5 h-3.5" />
                         <span>Vary</span>
                       </button>
                       <button
-                        onClick={() => onRetry(selectedGen)}
+                        onClick={() => onRerun(selectedGen)}
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#f1eee7] dark:bg-[#232320] hover:bg-[#e5e2db] dark:hover:bg-[#2e2e2a] text-[#1c1c18] dark:text-[#f3f0e9] transition-colors"
-                        title="Rerun exact"
+                        title="Rerun: fill the composer from this image, seed locked"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Rerun</span>
@@ -528,8 +562,6 @@ export const Timeline: React.FC<TimelineProps> = ({
 interface TileCardProps {
   gen: Generation;
   isSelected?: boolean;
-  /** Batch tile: fills its grid column, no taller than a single tile. */
-  compact?: boolean;
   onSelect?: () => void;
   onOpenLightbox: () => void;
   onToggleFavorite: () => void;
@@ -542,7 +574,6 @@ interface TileCardProps {
 const TileCard: React.FC<TileCardProps> = ({
   gen,
   isSelected,
-  compact,
   onSelect,
   onOpenLightbox,
   onToggleFavorite,
@@ -553,10 +584,8 @@ const TileCard: React.FC<TileCardProps> = ({
 }) => {
   const aspectConfig = ASPECT_RATIOS[gen.params.aspect] || ASPECT_RATIOS['1:1'];
   const aspectRatioStyle = `${aspectConfig.ratioWidth} / ${aspectConfig.ratioHeight}`;
-  const tileHeight = compact ? 'w-full' : 'h-[190px] sm:h-[220px] md:h-[240px]';
-  const tileStyle: React.CSSProperties = compact
-    ? { aspectRatio: aspectRatioStyle, maxWidth: `${(240 * aspectConfig.ratioWidth) / aspectConfig.ratioHeight}px` }
-    : { aspectRatio: aspectRatioStyle };
+  const tileHeight = 'h-[190px] sm:h-[220px] md:h-[240px]';
+  const tileStyle: React.CSSProperties = { aspectRatio: aspectRatioStyle };
 
   // 1. DONE STATE
   if (gen.status === 'done') {
@@ -608,8 +637,11 @@ const TileCard: React.FC<TileCardProps> = ({
       >
         <img
           src={gen.thumbUrl || gen.imageUrl}
+          srcSet={gen.thumbSrcSet}
+          sizes={tileSizes(aspectConfig.ratioWidth / aspectConfig.ratioHeight)}
           alt={gen.prompt}
           loading="lazy"
+          decoding="async"
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-102"
         />
 
@@ -653,7 +685,7 @@ const TileCard: React.FC<TileCardProps> = ({
                   onVary();
                 }}
                 className="w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110"
-                title="Vary seed"
+                title="Vary: fill the composer from this image with a new seed"
               >
                 <Dices className="w-4 h-4" />
               </button>
@@ -1000,10 +1032,11 @@ const TileCard: React.FC<TileCardProps> = ({
               e.stopPropagation();
               onRetry();
             }}
+            title="Resume this job where it stopped"
             className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium bg-[#f1eee7] dark:bg-[#2c2c28] hover:bg-[#e5e2db] text-[#1c1c18] dark:text-[#f3f0e9]"
           >
             <RotateCcw className="w-3 h-3" />
-            <span>Rerun</span>
+            <span>Retry</span>
           </button>
           {onDelete && (
             <button

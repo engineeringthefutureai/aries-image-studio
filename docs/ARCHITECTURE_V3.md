@@ -189,7 +189,7 @@ Shown in proto3 JSON form for readability; the wire type is `Register` (§7.2).
     { "id": "xpu1", "device": "0000:08:00.0", "...": "same shape" }
   ],
   "limits": [
-    { "stage": "decode", "above_px": 1048576,
+    { "stage": "decode", "above_px": 3500000,
       "requires": { "host_ram_available_bytes": 6442450944, "max_concurrent_per_agent": 1 } }
   ],
   "running": []
@@ -318,8 +318,9 @@ default token: the backend refuses to start and the agent refuses to run without
   for a stale attempt get `409`, invalid payloads `422`. The agent retries other failures
   twice (after 1 s and 3 s) and then reports `upload_failed`.
 - Blobs are content-addressed (`blobs/<sha[0..2]>/<sha>`). On completion the backend
-  writes the job's metadata into the PNG (`tEXt` chunk `aries-image-studio`) and a 1024 px WebP
-  thumbnail. Intermediate artifacts are deleted when the job is done, after 24 h for
+  writes the job's metadata into the PNG (`tEXt` chunk `aries-image-studio`) and, in a
+  blocking task, JPEG thumbnails (quality 82) whose longer side is 512, 768 and 1024 px; a
+  missing one is made on request. Intermediate artifacts are deleted when the job is done, after 24 h for
   failed or cancelled jobs, or at once above the disk watermark.
 
 ---
@@ -328,19 +329,20 @@ default token: the backend refuses to start and the agent refuses to run without
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
+| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
 | `GET /api/jobs?changed_since=<version>` | `{version, jobs, deleted}`: jobs changed since a version (all without it), each with tasks (status, step, enhance `sub_stage` and `stats`), per-stage provenance, `meta` and `favorite`; `deleted` lists ids deleted since that version. Poll 1 s while anything is active, 10 s when idle |
 | `GET /api/jobs/{id}` · `PATCH /api/jobs/{id}` · `DELETE /api/jobs/{id}` | detail · `{favorite}` · delete (cancels first; history is user-owned) |
 | `GET /api/preferences` · `PUT /api/preferences` | the UI's preferences (composer settings, theme): one JSON object up to 16 KiB, `{}` until saved |
-| `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact |
-| `GET /api/images/{id}` · `/thumb` | PNG with metadata · WebP thumbnail |
+| `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact (`409` for any other state) |
+| `GET /api/images/{id}` · `/thumb?size=512\|768\|1024` | PNG with metadata · JPEG thumbnail (longer side; default 1024, `400` for other sizes). Both are sent with `Cache-Control: public, max-age=31536000, immutable`, since a finished job's image never changes |
 | `GET /api/system` | agents, executors, states, declared capabilities, latest scraped resources, scrape age, queue by stage, blocked reasons |
 | `GET /api/capabilities` | for the composer: max pixels and the full-size presets servable **now** vs **ever** |
 | `POST /api/executors/{id}/lend` · `/return` · `/disable` · `/enable` | operator controls |
 | `GET /metrics` | backend metrics (§9) |
 
 The SPA keeps nothing in browser storage: it renders what this API returns, shows images
-from `/api/images/{id}` (thumbnails in the grids) and writes favorites and preferences
+from `/api/images/{id}` (in the grids, the thumbnail size each tile needs through `srcset`;
+the viewer shows the 1024 px one until the PNG has loaded) and writes favorites and preferences
 back. There is no authentication on this API yet: keep the backend on a trusted network.
 
 ---
@@ -353,7 +355,9 @@ back. There is no authentication on this API yet: keep the backend on a trusted 
   `aries_artifacts_bytes{kind}`.
 - **Agent** (`/metrics`, scraped by the backend every second): host RAM available,
   per-executor memory used/total/overflow and state, worker load and task durations, task
-  outcomes and worker exits by class, reconnects.
+  outcomes and worker exits by class, reconnects. The same listener serves `/healthz`
+  (`200` while the agent runs: connected, connection age, uptime, executor states) and
+  `/readyz` (`200` once the backend's `Welcome` arrived, `503` while disconnected).
 - The backend's `/metrics` re-exports every agent's latest scrape with an `agent` label
   (one HELP/TYPE per family), so Prometheus needs a single target. A stale scrape is left
   out, so a sleeping GPU box drops out instead of going `down` and paging. The agent's own

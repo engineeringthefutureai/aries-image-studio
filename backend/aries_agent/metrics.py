@@ -1,6 +1,8 @@
-"""Prometheus metrics exporter for aries_agent (Architecture V3 §9)."""
+"""Prometheus metrics and health endpoints for aries_agent (Architecture V3 §9)."""
 import asyncio
+import json
 import logging
+import time
 from typing import Dict, Optional
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
@@ -82,7 +84,11 @@ class AgentMetrics:
 
         self._executor_pids: Dict[str, Optional[int]] = {}
         self._executor_devices: Dict[str, str] = {}
+        self._executor_states: Dict[str, str] = {}
         self._server: Optional[asyncio.Server] = None
+        self._started_at = time.monotonic()
+        self._connected = False
+        self._connection_changed_at = self._started_at
 
     def init_executor(self, executor_id: str, device: str, mem_total_bytes: int) -> None:
         self._executor_devices[executor_id] = device
@@ -92,7 +98,27 @@ class AgentMetrics:
         self.executor_mem_total_bytes.labels(executor=executor_id, device=device).set(mem_total_bytes)
         self.executor_mem_overflow_bytes.labels(executor=executor_id, device=device).set(0)
 
+    def set_connected(self, connected: bool) -> None:
+        """Studio session state: true once Studio has welcomed this agent."""
+        if connected != self._connected:
+            self._connected = connected
+            self._connection_changed_at = time.monotonic()
+        self.agent_connected.set(1 if connected else 0)
+
+    def health(self) -> dict:
+        """Body of /healthz and /readyz."""
+        now = time.monotonic()
+        return {
+            "status": "ok",
+            "connected": self._connected,
+            # Seconds since the agent last connected to or lost Studio.
+            "connection_age_s": round(now - self._connection_changed_at, 1),
+            "uptime_s": round(now - self._started_at, 1),
+            "executors": dict(self._executor_states),
+        }
+
     def set_executor_state(self, executor_id: str, active_state: str) -> None:
+        self._executor_states[executor_id] = active_state
         for st in EXECUTOR_STATES:
             self.executor_state.labels(executor=executor_id, state=st).set(1.0 if st == active_state else 0.0)
 
@@ -119,11 +145,11 @@ class AgentMetrics:
         return generate_latest(self.registry)
 
     async def start_http_server(self, host: str = "0.0.0.0", port: int = 9464) -> int:
-        """Start lightweight asyncio HTTP server for /metrics."""
+        """Start a small asyncio HTTP server: /metrics, /healthz (alive), /readyz (connected)."""
         self._server = await asyncio.start_server(self._handle_http, host=host, port=port)
         sockets = self._server.sockets or []
         bound_port = sockets[0].getsockname()[1] if sockets else port
-        logger.info("Agent /metrics HTTP server listening on %s:%d", host, bound_port)
+        logger.info("Agent /metrics, /healthz, /readyz listening on %s:%d", host, bound_port)
         return bound_port
 
     async def stop_http_server(self) -> None:
@@ -141,12 +167,26 @@ class AgentMetrics:
                     break
 
             parts = req_line.decode("utf-8", errors="ignore").split()
-            path = parts[1] if len(parts) >= 2 else "/"
+            path = (parts[1] if len(parts) >= 2 else "/").split("?", 1)[0]
             if path.startswith("/metrics"):
                 body = self.render_prometheus_text()
                 headers = (
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n"
+                    f"Content-Length: {len(body)}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode("utf-8")
+                writer.write(headers + body)
+            elif path in ("/healthz", "/readyz"):
+                # /healthz: the agent's event loop answers (liveness). /readyz: it also has
+                # a session with Studio, so it can receive work (503 while disconnected).
+                health = self.health()
+                ok = path == "/healthz" or health["connected"]
+                body = (json.dumps(health) + "\n").encode("utf-8")
+                headers = (
+                    f"HTTP/1.1 {'200 OK' if ok else '503 Service Unavailable'}\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Cache-Control: no-store\r\n"
                     f"Content-Length: {len(body)}\r\n"
                     "Connection: close\r\n\r\n"
                 ).encode("utf-8")

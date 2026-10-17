@@ -1,4 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +11,12 @@ use std::fs;
 use std::io::Cursor;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+/// Thumbnail sizes (longer side, px). Grid tiles are 160–430 CSS px wide: 512 covers them
+/// on ordinary screens, 768 and 1024 on high-density ones (1024 is also the viewer's
+/// placeholder). The browser picks via `srcset`.
+pub const THUMB_SIZES: [u32; 3] = [512, 768, 1024];
+const THUMB_JPEG_QUALITY: u8 = 82;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetensorsHeader {
@@ -44,6 +52,14 @@ impl BlobStore {
         fs::create_dir_all(data_dir.join("blobs"))?;
         fs::create_dir_all(data_dir.join("thumbs"))?;
         fs::create_dir_all(data_dir.join("tmp"))?;
+        // WebP thumbnails from before 0.3.1; JPEGs replace them on first request.
+        if let Ok(entries) = fs::read_dir(data_dir.join("thumbs")) {
+            for entry in entries.flatten() {
+                if entry.path().extension().is_some_and(|e| e == "webp") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
         Ok(Self { data_dir })
     }
 
@@ -56,8 +72,16 @@ impl BlobStore {
         self.data_dir.join("blobs").join(prefix).join(sha256)
     }
 
-    pub fn thumb_path(&self, job_id: &str) -> PathBuf {
-        self.data_dir.join("thumbs").join(format!("{job_id}.webp"))
+    /// Thumbnail of `job_id` whose longer side is `size` (one of [`THUMB_SIZES`]).
+    pub fn thumb_path(&self, job_id: &str, size: u32) -> PathBuf {
+        self.data_dir.join("thumbs").join(format!("{job_id}.{size}.jpg"))
+    }
+
+    /// Removes every thumbnail of `job_id`.
+    pub fn delete_thumbnails(&self, job_id: &str) {
+        for size in THUMB_SIZES {
+            let _ = fs::remove_file(self.thumb_path(job_id, size));
+        }
     }
 
     /// Computes SHA-256 hex digest of `bytes` and writes atomically to `blobs/<sha[0..2]>/<sha>`.
@@ -93,22 +117,32 @@ impl BlobStore {
         Ok(())
     }
 
-    pub fn write_thumbnail(&self, job_id: &str, png_bytes: &[u8]) -> Result<PathBuf> {
+    /// Writes a JPEG thumbnail at each of [`THUMB_SIZES`] (longer side, never upscaled).
+    /// CPU-heavy (decodes the full PNG): call it from a blocking task.
+    pub fn write_thumbnails(&self, job_id: &str, png_bytes: &[u8]) -> Result<()> {
         let img = image::load_from_memory_with_format(png_bytes, ImageFormat::Png)
             .context("failed to decode PNG for thumbnail")?;
-        let thumb = img.thumbnail(1024, 1024);
-        let mut buf = Cursor::new(Vec::new());
-        thumb
-            .write_to(&mut buf, ImageFormat::WebP)
-            .context("failed to encode WebP thumbnail")?;
-        let dest = self.thumb_path(job_id);
-        let tmp = self
-            .data_dir
-            .join("tmp")
-            .join(format!("thumb.{job_id}.{}.webp", ulid::Ulid::new()));
-        fs::write(&tmp, buf.into_inner())?;
-        fs::rename(&tmp, &dest)?;
-        Ok(dest)
+        // Largest first, each made from the previous one: cheaper, and the same quality.
+        let mut source = img;
+        for size in THUMB_SIZES.iter().rev().copied() {
+            let thumb = if source.width().max(source.height()) > size {
+                source.resize(size, size, FilterType::Lanczos3)
+            } else {
+                source.clone()
+            };
+            let mut buf = Cursor::new(Vec::new());
+            JpegEncoder::new_with_quality(&mut buf, THUMB_JPEG_QUALITY)
+                .encode_image(&thumb.to_rgb8())
+                .context("failed to encode JPEG thumbnail")?;
+            let tmp = self
+                .data_dir
+                .join("tmp")
+                .join(format!("thumb.{job_id}.{size}.{}.jpg", ulid::Ulid::new()));
+            fs::write(&tmp, buf.into_inner())?;
+            fs::rename(&tmp, self.thumb_path(job_id, size))?;
+            source = thumb;
+        }
+        Ok(())
     }
 
     /// Returns disk usage percentage (0.0..=100.0) of the filesystem containing `data_dir`.

@@ -137,7 +137,7 @@ fn sample_register_msg(agent_id: &str) -> proto::Register {
                         stage: proto::Stage::Decode as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
-                        modes: vec![proto::DecodeMode::Untiled as i32],
+                        modes: vec![proto::DecodeMode::Untiled as i32, proto::DecodeMode::Tiled as i32],
                     },
                 ],
             },
@@ -162,7 +162,7 @@ fn sample_register_msg(agent_id: &str) -> proto::Register {
                         stage: proto::Stage::Decode as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
-                        modes: vec![proto::DecodeMode::Untiled as i32],
+                        modes: vec![proto::DecodeMode::Untiled as i32, proto::DecodeMode::Tiled as i32],
                     },
                 ],
             },
@@ -362,7 +362,8 @@ async fn test_submit_feasibility_and_e2e_pipeline() {
             "steps": 4,
             "seed": 12345,
             "true_cfg_scale": 4.0,
-            "enhance": true
+            "enhance": true,
+            "tiling": true
         }))
         .send()
         .await
@@ -370,6 +371,7 @@ async fn test_submit_feasibility_and_e2e_pipeline() {
     assert_eq!(resp_ok.status(), 201);
     let created_job: Value = resp_ok.json().await.unwrap();
     let job_id = created_job["id"].as_str().unwrap().to_string();
+    assert_eq!(created_job["tiling"], true);
 
     // Drive all 4 stages: enhance -> encode -> denoise -> decode
     for expected_stage in [
@@ -520,7 +522,14 @@ async fn test_submit_feasibility_and_e2e_pipeline() {
                     ],
                 )
             }
-            proto::Stage::Decode => build_png_bytes(1024, 1024),
+            proto::Stage::Decode => {
+                // The job asked for tiling, so the decode assignment says tiled.
+                let Some(proto::assign::Params::Decode(dec_p)) = &assign.params else {
+                    panic!("expected DecodeParams");
+                };
+                assert_eq!(dec_p.mode, proto::DecodeMode::Tiled as i32);
+                build_png_bytes(1024, 1024)
+            }
             proto::Stage::Unspecified => unreachable!(),
         };
 
@@ -607,17 +616,35 @@ async fn test_submit_feasibility_and_e2e_pipeline() {
         "2.6.0+xpu"
     );
 
-    // Fetch WebP thumbnail
-    let thumb_resp = http
-        .get(format!("{}/api/images/{job_id}/thumb", harness.http_url))
+    // Thumbnails: JPEG at both sizes (written in the background, or on request), cacheable
+    for (query, size) in [("", 1024u32), ("?size=1024", 1024), ("?size=768", 768), ("?size=512", 512)] {
+        let thumb_resp = http
+            .get(format!("{}/api/images/{job_id}/thumb{query}", harness.http_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(thumb_resp.status(), 200);
+        assert_eq!(thumb_resp.headers().get("content-type").unwrap(), "image/jpeg");
+        assert!(thumb_resp.headers().get("cache-control").unwrap().to_str().unwrap().contains("immutable"));
+        let thumb = image::load_from_memory(&thumb_resp.bytes().await.unwrap()).unwrap();
+        // The decoded test image is 1024², so 1024 keeps it and the others shrink it.
+        assert_eq!((thumb.width(), thumb.height()), (size, size));
+    }
+    let bad = http
+        .get(format!("{}/api/images/{job_id}/thumb?size=300", harness.http_url))
         .send()
         .await
         .unwrap();
-    assert_eq!(thumb_resp.status(), 200);
-    assert_eq!(
-        thumb_resp.headers().get("content-type").unwrap(),
-        "image/webp"
-    );
+    assert_eq!(bad.status(), 400);
+
+    // Retrying a finished job is refused, and the job stays done with its image.
+    let retry = http
+        .post(format!("{}/api/jobs/{job_id}/retry", harness.http_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), 409);
+    assert_eq!(harness.state.db.get_job(&job_id).await.unwrap().unwrap().status, "done");
 
     // Verify intermediate artifacts were garbage collected while final artifact remains
     let (inter_bytes, final_bytes) = harness.state.db.artifact_bytes_by_kind().await.unwrap();
@@ -1237,6 +1264,14 @@ async fn test_all_composer_presets_are_feasible() {
     // Qwen-Image-2.1 floors sizes to multiples of 32 (1264 came back 1248): refuse at submit.
     let resp = submit(&harness, json!({ "prompt": "p", "width": 1264, "height": 848 })).await;
     assert_eq!(resp.status(), 422);
+    // Steps: the presets (12, 20, 40) and any custom count from 1 to 100.
+    for (steps, status) in [(1, 201), (12, 201), (20, 201), (40, 201), (100, 201), (0, 422), (101, 422)] {
+        let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024, "steps": steps })).await;
+        assert_eq!(resp.status(), status, "steps {steps}");
+    }
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024 })).await;
+    let job: Value = resp.json().await.unwrap();
+    assert_eq!(job["steps"], 20, "default is the Standard preset");
     let caps = aries_image_studio::scheduler::compute_capabilities(&harness.state.db).await.unwrap();
     assert!(caps.sizes.iter().all(|s| s.servable_ever), "{:?}", caps.sizes);
 }
@@ -1518,4 +1553,27 @@ fn test_enhance_request_states_the_job_ratio() {
         assert_eq!(aspect_label(w, h), label, "{w}x{h}");
     }
     assert_eq!(enhance_request("a sorcerer \n", 848, 1264), "a sorcerer\n\nAspect ratio: 2:3");
+}
+
+/// Tiling is per job: refused at submit when no executor declares tiled decode.
+#[tokio::test]
+async fn test_tiling_needs_an_executor_that_declares_it() {
+    let harness = start_test_harness().await;
+    let mut reg = sample_register_msg("aries");
+    for ex in &mut reg.executors {
+        for cap in &mut ex.stages {
+            if cap.stage == proto::Stage::Decode as i32 {
+                cap.modes = vec![proto::DecodeMode::Untiled as i32];
+            }
+        }
+    }
+    let _agent = connect_agent(&harness, reg).await;
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024, "tiling": true })).await;
+    assert_eq!(resp.status(), 422);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["rejected"].as_str().unwrap().contains("tiled"), "{body}");
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024 })).await;
+    assert_eq!(resp.status(), 201);
+    let job: Value = resp.json().await.unwrap();
+    assert_eq!(job["tiling"], false, "off by default");
 }

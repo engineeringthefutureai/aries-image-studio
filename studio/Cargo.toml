@@ -1,6 +1,6 @@
 [package]
 name = "aries-image-studio"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Aries Image Studio Architecture V3 backend: AgentGateway, scheduler, SQLite state machine, blob store, and public API"
 license = "MIT"
@@ -14,7 +14,7 @@ anyhow = "1.0"
 axum = { version = "0.7", features = ["macros"] }
 crc32fast = "1.4"
 hex = "0.4"
-image = { version = "=0.25.5", default-features = false, features = ["png", "webp"] }
+image = { version = "=0.25.5", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

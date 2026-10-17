@@ -6,7 +6,9 @@ import type {
   WorkerHealth,
   CapabilitiesInfo,
   AspectRatio,
+  ComposerSource,
 } from './types';
+import { ASPECT_RATIOS, qualityForSteps } from './types';
 import { DEFAULT_PREFERENCES } from './services/preferences';
 import {
   fetchWorkerHealth,
@@ -25,6 +27,7 @@ import { sanitizeEnhancedPrompt } from './utils/prompt';
 import { generateUlid } from './utils/ulid';
 
 import { Header } from './components/Header';
+import { groupTurns } from './utils/turns';
 import { Composer } from './components/Composer';
 import { Timeline } from './components/Timeline';
 import { Gallery } from './components/Gallery';
@@ -39,6 +42,8 @@ export function App() {
   // Everything shown comes from Studio: jobs (with images, favorites and UI metadata) and
   // preferences. Nothing is kept in browser storage.
   const [generations, setGenerations] = useState<Generation[]>([]);
+  // False until Studio's first job list arrives (the views show a loader, not the starter).
+  const [jobsLoaded, setJobsLoaded] = useState(false);
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [activeView, setActiveView] = useState<'timeline' | 'gallery'>('timeline');
@@ -67,6 +72,7 @@ export function App() {
   // Composer prefill trigger
   const [prefilledPrompt, setPrefilledPrompt] = useState<string | null>(null);
   const [prefilledAspect, setPrefilledAspect] = useState<AspectRatio | null>(null);
+  const [composerSource, setComposerSource] = useState<ComposerSource | null>(null);
 
   // Preferences: load once from Studio, then save each change (debounced). Nothing is
   // saved before the load, so defaults never overwrite what Studio has.
@@ -147,6 +153,7 @@ export function App() {
           });
           return [...kept, ...changed.values()].sort(newestFirst);
         });
+        setJobsLoaded(true);
       } catch {
         // Studio offline or network hiccup; retry next interval
       } finally {
@@ -180,24 +187,26 @@ export function App() {
   }, []);
 
   // Submit one turn: `count` jobs with consecutive seeds, sent as one batch
-  const handleSubmitTurn = async (prompt: string, params: JobParams) => {
-    if (isSubmitting) return;
+  /** Submits one turn: every job the composer built (rows × count, see utils/composer.ts). */
+  const handleSubmitTurn = async (prompt: string, jobs: JobParams[]) => {
+    if (isSubmitting || jobs.length === 0) return;
     setIsSubmitting(true);
+    setComposerSource(null);
 
     const batchId = `batch-${Date.now()}`;
-    const count = preferences.count || 1;
     const now = Date.now();
 
     const newGenerations: Generation[] = [];
     const payloads: JobSubmission[] = [];
 
-    for (let i = 0; i < count; i++) {
+    for (const [index, params] of jobs.entries()) {
       const jobId = generateUlid(now);
-      const seed = params.seed + i;
+      const seed = params.seed;
 
       newGenerations.push({
         id: jobId,
         batchId,
+        batchIndex: index,
         prompt,
         params: { ...params, seed },
         status: 'queued',
@@ -214,17 +223,21 @@ export function App() {
         steps: params.steps,
         seed,
         enhance: params.enhance || false,
+        tiling: params.tiling || false,
         meta: {
           batch_id: batchId,
           aspect: params.aspect,
           size_multiplier: params.sizeMultiplier,
           quality: params.quality,
+          index,
         },
       });
     }
 
     setGenerations((prev) => [...newGenerations, ...prev]);
     setActiveView('timeline');
+    // The new turn is at the top of the timeline: show it.
+    window.scrollTo({ top: 0, behavior: 'smooth' });
     pollJobsRef.current?.();
 
     try {
@@ -270,46 +283,56 @@ export function App() {
     }
   };
 
-  // Vary: Same prompt & params, new random seed
-  const handleVary = (gen: Generation) => {
-    const newSeed = Math.floor(Math.random() * 1000000);
-    handleSubmitTurn(gen.prompt, {
-      ...gen.params,
-      seed: newSeed,
+  /**
+   * Rerun and Vary: fill the composer from an image (prompt, Enhance, aspect, size, steps)
+   * instead of submitting. Rerun locks the image's seed; Vary leaves the seed random. The
+   * composer then offers the original or the enhanced prompt (ComposerSource).
+   */
+  const handleToComposer = (gen: Generation, { newSeed }: { newSeed: boolean }) => {
+    const enhanced = sanitizeEnhancedPrompt(gen.enhancedPrompt) || undefined;
+    setComposerSource({
+      seed: gen.params.seed,
+      original: gen.prompt,
+      enhanced,
+      originalEnhance: !!gen.params.enhance,
+      mode: 'original',
     });
-  };
-
-  // Rerun Exact: Same prompt, exact same seed
-  const handleRerunExact = (gen: Generation) => {
-    handleSubmitTurn(gen.prompt, { ...gen.params });
-  };
-
-  // Reuse Enhanced Settings: Load enhanced prompt into Composer with enhance disabled
-  const handleReuseEnhanced = (gen: Generation) => {
-    const promptText = sanitizeEnhancedPrompt(gen.enhancedPrompt);
-    if (!promptText) return;
-    setPrefilledPrompt(promptText);
-    setPrefilledAspect(gen.params.aspect);
+    setPrefilledPrompt(gen.prompt);
+    const quality = qualityForSteps(gen.params.steps);
+    const tiling = !!gen.params.tiling;
     setPreferences((prev) => ({
       ...prev,
-      quality: gen.params.quality === 'draft' ? 'draft' : 'standard',
-      steps: gen.params.steps,
+      // Sizes outside the presets (older images) keep the composer's current aspect.
+      aspect: gen.params.aspect in ASPECT_RATIOS ? gen.params.aspect : prev.aspect,
       sizeMultiplier: gen.params.sizeMultiplier || 'full',
-      isSeedLocked: true,
-      lockedSeed: gen.params.seed,
-      enhance: false,
+      quality,
+      steps: gen.params.steps,
+      enhance: !!gen.params.enhance,
+      tiling,
+      isSeedLocked: !newSeed,
+      lockedSeed: newSeed ? prev.lockedSeed : gen.params.seed,
+      // A fixed seed, custom steps and tiling are advanced options: open them when the
+      // image needs one, so they apply. Extra rows are cleared to match this one image.
+      advancedOpen: prev.advancedOpen || !newSeed || quality === 'custom' || tiling,
+      extraRows: [],
     }));
-    if (lightboxGenId) setLightboxGenId(null);
+    setLightboxGenId(null);
   };
+  const handleRerun = (gen: Generation) => handleToComposer(gen, { newSeed: false });
+  const handleVary = (gen: Generation) => handleToComposer(gen, { newSeed: true });
 
   // Retry Failed Job (V3: re-queues failed task in place if intermediate artifacts still exist, else re-submits)
   const handleRetry = async (gen: Generation) => {
-    const ok = await retryJobApi(gen.id);
-    if (ok) {
+    const result = await retryJobApi(gen.id);
+    if (result === 'retried') {
       updateGeneration(gen.id, { status: 'queued', phase: 'queued', error: undefined });
       pollJobsRef.current?.();
+    } else if (result === 'refused') {
+      // Not failed or cancelled (any more): show what Studio has instead of guessing.
+      pollJobsRef.current?.();
     } else {
-      handleSubmitTurn(gen.prompt, { ...gen.params });
+      // Gone from Studio (or unreachable): offer it in the composer instead.
+      handleRerun(gen);
     }
   };
 
@@ -335,23 +358,9 @@ export function App() {
     }
   };
 
-  // Reuse Settings: Load into Composer
-  const handleReuseSettings = (gen: Generation) => {
-    setPrefilledPrompt(gen.prompt);
-    setPrefilledAspect(gen.params.aspect);
-    setPreferences((prev) => ({
-      ...prev,
-      quality: gen.params.quality === 'draft' ? 'draft' : 'standard',
-      steps: gen.params.steps,
-      sizeMultiplier: gen.params.sizeMultiplier || 'full',
-      isSeedLocked: true,
-      lockedSeed: gen.params.seed,
-    }));
-    if (lightboxGenId) setLightboxGenId(null);
-  };
-
   // Select Sample Prompt
   const handleSelectSamplePrompt = (prompt: string, aspect?: AspectRatio) => {
+    setComposerSource(null);
     setPrefilledPrompt(prompt);
     if (aspect) setPrefilledAspect(aspect);
   };
@@ -383,7 +392,11 @@ export function App() {
   }, []);
 
   // Lightbox navigation helpers
-  const completedList = generations.filter((g) => g.status === 'done' && g.imageUrl);
+  // ←/→ follow the open view: the timeline's order (turns newest first, each left to right),
+  // or the gallery's (newest first).
+  const completedList = (activeView === 'timeline' ? groupTurns(generations).flat() : generations).filter(
+    (g) => g.status === 'done' && g.imageUrl,
+  );
   const currentLightboxIndex = completedList.findIndex((g) => g.id === lightboxGenId);
   const lightboxGen = currentLightboxIndex !== -1 ? completedList[currentLightboxIndex] : null;
 
@@ -415,7 +428,7 @@ export function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col pb-48 sm:pb-44">
+      <main className="flex-1 flex flex-col pb-24">
         <ErrorBoundary fallbackTitle="Timeline rendering error">
           {activeView === 'timeline' ? (
             <Timeline
@@ -424,11 +437,12 @@ export function App() {
               onToggleFavorite={handleToggleFavorite}
               onVary={handleVary}
               onRetry={handleRetry}
+              onRerun={handleRerun}
               onCancel={handleCancelJob}
               onSelectPrompt={handleSelectSamplePrompt}
-              onReuseEnhanced={handleReuseEnhanced}
               onDelete={handleDeleteGeneration}
               onDeleteTurn={handleDeleteTurn}
+              loading={!jobsLoaded}
             />
           ) : (
             <Gallery
@@ -437,6 +451,7 @@ export function App() {
               onToggleFavorite={handleToggleFavorite}
               onVary={handleVary}
               onDelete={handleDeleteGeneration}
+              loading={!jobsLoaded}
             />
           )}
         </ErrorBoundary>
@@ -452,6 +467,8 @@ export function App() {
         capabilities={capabilities}
         prefilledPrompt={prefilledPrompt}
         prefilledAspect={prefilledAspect}
+        source={composerSource}
+        onSourceChange={setComposerSource}
         onClearPrefill={() => {
           setPrefilledPrompt(null);
           setPrefilledAspect(null);
@@ -483,9 +500,7 @@ export function App() {
           hasNext={currentLightboxIndex < completedList.length - 1}
           onToggleFavorite={handleToggleFavorite}
           onVary={handleVary}
-          onReuseSettings={handleReuseSettings}
-          onRerunExact={handleRerunExact}
-          onReuseEnhanced={handleReuseEnhanced}
+          onRerun={handleRerun}
           onDelete={handleDeleteGeneration}
         />
       )}

@@ -78,6 +78,17 @@ impl AppState {
 
 const KNOWN_EXECUTOR_WINDOW_S: f64 = 7.0 * 86400.0;
 
+/// Whether an executor declares the decode mode a job asks for (`tiled` when the job sets
+/// `tiling`). Executors that declare no modes are taken to support untiled only.
+pub fn executor_supports_decode_mode(ex: &ExecutorRecord, tiled: bool) -> bool {
+    let want = if tiled { "tiled" } else { "untiled" };
+    match ex.stages.iter().find(|s| s.stage == "decode") {
+        Some(cap) if cap.modes.is_empty() => !tiled,
+        Some(cap) => cap.modes.iter().any(|m| m == want),
+        None => false,
+    }
+}
+
 pub fn executor_supports_stage_static(
     ex: &ExecutorRecord,
     agent: &AgentRecord,
@@ -135,6 +146,9 @@ pub fn enhance_request(prompt: &str, width: u32, height: u32) -> String {
 }
 
 /// Checks submit-time feasibility against all known executors seen in the last 7 days (§6.2).
+/// Denoising steps a job may ask for (the UI's custom field allows the same range).
+pub const MAX_STEPS: u32 = 100;
+
 pub async fn check_submit_feasibility(
     db: &Database,
     input: &JobSubmitInput,
@@ -148,6 +162,9 @@ pub async fn check_submit_feasibility(
             "invalid dimensions {}×{} (must be positive multiples of 32)",
             input.width, input.height
         ));
+    }
+    if input.steps == 0 || input.steps > MAX_STEPS {
+        return Err(format!("invalid steps {} (must be 1–{MAX_STEPS})", input.steps));
     }
 
     let now = now_s();
@@ -173,6 +190,9 @@ pub async fn check_submit_feasibility(
     }
 
     let px = (input.width as u64) * (input.height as u64);
+    if input.tiling && !executors.iter().any(|ex| executor_supports_decode_mode(ex, true)) {
+        return Err("no executor declares tiled decode".to_string());
+    }
 
     if input.enhance {
         let can_enhance = executors.iter().any(|ex| {
@@ -236,10 +256,11 @@ pub async fn check_submit_feasibility(
                 .is_some()
         });
         let ok_decode = executors.iter().any(|ex| {
-            agents
-                .get(&ex.agent_id)
-                .and_then(|ag| executor_supports_stage_static(ex, ag, "decode", px, req))
-                .is_some()
+            executor_supports_decode_mode(ex, input.tiling)
+                && agents
+                    .get(&ex.agent_id)
+                    .and_then(|ag| executor_supports_stage_static(ex, ag, "decode", px, req))
+                    .is_some()
         });
         ok_denoise && ok_decode
     });
@@ -622,6 +643,9 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
             if executor_supports_stage_static(ex, agent, &task.stage, px, req_model).is_none() {
                 continue;
             }
+            if task.stage == "decode" && !executor_supports_decode_mode(ex, job.tiling) {
+                continue;
+            }
             if let Some((req_id, req_rev)) = req_model {
                 if let (Some(cur_id), Some(cur_rev)) = (&ex.current_model_id, &ex.current_model_rev)
                 {
@@ -748,6 +772,9 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
             else {
                 continue;
             };
+            if task.stage == "decode" && !executor_supports_decode_mode(ex, job.tiling) {
+                continue;
+            }
             let agent_metrics = live_metrics_snap.get(&agent.id);
             if check_limits_for_task(
                 agent,
@@ -1192,7 +1219,7 @@ async fn dispatch_task_to_executor(
                 bytes: 0,
             });
             Some(proto::assign::Params::Decode(proto::DecodeParams {
-                mode: proto::DecodeMode::Untiled as i32,
+                mode: if job.tiling { proto::DecodeMode::Tiled } else { proto::DecodeMode::Untiled } as i32,
             }))
         }
         _ => None,

@@ -636,8 +636,16 @@ async fn finalize_completed_job_image(
         let _ = state.blobs.delete_blob(raw_png_sha256);
     }
 
-    // Write WebP thumbnail
-    let _ = state.blobs.write_thumbnail(job_id, &tagged_png);
+    // Thumbnails off the async runtime; the grids fall back to generating one on request.
+    {
+        let blobs = state.blobs.clone();
+        let job_id = job_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = blobs.write_thumbnails(&job_id, &tagged_png) {
+                warn!(job_id, error = %e, "thumbnail generation failed");
+            }
+        });
+    }
 
     // Record e2e duration metric
     if let Some(finished) = job.finished_at {

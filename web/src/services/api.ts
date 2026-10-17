@@ -22,6 +22,8 @@ export interface JobMeta {
   aspect?: AspectRatio;
   size_multiplier?: SizeMultiplier;
   quality?: JobParams['quality'];
+  /** Position in its send (rows × count), so a turn shows its images in that order. */
+  index?: number;
 }
 
 /** The composer's aspect label for a size (exact or scaled-down preset), else "w:h". */
@@ -38,6 +40,24 @@ const STAGE_PHASE: Record<string, JobPhase> = {
   denoise: 'denoising',
   decode: 'decoding',
 };
+
+/** Thumbnail sizes Studio makes (longer side, px; `THUMB_SIZES` in studio/src/storage.rs). */
+const THUMB_SIZES = [512, 768, 1024];
+
+/**
+ * `srcset` for an image's thumbnails, each with its real width: the size is the longer
+ * side, and thumbnails are never larger than the image.
+ */
+function thumbSrcSet(id: string, width: number, height: number): string {
+  const longer = Math.max(width, height);
+  const seen = new Set<number>();
+  return THUMB_SIZES.flatMap((size) => {
+    const w = Math.round((Math.min(size, longer) * width) / longer);
+    if (seen.has(w)) return [];
+    seen.add(w);
+    return [`/api/images/${encodeURIComponent(id)}/thumb?size=${size} ${w}w`];
+  }).join(', ');
+}
 
 /** A Studio job record as the app's Generation; images are served by Studio. */
 export function jobToGeneration(v3: V3JobRecord): Generation {
@@ -67,7 +87,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
         (timings as Record<string, number>)[key] = value;
       }
     }
-    if (stage === 'decode') timings.decode_mode = 'untiled'; // the only mode V3 schedules
+    if (stage === 'decode') timings.decode_mode = v3.tiling ? 'tiled' : 'untiled';
   }
 
   // Denoise counts steps; the enhancer counts tokens against its limit (shown via stats).
@@ -87,6 +107,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
   return {
     id: v3.id,
     batchId: meta.batch_id || v3.id,
+    batchIndex: meta.index,
     prompt: v3.prompt,
     enhancedPrompt: v3.enhanced_prompt ? sanitizeEnhancedPrompt(v3.enhanced_prompt) : undefined,
     thinking: v3.thinking || undefined,
@@ -99,6 +120,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
       seed: v3.seed,
       quality: meta.quality || 'custom',
       enhance: v3.enhance,
+      tiling: !!v3.tiling,
     },
     status,
     phase: done ? 'done' : status === 'running' && current ? STAGE_PHASE[current.stage] : 'queued',
@@ -110,7 +132,8 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     secondsPerStep: sPerStep,
     etaSeconds: sPerStep && remaining > 0 ? remaining * sPerStep : undefined,
     imageUrl: done ? `/api/images/${encodeURIComponent(v3.id)}` : undefined,
-    thumbUrl: done ? `/api/images/${encodeURIComponent(v3.id)}/thumb` : undefined,
+    thumbUrl: done ? `/api/images/${encodeURIComponent(v3.id)}/thumb?size=1024` : undefined,
+    thumbSrcSet: done ? thumbSrcSet(v3.id, v3.width, v3.height) : undefined,
     error: v3.error_detail || v3.error_class || undefined,
     blockedReason: !done ? v3.blocked_reason || current?.blocked_reason || undefined : undefined,
     provenance: v3.provenance,
@@ -234,6 +257,7 @@ export interface JobSubmission {
   steps: number;
   seed: number;
   enhance: boolean;
+  tiling: boolean;
   meta: JobMeta;
 }
 
@@ -272,12 +296,17 @@ export async function cancelJobApi(jobId: string): Promise<void> {
   }
 }
 
-export async function retryJobApi(jobId: string): Promise<boolean> {
+/**
+ * Retry a failed or cancelled job in place. `refused`: Studio will not retry it (409, e.g.
+ * it is not failed any more); `missing`: no such job, or Studio could not be reached.
+ */
+export async function retryJobApi(jobId: string): Promise<'retried' | 'refused' | 'missing'> {
   try {
     const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
-    return res.ok;
+    if (res.ok) return 'retried';
+    return res.status === 409 ? 'refused' : 'missing';
   } catch {
-    return false;
+    return 'missing';
   }
 }
 

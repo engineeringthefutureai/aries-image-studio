@@ -130,7 +130,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Status Pill */}
           <button
             onClick={onOpenStatus}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors shadow-2xs hover:opacity-90 ${statusInfo.bgClass}`}
+            className={`flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium border transition-colors shadow-2xs hover:opacity-90 ${statusInfo.bgClass}`}
             title={`${statusInfo.label}. Click to view hardware telemetry and queue status`}
           >
             <span className="relative flex h-2 w-2">
@@ -144,7 +144,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Full detail ("Busy (GPU 0: denoise, …)") only where it fits */}
             <span className="whitespace-nowrap lg:hidden">{statusInfo.short}</span>
             <span className="whitespace-nowrap hidden lg:inline">{statusInfo.label}</span>
-            {workerHealth.state === 'offline' && <AlertTriangle className="w-3.5 h-3.5 ml-0.5" />}
+            {workerHealth.state === 'offline' && <AlertTriangle className="hidden sm:block w-3.5 h-3.5 ml-0.5" />}
           </button>
 
           {/* Theme Toggle */}

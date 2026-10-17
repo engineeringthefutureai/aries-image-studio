@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import type { Generation } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { formatDuration, formatGiB, generationSeconds, queueSeconds } from '../utils/timings';
+import { ZoomableImage } from './ZoomableImage';
 import {
   X,
   ChevronLeft,
@@ -9,13 +10,9 @@ import {
   Heart,
   Download,
   Dices,
-  Sliders,
   RotateCcw,
   Copy,
   Check,
-  ZoomIn,
-  ZoomOut,
-  Maximize,
   Sparkles,
   Brain,
   Info,
@@ -31,10 +28,10 @@ interface LightboxProps {
   hasPrev?: boolean;
   hasNext?: boolean;
   onToggleFavorite: (id: string) => void;
+  /** Fill the composer from this image with a new (random) seed. */
   onVary: (generation: Generation) => void;
-  onReuseSettings: (generation: Generation) => void;
-  onRerunExact: (generation: Generation) => void;
-  onReuseEnhanced?: (generation: Generation) => void;
+  /** Fill the composer from this image with its seed locked. */
+  onRerun: (generation: Generation) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -47,21 +44,19 @@ export const Lightbox: React.FC<LightboxProps> = ({
   hasNext = false,
   onToggleFavorite,
   onVary,
-  onReuseSettings,
-  onRerunExact,
-  onReuseEnhanced,
+  onRerun,
   onDelete,
 }) => {
-  const [zoom, setZoom] = useState(1);
+  // The image is larger than the stage: ←/→ pan it instead of changing images.
+  const [zoomedIn, setZoomedIn] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedEnhanced, setCopiedEnhanced] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
 
-  // Reset zoom and sub-panels when viewing a different generation
+  // Reset sub-panels when viewing a different generation (the image remounts at fit)
   useEffect(() => {
-    setZoom(1);
     setCopiedPrompt(false);
     setCopiedEnhanced(false);
     setCopiedSeed(false);
@@ -74,21 +69,15 @@ export const Lightbox: React.FC<LightboxProps> = ({
       if (!generation) return;
       if (e.key === 'Escape') {
         onClose();
-      } else if (e.key === 'ArrowLeft' && hasPrev && onPrev) {
+      } else if (e.key === 'ArrowLeft' && !zoomedIn && hasPrev && onPrev) {
         onPrev();
-      } else if (e.key === 'ArrowRight' && hasNext && onNext) {
+      } else if (e.key === 'ArrowRight' && !zoomedIn && hasNext && onNext) {
         onNext();
       } else if (e.key === 'f' || e.key === 'F') {
         onToggleFavorite(generation.id);
-      } else if (e.key === '+' || e.key === '=') {
-        setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
-      } else if (e.key === '-' || e.key === '_') {
-        setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)));
-      } else if (e.key === '0') {
-        setZoom(1);
       }
     },
-    [generation, onClose, onPrev, onNext, hasPrev, hasNext, onToggleFavorite]
+    [generation, onClose, onPrev, onNext, hasPrev, hasNext, onToggleFavorite, zoomedIn]
   );
 
   useEffect(() => {
@@ -187,48 +176,15 @@ export const Lightbox: React.FC<LightboxProps> = ({
           </button>
         )}
 
-        {/* Artwork Image Frame */}
-        <div
-          className="relative max-h-full max-w-full flex items-center justify-center transition-transform duration-200 ease-out cursor-grab active:cursor-grabbing"
-          style={{ transform: `scale(${zoom})` }}
-        >
-          <img
-            src={generation.imageUrl}
-            alt={generation.prompt}
-            className="max-h-[82vh] max-w-[85vw] xl:max-w-[65vw] object-contain rounded-xl shadow-2xl transition-all"
-            draggable={false}
-          />
-        </div>
-
-        {/* Floating Zoom & Canvas Controls */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-xl border border-white/15 shadow-xl text-xs font-mono">
-          <button
-            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
-            className="p-1.5 rounded-full hover:bg-white/15 text-white/80 hover:text-white transition-colors"
-            title="Zoom out (-)"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <span className="w-12 text-center text-[11px] font-mono text-white/90">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
-            className="p-1.5 rounded-full hover:bg-white/15 text-white/80 hover:text-white transition-colors"
-            title="Zoom in (+)"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-          <div className="w-px h-3.5 bg-white/20 mx-1" />
-          <button
-            onClick={() => setZoom(1)}
-            className="flex items-center gap-1 px-2 py-1 rounded-full hover:bg-white/15 text-white/80 hover:text-white text-[11px] transition-colors"
-            title="Reset fit (0)"
-          >
-            <Maximize className="w-3.5 h-3.5" />
-            <span>Fit</span>
-          </button>
-        </div>
+        <ZoomableImage
+          key={generation.id}
+          src={generation.imageUrl}
+          thumbSrc={generation.thumbUrl}
+          alt={generation.prompt}
+          width={generation.params.width}
+          height={generation.params.height}
+          onZoomedChange={setZoomedIn}
+        />
       </div>
 
       {/* Right Details Inspector Panel */}
@@ -286,30 +242,25 @@ export const Lightbox: React.FC<LightboxProps> = ({
         </div>
 
         {/* Action Buttons Matrix */}
-        <div className="p-4 bg-[#141412] border-b border-white/10 grid grid-cols-3 gap-2">
+        {/* Both fill the composer (prompt, Enhance, size, steps) and close the viewer */}
+        <div className="p-4 bg-[#141412] border-b border-white/10 grid grid-cols-2 gap-2">
           <button
-            onClick={() => onVary(generation)}
+            onClick={() => onRerun(generation)}
             className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#a53705] hover:bg-[#b83e06] text-white transition-all group"
-          >
-            <Dices className="w-4 h-4 group-hover:rotate-45 transition-transform" />
-            <span className="text-xs font-semibold mt-1">Vary</span>
-            <span className="text-[10px] text-white/70">New seed</span>
-          </button>
-          <button
-            onClick={() => onReuseSettings(generation)}
-            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white transition-all group"
-          >
-            <Sliders className="w-4 h-4 group-hover:-translate-y-0.5 transition-transform" />
-            <span className="text-xs font-semibold mt-1">Reuse</span>
-            <span className="text-[10px] text-white/70">To composer</span>
-          </button>
-          <button
-            onClick={() => onRerunExact(generation)}
-            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white transition-all group"
+            title="Fill the composer from this image, seed locked"
           >
             <RotateCcw className="w-4 h-4 group-hover:-rotate-90 transition-transform" />
             <span className="text-xs font-semibold mt-1">Rerun</span>
-            <span className="text-[10px] text-white/70">Same seed</span>
+            <span className="text-[10px] text-white/70">Same seed · to composer</span>
+          </button>
+          <button
+            onClick={() => onVary(generation)}
+            className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white transition-all group"
+            title="Fill the composer from this image, random seed"
+          >
+            <Dices className="w-4 h-4 group-hover:rotate-45 transition-transform" />
+            <span className="text-xs font-semibold mt-1">Vary</span>
+            <span className="text-[10px] text-white/70">New seed · to composer</span>
           </button>
         </div>
 
@@ -340,16 +291,6 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   <Sparkles className="w-3 h-3" /> Enhanced Prompt
                 </span>
                 <div className="flex items-center gap-2">
-                  {onReuseEnhanced && (
-                    <button
-                      onClick={() => onReuseEnhanced(generation)}
-                      className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/15 text-white/80 transition-colors font-medium normal-case"
-                      title="Load enhanced prompt into composer"
-                    >
-                      <Sliders className="w-3 h-3" />
-                      <span>To composer</span>
-                    </button>
-                  )}
                   <button
                     onClick={handleCopyEnhancedPrompt}
                     className="flex items-center gap-1 text-[#f38d58] hover:text-[#ff9d6a] transition-colors normal-case"

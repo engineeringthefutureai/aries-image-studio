@@ -278,8 +278,10 @@ def test_denoise_runner_execution(test_job_dir):
     assert save.call_args[1]["metadata"]["seed"] == "42"
 
 
-def test_decode_runner_execution(test_job_dir):
-    """DecodeStageRunner unpacks a packed latent from latent.safetensors and writes image.png."""
+@pytest.mark.parametrize("mode", ["untiled", "tiled"])
+def test_decode_runner_execution(test_job_dir, mode):
+    """DecodeStageRunner unpacks a packed latent from latent.safetensors and writes image.png,
+    with VAE tiling only when the assignment asks for it."""
     runner = DecodeStageRunner()
 
     latent_path = test_job_dir / "latent.safetensors"
@@ -328,9 +330,16 @@ def test_decode_runner_execution(test_job_dir):
         timings, peak = runner.run_job(
             "job-decode",
             paths,
-            {"decode_mode": "untiled", "width": 64, "height": 64},
+            {"decode_mode": mode, "width": 64, "height": 64},
         )
 
+        assert timings["decode_mode"] == mode
+        if mode == "tiled":
+            mock_vae.enable_tiling.assert_called_once()
+            mock_vae.disable_tiling.assert_not_called()
+        else:
+            mock_vae.disable_tiling.assert_called_once()
+            mock_vae.enable_tiling.assert_not_called()
         assert "decode_s" in timings
         assert Path(paths["image_png"]).exists()
         fake_3d_latents.transpose.assert_called_once_with(1, 2)

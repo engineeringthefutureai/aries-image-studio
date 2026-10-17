@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Trash2,
 } from 'lucide-react';
+import { PageLoader } from './PageLoader';
 
 interface GalleryProps {
   generations: Generation[];
@@ -19,7 +20,13 @@ interface GalleryProps {
   onToggleFavorite: (id: string) => void;
   onVary: (generation: Generation) => void;
   onDelete?: (id: string) => void;
+  /** Studio's first job list has not arrived yet: show a loader, not the empty state. */
+  loading?: boolean;
 }
+
+/** Column width of the masonry grid (max-w-7xl, px-4/sm:px-6, 1–4 columns, gap-4), for `sizes`. */
+const GALLERY_TILE_SIZES =
+  '(min-width: 1280px) 296px, (min-width: 1024px) calc((100vw - 80px) / 3), (min-width: 640px) calc((100vw - 64px) / 2), calc(100vw - 32px)';
 
 export const Gallery: React.FC<GalleryProps> = ({
   generations,
@@ -27,6 +34,7 @@ export const Gallery: React.FC<GalleryProps> = ({
   onToggleFavorite,
   onVary,
   onDelete,
+  loading = false,
 }) => {
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [selectedRatio, setSelectedRatio] = useState<AspectRatio | 'all'>('all');
@@ -64,6 +72,8 @@ export const Gallery: React.FC<GalleryProps> = ({
     setSelectedRatio('all');
     setSearchQuery('');
   };
+
+  if (loading && completedGenerations.length === 0) return <PageLoader />;
 
   if (completedGenerations.length === 0) {
     return (
@@ -194,8 +204,11 @@ export const Gallery: React.FC<GalleryProps> = ({
               <div className="relative w-full overflow-hidden" style={{ aspectRatio: aspectRatioStyle }}>
                 <img
                   src={gen.thumbUrl || gen.imageUrl}
+                  srcSet={gen.thumbSrcSet}
+                  sizes={GALLERY_TILE_SIZES}
                   alt={gen.prompt}
                   loading="lazy"
+                  decoding="async"
                   className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-103"
                 />
 
@@ -232,7 +245,7 @@ export const Gallery: React.FC<GalleryProps> = ({
                         onVary(gen);
                       }}
                       className="w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/70 backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110"
-                      title="Vary seed"
+                      title="Vary: fill the composer from this image with a new seed"
                     >
                       <Dices className="w-4 h-4" />
                     </button>

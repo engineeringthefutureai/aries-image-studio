@@ -108,7 +108,7 @@ def test_register_declaration_shape(tmp_path: Path):
     assert len(reg.limits) == 1
     lim = reg.limits[0]
     assert lim.stage == agent_pb2.STAGE_DECODE
-    assert lim.above_px == 1048576
+    assert lim.above_px == 3500000
     kinds = {r.WhichOneof("kind"): getattr(r, r.WhichOneof("kind")) for r in lim.requires}
     assert kinds["host_ram_available_bytes"] == 6442450944
     assert kinds["max_concurrent_per_agent"] == 1
@@ -131,6 +131,34 @@ async def test_agent_metrics_http_endpoint(tmp_path: Path):
             assert 'aries_executor_mem_total_bytes{device="0000:04:00.0",executor="xpu0"} 2.5668481024e+10' in text
             assert "aries_executor_mem_overflow_bytes" in text
             assert "aries_host_ram_available_bytes" in text
+    finally:
+        await agent.metrics.stop_http_server()
+
+
+@pytest.mark.asyncio
+async def test_agent_health_endpoints(tmp_path: Path):
+    """/healthz answers while the agent runs; /readyz only once Studio has welcomed it."""
+    cfg = _make_test_config(tmp_path)
+    agent = AriesAgent(config=cfg)
+    port = await agent.metrics.start_http_server("127.0.0.1", 0)
+    try:
+        async with httpx.AsyncClient() as client:
+            health = await client.get(f"http://127.0.0.1:{port}/healthz")
+            assert health.status_code == 200
+            body = health.json()
+            assert body["status"] == "ok" and body["connected"] is False
+            assert body["executors"]["xpu0"] == "idle"
+            assert (await client.get(f"http://127.0.0.1:{port}/readyz")).status_code == 503
+
+            welcome = agent_pb2.BackendMessage(welcome=agent_pb2.Welcome(session="s1", protocol=1))
+            assert await agent.handle_backend_message(welcome)
+            ready = await client.get(f"http://127.0.0.1:{port}/readyz?probe=1")
+            assert ready.status_code == 200 and ready.json()["connected"] is True
+            assert "aries_agent_connected 1.0" in (await client.get(f"http://127.0.0.1:{port}/metrics")).text
+
+            agent.metrics.set_connected(False)
+            assert (await client.get(f"http://127.0.0.1:{port}/readyz")).status_code == 503
+            assert (await client.get(f"http://127.0.0.1:{port}/healthz")).status_code == 200
     finally:
         await agent.metrics.stop_http_server()
 
@@ -549,3 +577,33 @@ async def test_dead_stream_iterator_cannot_take_the_next_register(tmp_path: Path
     assert await asyncio.wait_for(zombie, timeout=1.0) is None  # told to stop
     first = agent.send_queue.get_nowait()
     assert first.WhichOneof("msg") == "register"
+
+
+def test_enhancer_dtype_from_quantized_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A torchao int4 enhancer is declared as int4 while the main model stays bf16."""
+    main, pe = tmp_path / "main", tmp_path / "pe"
+    main.mkdir()
+    pe.mkdir()
+    (main / "config.json").write_text(json.dumps({"model_type": "qwen"}))
+    (pe / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen3_5_text",
+                "quantization_config": {
+                    "quant_method": "torchao",
+                    "quant_type": {"default": {"_type": "Int4WeightOnlyConfig", "_data": {"group_size": 128}}},
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("ARIES_AGENT_TOKEN", "t")
+    monkeypatch.setenv("ARIES_EXECUTORS_JSON", json.dumps([{"id": "xpu0"}]))
+    monkeypatch.setenv("ARIES_MODEL_PATH", str(main))
+    monkeypatch.setenv("ARIES_ENHANCER_MODEL_PATH", str(pe))
+    monkeypatch.delenv("ARIES_ENHANCER_MODEL_DTYPE", raising=False)
+    monkeypatch.delenv("MODEL_DTYPE", raising=False)
+    dtypes = {m.id: m.dtype for m in AgentConfig.from_env().models}
+    assert dtypes == {"Qwen/Qwen-Image-2.1": "bf16", "Qwen/Qwen-Image-2.1-PE-T2I": "int4"}
+
+    monkeypatch.setenv("ARIES_ENHANCER_MODEL_DTYPE", "int4-g128")
+    assert AgentConfig.from_env().models[1].dtype == "int4-g128"

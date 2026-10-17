@@ -7,7 +7,7 @@ use crate::scheduler::{
 };
 use crate::storage::{
     validate_embeds_safetensors, validate_enhanced_json, validate_latent_safetensors,
-    validate_png_dimensions,
+    validate_png_dimensions, THUMB_SIZES,
 };
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -259,10 +259,7 @@ async fn delete_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
             for sha in orphan_shas {
                 let _ = state.blobs.delete_blob(&sha);
             }
-            let thumb = state.blobs.thumb_path(&id);
-            if thumb.exists() {
-                let _ = std::fs::remove_file(thumb);
-            }
+            state.blobs.delete_thumbnails(&id);
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(None) => (
@@ -309,6 +306,17 @@ async fn cancel_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
 }
 
 async fn retry_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    // Only a failed or cancelled job can be retried; anything else would be a silent no-op
+    // that a client could mistake for "queued again" (a finished image vanished that way).
+    if let Ok(Some(job)) = state.db.get_job(&id).await {
+        if !matches!(job.status.as_str(), "failed" | "cancelled") {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": format!("only failed or cancelled jobs can be retried (job is {})", job.status) })),
+            )
+                .into_response();
+        }
+    }
     match state.db.retry_job(&id).await {
         Ok(Some(job)) => {
             let _ = run_scheduler_tick(&state).await;
@@ -328,6 +336,10 @@ async fn retry_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
     }
 }
 
+/// A finished job's image never changes (job ids are never reused), so browsers may keep
+/// images and thumbnails for good instead of downloading them again on every remount.
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
 async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let Ok(Some(art)) = state.db.get_job_artifact_by_name(&id, "image.png").await else {
         return (
@@ -345,6 +357,8 @@ async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
                     header::CONTENT_DISPOSITION,
                     format!("inline; filename=\"{id}.png\""),
                 ),
+                (header::CACHE_CONTROL, IMMUTABLE.to_string()),
+                (header::ETAG, format!("\"{}\"", art.sha256)),
             ],
             bytes,
         )
@@ -357,36 +371,61 @@ async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
     }
 }
 
-async fn get_image_thumb(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    let thumb_path = state.blobs.thumb_path(&id);
-    if let Ok(bytes) = std::fs::read(&thumb_path) {
+#[derive(Deserialize)]
+struct ThumbQuery {
+    size: Option<u32>,
+}
+
+/// JPEG thumbnail, `?size=` 512, 768 or 1024 (longer side; default 1024). Generated on request
+/// when missing, e.g. for images from before thumbnails had these sizes.
+async fn get_image_thumb(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(query): Query<ThumbQuery>,
+) -> Response {
+    let size = query.size.unwrap_or(1024);
+    if !THUMB_SIZES.contains(&size) {
         return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/webp")],
-            bytes,
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("size must be one of {THUMB_SIZES:?}") })),
         )
             .into_response();
     }
-    // Generate on the fly if missing
-    if let Ok(Some(art)) = state.db.get_job_artifact_by_name(&id, "image.png").await {
-        if let Ok(png_bytes) = state.blobs.get_blob(&art.sha256) {
-            if let Ok(path) = state.blobs.write_thumbnail(&id, &png_bytes) {
-                if let Ok(bytes) = std::fs::read(path) {
-                    return (
-                        StatusCode::OK,
-                        [(header::CONTENT_TYPE, "image/webp")],
-                        bytes,
-                    )
-                        .into_response();
-                }
+    let thumb_path = state.blobs.thumb_path(&id, size);
+    let found = match std::fs::read(&thumb_path) {
+        Ok(bytes) => Some(bytes),
+        Err(_) => match state.db.get_job_artifact_by_name(&id, "image.png").await {
+            Ok(Some(art)) => {
+                let blobs = state.blobs.clone();
+                let id = id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let png = blobs.get_blob(&art.sha256).ok()?;
+                    blobs.write_thumbnails(&id, &png).ok()?;
+                    std::fs::read(blobs.thumb_path(&id, size)).ok()
+                })
+                .await
+                .ok()
+                .flatten()
             }
-        }
+            _ => None,
+        },
+    };
+    match found {
+        Some(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, IMMUTABLE),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "thumbnail not found" })),
+        )
+            .into_response(),
     }
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": "thumbnail not found" })),
-    )
-        .into_response()
 }
 
 async fn get_capabilities(State(state): State<Arc<AppState>>) -> Response {

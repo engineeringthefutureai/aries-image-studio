@@ -22,7 +22,8 @@ class ExecutorConfig:
     selector: str
     mem_total_bytes: int = 25668481024  # 23.9 GiB B60 default
     max_px: int = DEFAULT_MAX_PX
-    decode_modes: List[str] = field(default_factory=lambda: ["untiled"])
+    # Untiled is the default per job; tiled is a per-job option (faster, can leave seams).
+    decode_modes: List[str] = field(default_factory=lambda: ["untiled", "tiled"])
 
 
 @dataclass
@@ -31,6 +32,22 @@ class ModelConfig:
     rev: str
     dtype: str
     path: str
+
+
+def _detect_quant_dtype(model_path: str) -> Optional[str]:
+    """Precision of a quantized checkpoint from its config.json (torchao writes the config
+    class, e.g. Int4WeightOnlyConfig), or None for a plain one."""
+    try:
+        qc = json.loads((Path(model_path) / "config.json").read_text(encoding="utf-8")).get("quantization_config")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not qc:
+        return None
+    text = json.dumps(qc)
+    for bits in ("int4", "int8"):
+        if bits in text.lower():
+            return bits
+    return str(qc.get("quant_method") or "quantized") if isinstance(qc, dict) else "quantized"
 
 
 def _read_model_rev(model_path: str, env_var: str) -> str:
@@ -78,7 +95,7 @@ class AgentConfig:
     worker_module: str = "aries_worker"
     models: List[ModelConfig] = field(default_factory=list)
     executors: List[ExecutorConfig] = field(default_factory=list)
-    decode_above_px: int = 1048576  # 1024^2
+    decode_above_px: int = 3500000  # full size only; ½ size peaks under 8 GiB
     decode_host_ram_floor_bytes: int = 6442450944  # 6 GiB
     decode_max_concurrent_per_agent: int = 1
     upload_retry_delays: List[float] = field(default_factory=lambda: [1.0, 3.0])
@@ -121,6 +138,7 @@ class AgentConfig:
             "ENHANCER_MODEL_PATH", "/models/qwen-image-2.1-pe-t2i"
         )
         dtype = os.environ.get("MODEL_DTYPE", "bf16")
+        enhancer_dtype = os.environ.get("ARIES_ENHANCER_MODEL_DTYPE") or _detect_quant_dtype(enhancer_path) or dtype
         model_rev = _read_model_rev(model_path, "MODEL_REV")
         enhancer_rev = _read_model_rev(enhancer_path, "ENHANCER_MODEL_REV")
 
@@ -134,7 +152,7 @@ class AgentConfig:
             ModelConfig(
                 id=os.environ.get("ENHANCER_MODEL_ID", "Qwen/Qwen-Image-2.1-PE-T2I"),
                 rev=enhancer_rev,
-                dtype=dtype,
+                dtype=enhancer_dtype,
                 path=enhancer_path,
             ),
         ]
@@ -150,7 +168,7 @@ class AgentConfig:
                         selector=item.get("selector", "level_zero:0"),
                         mem_total_bytes=int(item.get("mem_total_bytes", 25668481024)),
                         max_px=int(item.get("max_px", DEFAULT_MAX_PX)),
-                        decode_modes=list(item.get("decode_modes", ["untiled"])),
+                        decode_modes=list(item.get("decode_modes", ["untiled", "tiled"])),
                     )
                 )
         else:
@@ -171,7 +189,7 @@ class AgentConfig:
                         selector=f"level_zero:{idx}" if backend_kind == "xpu" else str(idx),
                         mem_total_bytes=mem,
                         max_px=int(os.environ.get("ARIES_MAX_PX", str(DEFAULT_MAX_PX))),
-                        decode_modes=["untiled"],
+                        decode_modes=["untiled", "tiled"],
                     )
                 )
 
@@ -190,7 +208,7 @@ class AgentConfig:
             worker_module=worker_module,
             models=models,
             executors=executors,
-            decode_above_px=int(os.environ.get("ARIES_DECODE_ABOVE_PX", "1048576")),
+            decode_above_px=int(os.environ.get("ARIES_DECODE_ABOVE_PX", "3500000")),
             decode_host_ram_floor_bytes=int(os.environ.get("ARIES_DECODE_RAM_FLOOR_BYTES", "6442450944")),
             decode_max_concurrent_per_agent=int(os.environ.get("ARIES_DECODE_MAX_CONCURRENT", "1")),
             enable_sleep_inhibitor=os.environ.get("ARIES_SLEEP_INHIBITOR", "1") != "0",

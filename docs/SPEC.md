@@ -63,7 +63,8 @@ Each **turn** = one submission:
   - **Aspect**: 1:1, 4:3, 3:4, 3:2, 2:3, 16:9, 9:16 (official sizes, §5)
   - **Count**: 1–4
   - **Seed**: Random (default) or Locked with a value; batches use seed, seed+1, …
-  - **Quality**: Standard (40 steps) · Draft (20) · Custom N
+  - **Quality**: Draft (12 steps) · Standard (20) · High (40); under Advanced: custom
+    steps (1–100), fixed seed, VAE tiling, and rows of different settings sent together
   - **Enhance** toggle: rewrite the prompt with the prompt enhancer before generating
 - Last-used settings (and the theme) are saved in Studio (`/api/preferences`), the same
   in every browser
@@ -80,9 +81,9 @@ Each **turn** = one submission:
 - Actions:
   - **Download** (PNG with embedded metadata)
   - **Copy prompt** / **Copy seed**
-  - **Reuse** — fills composer with this prompt + params
-  - **Vary** — same prompt + params, new random seed, submits immediately
-  - **Rerun exact** — same seed; doubles as a reproducibility check
+  - **Rerun** — fills the composer with this prompt + params and the seed locked;
+    doubles as a reproducibility check. Original or enhanced prompt is chosen there
+  - **Vary** — the same with a random seed. Neither submits by itself
   - **Favorite**, **Delete** (with confirm; removes files too)
   - *Later:* **Use as reference** → edit mode (see §8)
 

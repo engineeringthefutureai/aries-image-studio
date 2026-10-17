@@ -6,10 +6,10 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) on a home server with
 two Intel Arc Pro B60 GPUs. Single user, LAN only.
 
-**Version 0.3.0.** A Rust Studio server owns jobs, history and images, and a thin
+**Version 0.3.1.** A Rust Studio server owns jobs, history and images, and a thin
 agent on the GPU host runs the pipeline. It works end to end on the hardware it was
 built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+Release notes: [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
 [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
@@ -18,13 +18,15 @@ Release notes: [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.
 
 ## Features
 
-- **Timeline**: one turn per submission, 1–4 images each, with live per-stage progress
-  (enhancing, reading prompt, drawing, finishing), cancel and retry.
-- **Composer**: 7 aspect ratios at ~2K, ½ and ¼ size presets, count, random or locked
-  seed, Standard / Draft quality, optional **prompt enhancement** with the official
-  Qwen-Image-2.1-PE-T2I rewriter (its reasoning is kept and viewable).
-- **Gallery and lightbox**: favorites, search, zoom, vary, rerun exact, reuse settings,
-  download.
+- **Timeline**: one turn per send, its images in a carousel in send order, with live
+  per-stage progress (enhancing, reading prompt, drawing, finishing), cancel and retry.
+- **Composer**: folds to a one-line pill until opened. 7 aspect ratios at ~2K, ½ and ¼
+  size presets, 1–4 images, Draft / Standard / High, optional **prompt enhancement**
+  with the official Qwen-Image-2.1-PE-T2I rewriter (its reasoning is kept and viewable;
+  bf16 or a torchao int4 copy). **Advanced**: custom steps, fixed seed, VAE tiling, and
+  rows of different settings sent together for side-by-side comparison.
+- **Gallery and viewer**: favorites, search, zoom to actual pixels with pan and a
+  navigator, Rerun / Vary into the composer, download.
 - **Status panel**: each GPU's state, current stage and VRAM; queue depth per stage;
   host RAM.
 - **Crash-tolerant backend**: each pipeline stage runs in its own process on one card,

@@ -1,4 +1,4 @@
-.PHONY: all build up down restart logs metrics
+.PHONY: all build up down restart logs metrics health
 
 all: up
 
@@ -24,3 +24,6 @@ logs:
 
 metrics:
 	curl -s http://localhost:$(METRICS_PORT)/metrics
+
+health:
+	curl -s http://localhost:$(METRICS_PORT)/healthz; curl -s -o /dev/null -w 'readyz: %{http_code}\n' http://localhost:$(METRICS_PORT)/readyz

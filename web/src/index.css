@@ -47,3 +47,11 @@
     opacity: 0.5;
   }
 }
+
+/* Batch carousel: scrolls by swipe, wheel, arrows or dots; no scrollbar of its own. */
+.carousel-track {
+  scrollbar-width: none;
+}
+.carousel-track::-webkit-scrollbar {
+  display: none;
+}

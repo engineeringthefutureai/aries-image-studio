@@ -6,9 +6,12 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   aspect: '1:1',
   sizeMultiplier: 'full',
   quality: 'standard',
-  steps: 40,
+  steps: 20,
   count: 1,
   isSeedLocked: false,
   lockedSeed: 42,
   enhance: false,
+  advancedOpen: false,
+  tiling: false,
+  extraRows: [],
 };

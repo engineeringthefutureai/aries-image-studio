@@ -1,6 +1,6 @@
 [project]
 name = "aries-image-studio-backend"
-version = "0.3.0"
+version = "0.3.1"
 description = "Aries Image Studio thin agent and stage workers: staged Qwen-Image-2.1 inference on Intel XPU"
 requires-python = ">=3.12"
 license = "MIT"

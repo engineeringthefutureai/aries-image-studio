@@ -18,11 +18,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.12 /opt/venv
 
-# Install torch & torchvision strictly from the Intel XPU index
-RUN uv pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu
+# Install torch & torchvision strictly from the Intel XPU index (pinned: the int4 enhancer
+# checkpoint is tied to this torch + torchao pair)
+RUN uv pip install "torch==2.14.1+xpu" torchvision --index-url https://download.pytorch.org/whl/xpu
 
-# Install supporting ML packages and git diffusers
-RUN uv pip install "transformers>=5.17" accelerate safetensors pillow
+# Supporting ML packages and git diffusers. torchao loads torchao-quantized (int4)
+# checkpoints. No flash-linear-attention: measured +6% decode for ~67 s of Triton compile
+# per fresh container and a C++ toolchain in the image (docs/HARDWARE.md).
+RUN uv pip install "transformers==5.20.1" "torchao==0.18.0" accelerate safetensors pillow
 RUN uv pip install "git+https://github.com/huggingface/diffusers.git"
 
 # Install V3 thin agent and worker dependencies (gRPC, protobuf, httpx, prometheus-client)

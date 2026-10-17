@@ -24,7 +24,9 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
     { key: 'Shift + Enter', description: 'Insert newline in prompt' },
     { key: 'G', description: 'Switch to Gallery view' },
     { key: 'T', description: 'Switch to Timeline view' },
-    { key: '← / →', description: 'Navigate images in Lightbox' },
+    { key: '← / →', description: 'Previous / next image in Lightbox (pan when zoomed in)' },
+    { key: '+ / −', description: 'Zoom in / out in Lightbox' },
+    { key: '0 / 1', description: 'Fit to screen / actual size (1:1) in Lightbox' },
     { key: 'F', description: 'Toggle favorite on active image' },
     { key: 'Esc', description: 'Close Lightbox or modal' },
   ];

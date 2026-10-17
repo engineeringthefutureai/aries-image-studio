@@ -16,7 +16,9 @@ produced these numbers.
 | Transformer (7B DiT, bf16) | ~13.3 GB; ~16 GB peak while denoising |
 | VAE weights | ~0.6 GB |
 | Prompt enhancer (Qwen-Image-2.1-PE-T2I, bf16) | ~18 GB |
+| Prompt enhancer, torchao int4 (group 128) | 7.9 GiB peak vs 17.4 GiB bf16 (enhance worker, 2.4k-token system prompt); generation 33 tok/s vs 20 tok/s bf16, prefill ~800–1070 tok/s for both |
 | **Untiled decode peak at 2048²** | **25.76 GiB**: more than one card; ~2 GiB overflows to host RAM |
+| Untiled decode peak at ½ size (~1 MP) | under 8 GiB, VAE weights included: fits a card with room to spare |
 | Largest single tensor in the decode | 2.25 GiB (288 ch × 2048² × bf16) |
 | Denoise speed, 2048² | 6.4–6.5 s/step |
 | Decode time, 2048² | 5.2 s untiled (VAE alone on its card) · 2.9 s tiled |
@@ -102,8 +104,8 @@ Order matters: **torch first, from the XPU index.**
 
 ```bash
 uv venv --python 3.12 /opt/venv && . /opt/venv/bin/activate
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu
-uv pip install "transformers>=5.17" accelerate safetensors pillow psutil
+uv pip install "torch==2.14.1+xpu" torchvision --index-url https://download.pytorch.org/whl/xpu
+uv pip install "transformers==5.20.1" "torchao==0.18.0" accelerate safetensors pillow psutil
 uv pip install "git+https://github.com/huggingface/diffusers.git"   # QwenImage21Pipeline is not released yet
 uv pip install fastapi "uvicorn[standard]" prometheus-client
 python -c "import torch; assert '+xpu' in torch.__version__, torch.__version__"
@@ -112,6 +114,16 @@ python -c "import torch; assert '+xpu' in torch.__version__, torch.__version__"
 - `torchvision` is required even for text-to-image: the Qwen3-VL processor imports it.
 - Installing any `torch*` package from PyPI silently replaces the XPU build. Always use
   the XPU index; the Docker build asserts `+xpu`.
+- torch and torchao are pinned together: a torchao int4 checkpoint is serialized by one
+  torchao version and packed for the device it was made on.
+- **No flash-linear-attention (`fla-core`).** The enhancer (`Qwen3_5ForCausalLM`, 3 of 4
+  layers linear attention) runs the reference PyTorch gated-delta-rule without it. Measured
+  with the int4 enhancer and the real system prompt (2442 tokens), Python 3.12 container:
+  prefill ~1070 tok/s either way, decode 34.7 → 36.9 tok/s with fla, but the first run in a
+  fresh container spent ~67 s compiling Triton kernels. fla also needs `g++` (Triton XPU
+  will not start its driver without a C++ compiler, and fla then falls back to CUDA and
+  fails) and `libze-dev`. `ocloc` is not needed. Never install `fla-core[xpu]` from PyPI:
+  the extra pulls a PyPI torch.
 
 `backend/Dockerfile` does exactly this.
 

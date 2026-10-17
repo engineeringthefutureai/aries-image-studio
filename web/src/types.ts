@@ -52,6 +52,46 @@ export const SIZE_MULTIPLIERS: Record<SizeMultiplier, SizeMultiplierConfig> = {
   },
 };
 
+/** Quality preset: a named step count, or `custom` (the user's own number of steps). */
+export type Quality = 'draft' | 'standard' | 'high' | 'custom';
+
+export const QUALITY_STEPS: Record<Exclude<Quality, 'custom'>, number> = {
+  draft: 12,
+  standard: 20,
+  high: 40,
+};
+
+/** Steps Studio accepts (`MAX_STEPS` in studio/src/scheduler.rs). */
+export const MIN_STEPS = 1;
+export const MAX_STEPS = 100;
+
+export const clampSteps = (steps: number) =>
+  Math.min(MAX_STEPS, Math.max(MIN_STEPS, Math.round(Number.isFinite(steps) ? steps : QUALITY_STEPS.standard)));
+
+/** The preset a step count belongs to, or `custom`. */
+export function qualityForSteps(steps: number): Quality {
+  const preset = (Object.keys(QUALITY_STEPS) as (keyof typeof QUALITY_STEPS)[]).find((q) => QUALITY_STEPS[q] === steps);
+  return preset ?? 'custom';
+}
+
+/** Steps a job gets from the composer's quality and steps preferences. */
+export const stepsFor = (quality: Quality, steps: number) =>
+  quality === 'custom' ? clampSteps(steps) : QUALITY_STEPS[quality] ?? QUALITY_STEPS.standard;
+
+/**
+ * The image the composer was filled from (Rerun or Vary). When it had an enhanced prompt,
+ * the composer offers both: the original (with its Enhance setting) or the enhanced text
+ * (Enhance off).
+ */
+export interface ComposerSource {
+  seed: number;
+  original: string;
+  enhanced?: string;
+  /** The image's own Enhance setting, restored when switching back to the original. */
+  originalEnhance: boolean;
+  mode: 'original' | 'enhanced';
+}
+
 export function calculateDimensions(
   aspect: AspectRatio,
   multiplier: SizeMultiplier = 'full'
@@ -82,8 +122,10 @@ export interface JobParams {
   sizeMultiplier?: SizeMultiplier;
   steps: number;
   seed: number;
-  quality: 'standard' | 'draft' | 'custom';
+  quality: Quality;
   enhance?: boolean;
+  /** VAE tiling at decode (advanced; off by default). */
+  tiling?: boolean;
 }
 
 /** Sub-stage of a running enhance job, as reported by the enhance worker. */
@@ -139,6 +181,8 @@ export interface StageProvenance {
 export interface Generation {
   id: string;
   batchId: string;
+  /** Position in its send; images of a turn are shown (and processed) in this order. */
+  batchIndex?: number;
   prompt: string;
   enhancedPrompt?: string;
   thinking?: string;
@@ -153,7 +197,10 @@ export interface Generation {
   secondsPerStep?: number;
   etaSeconds?: number;
   imageUrl?: string;
+  /** 1024 px thumbnail (the viewer's placeholder and navigator). */
   thumbUrl?: string;
+  /** `srcset` of the thumbnails (512, 768 and 1024 px), for grid tiles. */
+  thumbSrcSet?: string;
   error?: string;
   blockedReason?: string;
   provenance?: Record<string, StageProvenance>;
@@ -296,6 +343,7 @@ export interface V3JobRecord {
   seed: number;
   true_cfg_scale: number;
   enhance: boolean;
+  tiling?: boolean;
   wh_ratio?: string | null;
   model_id?: string | null;
   model_rev?: string | null;
@@ -310,14 +358,31 @@ export interface V3JobRecord {
   provenance: Record<string, StageProvenance>;
 }
 
+/** One row of the advanced table: a full parameter set sent with the shared prompt and seed. */
+export interface ComposerRow {
+  aspect: AspectRatio;
+  sizeMultiplier: SizeMultiplier;
+  steps: number;
+  enhance: boolean;
+  tiling: boolean;
+}
+
+/** Most images one send may queue (rows × count). */
+export const MAX_IMAGES_PER_SEND = 16;
+
 export interface UserPreferences {
   theme: 'light' | 'dark';
   aspect: AspectRatio;
   sizeMultiplier: SizeMultiplier;
-  quality: 'standard' | 'draft';
+  quality: Quality;
   steps: number;
   count: number;
   isSeedLocked: boolean;
   lockedSeed: number;
   enhance: boolean;
+  /** Advanced options shown: custom steps, fixed seed, tiling and extra rows apply only then. */
+  advancedOpen: boolean;
+  tiling: boolean;
+  /** Rows after the first (the first row is the main settings above). */
+  extraRows: ComposerRow[];
 }

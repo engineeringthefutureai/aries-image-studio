@@ -44,7 +44,7 @@ enum Stage {
 enum DecodeMode {
   DECODE_MODE_UNSPECIFIED = 0;
   DECODE_MODE_UNTILED     = 1;
-  DECODE_MODE_TILED       = 2;   // declared, not supported yet
+  DECODE_MODE_TILED       = 2;   // per job (`tiling`): faster, less memory, can leave seams
 }
 
 enum ExecutorStateKind {

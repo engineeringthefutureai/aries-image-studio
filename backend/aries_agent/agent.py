@@ -227,15 +227,19 @@ class ExecutorRuntime:
             env["ARIES_DEVICE_PCI"] = self.cfg.device
 
         for m in self.agent_cfg.models:
+            # MODEL_DTYPE is this stage's model: the enhancer's for enhance, else the main one's.
             if "PE" in m.id or m.id.endswith("-PE-T2I"):
                 env["ENHANCER_MODEL_PATH"] = m.path
                 env["ENHANCER_MODEL_ID"] = m.id
                 env["ENHANCER_MODEL_REV"] = m.rev
+                if stage_name == "enhance":
+                    env["MODEL_DTYPE"] = m.dtype
             else:
                 env["MODEL_PATH"] = m.path
                 env["MODEL_ID"] = m.id
                 env["MODEL_REV"] = m.rev
-            env["MODEL_DTYPE"] = m.dtype
+                if stage_name != "enhance":
+                    env["MODEL_DTYPE"] = m.dtype
 
         if cmd.model and cmd.model.id:
             mc = self._find_model_config(cmd.model.id)
@@ -1086,6 +1090,7 @@ class AriesAgent:
         which = msg.WhichOneof("msg")
         if which == "welcome":
             self.session_id = msg.welcome.session
+            self.metrics.set_connected(True)
             logger.info("Connected to backend (session=%s, protocol=%d)", self.session_id, msg.welcome.protocol)
             return True
 
@@ -1199,14 +1204,13 @@ class AriesAgent:
             stub = agent_pb2_grpc.AgentGatewayStub(channel)
             metadata = (("authorization", f"Bearer {self.config.agent_token}"),)
             call = stub.Connect(request_iterator(), metadata=metadata)
-            self.metrics.agent_connected.set(1)
             try:
                 async for backend_msg in call:
                     cont = await self.handle_backend_message(backend_msg)
                     if not cont:
                         break
             finally:
-                self.metrics.agent_connected.set(0)
+                self.metrics.set_connected(False)
 
     async def run(self) -> None:
         """Main lifecycle loop: start /metrics server and maintain gRPC stream with backoff."""

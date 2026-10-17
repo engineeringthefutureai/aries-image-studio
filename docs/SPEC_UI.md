@@ -19,7 +19,8 @@ This brief covers the UI only. Build constraints are noted where they affect des
 
 1. **Images are the content.** Interface chrome recedes; pictures get the space.
 2. **One step from "again, differently."** Every image offers an obvious way to make
-   a variation, reuse its settings, or reproduce it exactly.
+   a variation or reproduce it exactly. Both fill the composer rather than starting a
+   job, so the user can change anything before sending.
 3. **Calm while waiting.** A 2K image takes 1–3 minutes. Waiting should feel
    informative and unhurried, not anxious: show real progress, never fake spinners.
 4. **Honest metadata.** Every image can tell you exactly how it was made.
@@ -69,9 +70,9 @@ Each entry is a **turn** — one submission:
 | Element | Notes |
 |---|---|
 | Prompt | The text as typed. Can be long (up to a paragraph); truncate with expand. |
-| Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. Its one action, "To composer", loads it into the composer with enhance off. |
+| Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. To use it, Rerun the image and pick "Enhanced" in the composer (§4.2). |
 | Setting chips | e.g. `16:9 · seed 48213 · 40 steps · 2m 31s`. Compact, quiet. |
-| Image tiles | 1–4 images per turn (the user chose how many). Shown at their true aspect ratio. A batch is a grid, two across on wide screens and stacked below; every tile is visible without scrolling sideways. |
+| Image tiles | The images of one send (rows × count, up to 16), left to right in the order they were sent and are processed. Shown at their true aspect ratio. A batch is a carousel: one row at full tile height that snaps tile by tile, with edge fades and arrows while more is off-screen, and dots below. Swipe, wheel, the arrows, the dots, the batch pills or `←`/`→` (with the row focused) move through it, and an image the user picks is scrolled into view; a new turn starts at its first image and does not move as images finish. |
 | Lineage marker | When made from another image: "↳ variation of …" linking back to the source. |
 
 **Tile states** (each needs a design):
@@ -104,24 +105,62 @@ of model loading; the tile shows the GPU running it.
 
 Docked at the bottom of the Timeline. Should feel like a message box, not a form.
 
+- **Folded by default** — a one-line pill with the send button: full width at the bottom
+  on a phone, bottom right (26rem wide) from 640 px up. Beside the prompt it shows what the
+  next send makes (`16:9 · ¼ · 12 st · 4 img`, ✦ for Enhance, a sliders icon while
+  Advanced is open). Focusing the prompt, a tap on that summary, `/`, or Rerun / Vary
+  opens it to the full composer (growing from its corner on wider screens). A send, `Esc`
+  or a tap outside folds it again; the prompt and settings stay. Folded with Advanced
+  open, the send button opens the composer instead of sending, so nothing hidden is sent.
+
 - **Prompt field** — multi-line, grows with content up to a limit. Enter submits,
-  Shift+Enter makes a new line. Placeholder suggests what to type.
+  Shift+Enter makes a new line, and the field empties once the job is sent. Placeholder
+  suggests what to type.
 - **Settings row** — compact chips/controls beside or under the field:
 
 | Setting | Options | Default |
 |---|---|---|
 | Aspect ratio | 1:1 · 4:3 · 3:4 · 3:2 · 2:3 · 16:9 · 9:16 | 1:1 |
-| Count | 1 · 2 · 3 · 4 | 1 |
-| Seed | **Random** or **Locked** to a number (editable, with a "dice" to re-roll) | Random |
-| Quality | **Standard** (40 steps) · **Draft** (20, faster) · Custom (number) | Standard |
+| Count | 1 · 2 · 3 · 4 (per row; shown at every width, phone too) | 1 |
+| Quality | **Draft** (12 steps) · **Standard** (20) · **High** (40) | Standard |
 | Size | Full · ½ · ¼ (faster previews) | Full |
 | Enhance prompt | On/off toggle | Off |
 
-- **Generate** button. Disabled when the prompt is empty.
+Every image gets its own random seed; the seed is not shown unless Advanced is open.
+
+- **Advanced** (a toggle in the settings row; closed by default). Its settings apply only
+  while it is open; closed, a send uses a preset's steps (a custom count counts as
+  Standard), a random seed and no tiling. Advanced is for one send: sending closes it and
+  resets its settings (custom steps to Standard, random seed, no tiling, extra rows
+  removed), so nothing hidden carries over to the next send.
+
+| Advanced setting | Options | Default |
+|---|---|---|
+| Steps | Any number from 1 to 100; a preset's number selects that preset | the preset's |
+| Seed | **Random seed** or **Fixed seed** (number, with a dice to roll a new one) | Random |
+| Tiling | VAE tiling at decode: faster and lighter, but can leave seams | Off |
+| Rows | Row 1 is the main settings; **Add row** copies the last row; each extra row sets aspect, size, steps, Enhance and tiling, and can be removed | one row |
+
+  All rows share the prompt and the seeds, so they compare like for like: image *k* of
+  every row gets the same seed. With Random seed each image of a row gets its own random
+  seed; with Fixed seed they count up from it (seed, seed + 1, …). A send makes rows × count images, at
+  most 16 (Add row and Generate are disabled beyond that). One send is one turn; each
+  image's picker is as short as possible: number, seed, only the settings that differ in
+  that turn (e.g. "3:2 12st"), and icons for Enhance (✦) and tiling (⊞) when on; the
+  tooltip spells everything out.
+
+- **Generate** button. Disabled when the prompt is empty. Sending scrolls the timeline to
+  the top, where the new turn appears.
 - Aspect ratio picker should show the shapes visually, not just the numbers.
 - Settings are remembered between visits.
-- When "Reuse settings" is used from an image, the composer fills in and makes it
-  obvious what was loaded.
+- **Filled from an image.** Rerun and Vary (from a tile, the timeline or the viewer) fill
+  the composer and never submit by themselves: prompt, aspect, size, steps and the
+  image's Enhance setting and tiling; Rerun locks the image's seed (opening Advanced so it
+  applies), Vary sets the seed to Random. Extra rows are cleared.
+  A bar above the prompt shows "From #seed" with a dismiss button. If the image had an
+  enhanced prompt, the bar has an **Original · Enhanced** switch: Original is the prompt
+  as typed with the image's Enhance setting; Enhanced puts the rewritten prompt in with
+  Enhance off, so it is used as written. Sending the job clears the bar.
 
 ### 4.3 Gallery view
 
@@ -135,7 +174,7 @@ All finished images, newest first, infinite scroll.
 ### 4.4 Quick actions (on a tile, on hover / long-press)
 
 - Favorite (toggle)
-- Vary — same prompt and settings, new random seed, starts immediately
+- Vary — fills the composer with this image's prompt and settings and a random seed (§4.2)
 - Open
 - Download
 
@@ -143,8 +182,16 @@ All finished images, newest first, infinite scroll.
 
 Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 
-- **Image**: fit to screen; zoom to 100 % and pan. Previous/next navigates within the
-  list it was opened from.
+- **Image**: fit to screen; zoom to 100 % and pan. 100 % is the image's actual size, one
+  image pixel per device pixel (Fit shows its own percentage). Wheel or pinch zooms at
+  the pointer, a click zooms in to 100 % at the pointer and the next click (without
+  dragging) back to Fit, and `+`/`-`, `0` (Fit) and `1`
+  (100 %) step through zoom levels up to 800 %. When the image is larger than the
+  screen, drag, arrow keys (Shift for bigger steps) or a navigator thumbnail (the visible
+  part outlined; click or drag it) move around it. Previous/next navigates within the
+  list it was opened from (the buttons always; `←`/`→` when the image fits), in that view's
+  order: from the timeline, left to right through a turn and then on to the next (older)
+  turn; from the gallery, newest first.
 - **Details panel** (collapsible on desktop; a sheet on phone):
   - Prompt (copy button) and, in future, enhanced prompt
   - Seed (copy button), size and aspect, steps / quality
@@ -161,9 +208,8 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 
 | Action | Behavior |
 |---|---|
-| Vary | New image: same prompt and settings, new seed. Starts immediately. |
-| Reuse settings | Fills the composer with this prompt and settings; user edits, then submits. |
-| Rerun exact | Same seed too — should reproduce the same picture. |
+| Rerun | Fills the composer with this image's prompt, settings and seed (locked), and closes the viewer; sending it should reproduce the same picture. |
+| Vary | The same, with the seed set to Random. |
 | Download | PNG with settings embedded. |
 | Copy prompt / Copy seed | |
 | Favorite | |
@@ -198,6 +244,8 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 
 ### 4.7 Empty, edge and error states (please design)
 
+- Loading: until Studio's first job list arrives, the timeline and gallery show a spinner,
+  never the empty state, so the starter does not flash on every page load.
 - First run: no history yet — inviting, with a few example prompts to tap.
 - Gallery with no favorites / no search results.
 - Generator Asleep while user submits — reassure that it's queued.
@@ -244,7 +292,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   compact row or a sheet; viewer details as a bottom sheet; no horizontal scrolling.
   The header shows the mark without the name and the status pill's one-word state.
 - Keyboard: `/` focuses the prompt · `T` / `G` switch views · `←`/`→` in the viewer ·
-  `F` favorites · `+`/`-`/`0` zoom · `Esc` closes · `?` shows the shortcut sheet.
+  `F` favorites · `+`/`-`/`0`/`1` zoom · `Esc` closes · `?` shows the shortcut sheet.
 - Visible focus states, WCAG AA contrast, all icon buttons labeled, progress
   announced politely to screen readers.
 
@@ -265,7 +313,7 @@ Metadata example:
 Prompt     A lighthouse on a cliff during a storm, waves crashing
 Seed       48213
 Size       1536 × 2752 (9:16)
-Quality    Standard · 40 steps
+Quality    High · 40 steps
 Model      Qwen-Image 2.1 · bf16
 Time       enhance 1m 12s · encode 3.1s · denoise 2m 32s (40 × 3.8s) · decode 5.2s
            generation 3m 52s · queue & model loading 4m 10s · total 8m 2s

@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.3.1
+
+- Page load shows a spinner until Studio's first job list arrives; the starter (and the
+  gallery's empty state) appears only when there really is nothing, instead of flashing
+  on every load.
+- The viewer's previous/next (`←`/`→`) follows the timeline: left to right through a
+  turn, then on to the older turn. It used to step through jobs newest first, right to
+  left within a card.
+- The agent image pins the stack it was measured with (`torch==2.14.1+xpu`,
+  `transformers==5.20.1`) and adds `torchao==0.18.0`, so the prompt enhancer can run from a
+  torchao int4 checkpoint (~8 GiB of card memory instead of ~18 GB, ~35 tok/s decode).
+  The worker loads it with `device_map` and the agent declares the enhancer's own precision
+  (read from the checkpoint, or `ARIES_ENHANCER_MODEL_DTYPE`) instead of the main model's;
+  each stage's worker now gets its own model's `MODEL_DTYPE`. flash-linear-attention stays
+  out (measured: +6% decode for ~67 s of Triton compile per fresh container).
+- The composer folds to a one-line pill (full width at the bottom on a phone, bottom
+  right on wider screens) showing what the next send makes; focusing it, `/` or Rerun /
+  Vary opens it, and a send, `Esc` or a tap outside folds it again. The timeline's
+  bottom padding shrinks to match.
+- A turn shows its images in the order they were sent, left to right, which is the order
+  Studio processes them; they used to flip to newest first once Studio reported them.
+  Each job records its position in the send (`meta.index`). Sending scrolls to the top
+  of the timeline, and a new turn's carousel starts at its first image and no longer
+  jumps as images finish (it follows only the image you pick).
+- The agent's decode limit (6 GiB free host RAM, one at a time) now starts above 3.5 MP
+  (`ARIES_DECODE_ABOVE_PX`), so only full-size decodes are held back; ½-size decodes peak
+  under 8 GiB and used to queue behind each other above 1 MP. `ARIES_DECODE_MAX_CONCURRENT`
+  is now documented.
+- The count picker (1x–4x) shows on a phone too; it was hidden below 640 px, so a
+  phone kept whatever count was last set elsewhere.
+- Composer, simplified: the main row has aspect, size, Draft 12 · Standard 20 · High 40,
+  count and Enhance; every image gets its own random seed (they used to count up from
+  one) and the seed is no longer shown.
+  **Advanced** (closed by default) holds custom steps (1–100), a fixed seed, VAE tiling
+  (off by default) and **rows**: each row a full set of settings (aspect, size, steps,
+  Enhance, tiling) sent with the same prompt and seed, to compare e.g. steps or enhanced
+  against plain. Count applies per row, up to 16 images per send. Advanced settings apply
+  only while it is open, and a send closes it and resets them to the simple defaults. Each image of a turn shows what sets it apart. Rerun opens
+  Advanced to keep the image's seed.
+- Tiling per job: `POST /api/jobs` takes `tiling`; Studio sends a tiled decode and only to
+  executors that declare it (agents now declare untiled and tiled), and the viewer shows
+  the decode mode the job used.
+- The composer's prompt field empties once a job is sent (settings stay).
+- Rerun and Vary fill the composer instead of starting a job: prompt, aspect, size,
+  steps and the image's Enhance setting, with the seed locked (Rerun) or Random (Vary).
+  A bar above the prompt shows which image it came from and, if it had an enhanced
+  prompt, an Original · Enhanced switch (Enhanced puts the rewritten prompt in with
+  Enhance off). This replaces the viewer's Reuse button and both "To composer" buttons
+  for enhanced prompts; Reuse also left Enhance as it was instead of taking the image's.
+  The timeline's Rerun used to call retry, which Studio ignores for a finished job, so
+  the image vanished from the timeline with nothing queued until a reload; Studio now
+  answers `409` to a retry of a job that is not failed or cancelled. Cancelled tiles
+  say Retry (they resume the job) instead of Rerun.
+- Steps: Studio accepts 1 to 100. It refuses other counts with `422`
+  (it accepted anything before) and defaults to 20 instead of 30. Rerun and Vary keep
+  the image's step count (Reuse used to fall back to a preset).
+- The agent has health endpoints on its metrics port: `/healthz` (`200` while it runs,
+  with connection state, uptime and each executor's state) and `/readyz` (`200` only
+  while connected to Studio). Its Compose file has a healthcheck on `/healthz`, and
+  `make health` shows both. `aries_agent_connected` now turns 1 when Studio welcomes
+  the agent rather than when the stream is opened.
+- Viewer: clicking the image zooms in to 100 % at the pointer, and clicking again
+  (without dragging) returns to Fit; the zoom-in cursor promised that, but only a
+  double-click did it. Double-click no longer zooms.
+- Timeline: a batch is a carousel again, at full tile height, instead of a grid of
+  smaller tiles. It snaps tile by tile, fades and shows arrows at an edge with more
+  beyond, has dots below, follows the selected image (from the pills or dots), and
+  takes `←`/`→` when focused.
+- Viewer: 100 % is the image's actual size (one image pixel per device pixel) instead
+  of the fitted size, and a zoomed image can be explored: drag it, use the arrow keys,
+  or click or drag the navigator thumbnail. Wheel and pinch zoom at the pointer,
+  `1` jumps to 100 %, and zoom goes up to 800 %.
+- Thumbnails are JPEGs at 512, 768 and 1024 px (`/api/images/{id}/thumb?size=`), about
+  40, 80 and 140 KB, instead of a lossless 1024 px WebP that was nearly as large as
+  the PNG (1.2 MB against 1.7 MB). Grid tiles pick the smallest size that is sharp on their screen, and
+  the viewer shows the thumbnail until the full image has loaded. Images and
+  thumbnails are cached by the browser instead of downloaded again on every view
+  switch. Thumbnails of earlier images are made the first time they are asked for,
+  and the old WebP files are removed when Studio starts.
+- Phone header: the "Offline" status pill no longer pushes the page 13 px wider than
+  the screen.
+
 ## 0.3.0 (Architecture V3)
 
 Release notes: [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).

@@ -83,10 +83,14 @@ pub struct JobSubmitInput {
     /// UI-owned metadata stored with the job (a JSON object, at most 4 KiB).
     #[serde(default)]
     pub meta: Option<serde_json::Value>,
+    /// Decode with VAE tiling: faster and lighter, but can leave seams (HARDWARE.md §2).
+    #[serde(default)]
+    pub tiling: bool,
 }
 
+// The UI's Standard preset.
 fn default_steps() -> u32 {
-    30
+    20
 }
 
 // 1.0 = no classifier-free guidance: one transformer pass per step (HARDWARE.md §1).
@@ -115,6 +119,8 @@ pub struct JobRecord {
     pub seed: u64,
     pub true_cfg_scale: f32,
     pub enhance: bool,
+    /// Decode with VAE tiling (off by default).
+    pub tiling: bool,
     pub wh_ratio: Option<String>,
     pub model_id: Option<String>,
     pub model_rev: Option<String>,
@@ -397,6 +403,7 @@ impl Database {
         self.ensure_column("jobs", "thinking", "TEXT").await?;
         self.ensure_column("jobs", "meta", "TEXT NOT NULL DEFAULT '{}'").await?;
         self.ensure_column("jobs", "favorite", "INTEGER NOT NULL DEFAULT 0").await?;
+        self.ensure_column("jobs", "tiling", "INTEGER NOT NULL DEFAULT 0").await?;
         self.ensure_column("tasks", "sub_stage", "TEXT").await?;
         self.ensure_column("tasks", "stats_json", "TEXT").await?;
         Ok(())
@@ -823,8 +830,8 @@ impl Database {
         sqlx::query(
             "INSERT INTO jobs (
                 id, status, prompt, negative_prompt, width, height, steps, seed,
-                true_cfg_scale, enhance, meta, version, created_at
-            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                true_cfg_scale, enhance, meta, tiling, version, created_at
+            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job_id)
         .bind(&input.prompt)
@@ -842,6 +849,7 @@ impl Database {
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "{}".to_string()),
         )
+        .bind(input.tiling as i64)
         .bind(ver)
         .bind(now)
         .execute(&mut *tx)
@@ -1100,6 +1108,7 @@ impl Database {
             seed: r.get::<i64, _>("seed") as u64,
             true_cfg_scale: r.get::<f64, _>("true_cfg_scale") as f32,
             enhance: r.get::<i64, _>("enhance") != 0,
+            tiling: r.get::<Option<i64>, _>("tiling").unwrap_or(0) != 0,
             wh_ratio: r.get("wh_ratio"),
             model_id: r.get("model_id"),
             model_rev: r.get("model_rev"),

@@ -1,6 +1,6 @@
 # Aries Image Studio — Build and run
 
-How to build Aries Image Studio 0.3.0 (Architecture V3) and run it: with Docker Compose
+How to build Aries Image Studio 0.3.1 (Architecture V3) and run it: with Docker Compose
 (recommended), or from source for development. For the 0.2.1 manager, use the
 `release/v0.2.1` branch and its README.
 
@@ -9,7 +9,7 @@ How to build Aries Image Studio 0.3.0 (Architecture V3) and run it: with Docker 
 | Component | Code | Runs on | Listens on |
 |---|---|---|---|
 | **Studio** — web app, `/api/*`, image store, scheduler, gRPC gateway for agents | `studio/` (Rust) + `web/` (React, built into the Studio image) | any always-on Linux host; no GPU | `8080` HTTP (browser, artifacts, `/metrics`), `50051` gRPC (agents) |
-| **Agent** — connects out to Studio, starts one stage worker per GPU, moves artifacts | `backend/aries_agent` + `backend/aries_worker` (Python) | the GPU host | `9464` agent `/metrics` (scraped by Studio) |
+| **Agent** — connects out to Studio, starts one stage worker per GPU, moves artifacts | `backend/aries_agent` + `backend/aries_worker` (Python) | the GPU host | `9464` agent `/metrics` (scraped by Studio), `/healthz`, `/readyz` |
 
 Studio and the agent can share one machine or sit on two; the steps are the same; only
 the host names change (section 6). The agent always dials Studio: Studio never needs to
@@ -41,7 +41,7 @@ IP addresses, never `localhost`.
 **Studio host**
 
 - Docker Engine with the Compose plugin. Disk for the images you keep (a 2048² PNG is
-  around 5–8 MB, plus a WebP thumbnail).
+  around 5–8 MB, plus about 300 KB of JPEG thumbnails).
 
 **Building from source** (optional, section 9): Rust 1.85+ (`rustup`), Node.js 22+,
 Python 3.12 with [`uv`](https://docs.astral.sh/uv/) or `venv`. `protoc` is not needed:
@@ -54,6 +54,28 @@ sudo install -d -o "$USER" /srv/models
 hf download Qwen/Qwen-Image-2.1        --local-dir /srv/models/qwen-image-2.1
 hf download Qwen/Qwen-Image-2.1-PE-T2I --local-dir /srv/models/qwen-image-2.1-pe-t2i
 ```
+
+**Optional: int4 enhancer.** A torchao int4 copy of the prompt enhancer needs ~8 GiB of card
+memory instead of ~18 GB and decodes at ~36 tok/s. Quantize it once, on an Arc card (int4
+packing is device-specific), with the agent image so torch and torchao match the ones that
+will load it:
+
+```bash
+docker run -i --rm --device /dev/dri --group-add render -v /srv/models:/models \
+  aries-image-studio-agent:latest python - <<'PY'
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, TorchAoConfig
+from torchao.quantization import Int4WeightOnlyConfig
+src, out = "/models/qwen-image-2.1-pe-t2i", "/models/qwen-image-2.1-pe-t2i-int4"
+q = TorchAoConfig(quant_type=Int4WeightOnlyConfig(group_size=128, int4_packing_format="plain_int32"))
+m = AutoModelForCausalLM.from_pretrained(src, dtype=torch.bfloat16, device_map="xpu", quantization_config=q)
+m.save_pretrained(out); AutoTokenizer.from_pretrained(src).save_pretrained(out)
+PY
+```
+
+Then point `ARIES_ENHANCER_MODEL_PATH` (and the compose mount) at
+`qwen-image-2.1-pe-t2i-int4`. The agent reads the precision from the checkpoint's config and
+records `int4` in provenance. Re-quantize after changing the torch or torchao pins.
 
 Another location works: set `MODELS_DIR` in the agent's `.env` (section 5). The agent
 reads each model's revision from the metadata `hf download` leaves, and records it in
@@ -130,7 +152,14 @@ make build      # torch XPU, transformers, diffusers from git: large, ~15 min th
 make up
 make logs       # "Connected to backend (session=…)" when connected
 make metrics    # the agent's own /metrics
+make health     # /healthz (JSON: connected, executor states) and /readyz's status
 ```
+
+On port 9464 the agent also answers `GET /healthz`, `200` while it runs, with
+`{status, connected, connection_age_s, uptime_s, executors}`, and `GET /readyz`, `200`
+once Studio has accepted its connection and `503` while it is disconnected. The Compose
+file's healthcheck uses `/healthz`, so the container is not restarted just because
+Studio is down.
 
 The image checks that torch is the XPU build (`'+xpu' in torch.__version__`) and fails
 the build otherwise.
@@ -254,8 +283,8 @@ VITE_BACKEND_URL=http://studio.lan:8080 npm run dev   # http://localhost:5173; p
 ```bash
 cd backend
 uv venv --python 3.12 .venv && . .venv/bin/activate
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu
-uv pip install "transformers>=5.17" accelerate safetensors pillow
+uv pip install "torch==2.14.1+xpu" torchvision --index-url https://download.pytorch.org/whl/xpu
+uv pip install "transformers==5.20.1" "torchao==0.18.0" accelerate safetensors pillow
 uv pip install "git+https://github.com/huggingface/diffusers.git"
 uv pip install -e .
 python -c "import torch; assert '+xpu' in torch.__version__"
@@ -321,16 +350,18 @@ validation and the contract tests on both sides.
 | `ARIES_AGENT_TOKEN` / `ARIES_AGENT_TOKEN_FILE` | — (required) | Shared secret, inline or from a file |
 | `ARIES_BACKEND_GRPC_URL` | `localhost:50051` | Studio's gRPC address |
 | `ARIES_METRICS_URL` | `http://127.0.0.1:9464/metrics` | Where Studio scrapes this agent |
-| `ARIES_METRICS_LISTEN` | `0.0.0.0:9464` | Agent metrics listener |
+| `ARIES_METRICS_LISTEN` | `0.0.0.0:9464` | Agent `/metrics`, `/healthz` and `/readyz` listener |
 | `ARIES_AGENT_ID` | `aries` | Unique name per GPU host |
 | `ARIES_BACKEND_KIND` | `xpu` | Accelerator kind |
 | `ARIES_MODEL_PATH` | `/models/qwen-image-2.1` | Qwen-Image-2.1 weights |
-| `ARIES_ENHANCER_MODEL_PATH` | `/models/qwen-image-2.1-pe-t2i` | Prompt rewriter weights |
+| `ARIES_ENHANCER_MODEL_PATH` | `/models/qwen-image-2.1-pe-t2i` | Prompt rewriter weights (bf16, or a torchao int4 copy, section 3) |
+| `ARIES_ENHANCER_MODEL_DTYPE` | from the checkpoint (`int4`/`int8`), else `MODEL_DTYPE` | Enhancer precision recorded in provenance |
 | `ARIES_NUM_CARDS` | `2` | Executors to declare when found in sysfs |
 | `ARIES_EXECUTORS_JSON` | — | Explicit executors (`id`, `device`, `selector`, optional `max_px`) |
 | `ARIES_MAX_PX` | `4300800` (2400×1792) | Largest image per executor |
-| `ARIES_DECODE_ABOVE_PX` | `1048576` | Decodes above this need the RAM floor and run one at a time |
+| `ARIES_DECODE_ABOVE_PX` | `3500000` (3.5 MP: full size only) | Decodes above this need the RAM floor and the concurrency limit; ½-size decodes peak under 8 GiB and run freely |
 | `ARIES_DECODE_RAM_FLOOR_BYTES` | `6442450944` (6 GiB) | Free host RAM required for those decodes |
+| `ARIES_DECODE_MAX_CONCURRENT` | `1` | How many of those decodes run at once on this agent (at least 1); `2` allows one per card |
 | `ARIES_SCRATCH_DIR` | `/run/aries-agent` (`/tmp/aries-agent` in compose) | Per-task files, deleted after each task |
 | `ARIES_SLEEP_INHIBITOR` | `1` | Hold a systemd sleep inhibitor while workers run (needs `systemd-inhibit`) |
 | `ARIES_CA_CERT` | — | CA bundle for a TLS gRPC endpoint |

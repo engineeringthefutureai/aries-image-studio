@@ -15,7 +15,7 @@ proto/aries/agent/v1/    Single source of truth for the AgentGateway gRPC protoc
                          (agent.proto, buf.yaml, buf.gen.yaml).
 studio/                  Rust backend (axum, tonic, tokio, sqlx/SQLite WAL): SPA + public
                          /api/* + artifact HTTP + AgentGateway gRPC server + capability
-                         matcher + scheduler + live /metrics scraper + blob store + WebP
+                         matcher + scheduler + live /metrics scraper + blob store + JPEG
                          thumbnailer + PNG tEXt provenance chunk writer.
 backend/aries_agent/     Thin GPU agent (Python 3.12, asyncio, grpcio, httpx, prometheus_client,
                          NO torch): sysfs GPU probe, gRPC stream client, worker subprocess
@@ -30,7 +30,7 @@ deploy/aries/            Systemd unit for aries-agent + Docker Compose / Makefil
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.3.0 — Architecture V3)
+## Current state (v0.3.1 — Architecture V3)
 
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
   `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/system`, `/api/capabilities`,
@@ -48,7 +48,7 @@ docs/  mockups/  reference/
 - **studio (backend):** Rust (axum 0.7, tonic 0.12, prost 0.13, sqlx 0.8 SQLite WAL,
   image 0.25).
 - **agent & workers:** Python 3.12, `diffusers` from git (needs `QwenImage21Pipeline`),
-  `transformers>=5.17`, `safetensors`, torch/torchvision from the **XPU index** (workers
+  `transformers==5.20.1`, `torchao==0.18.0` (int4 enhancer), `safetensors`, `torch==2.14.1+xpu`/torchvision from the **XPU index** (workers
   only; `aries_agent` never imports `torch`). Base image `ubuntu:26.04` +
   `ppa:kobuk-team/intel-graphics` (`libze1 libze-intel-gpu1 intel-opencl-icd`),
   `/dev/dri` passed through, host `render`/`video` GIDs via `group_add`.
@@ -74,7 +74,7 @@ Full detail in docs/HARDWARE.md.
 - **No VAE tiling by default** (tiling makes seams). Untiled 2048² decode peaks at
   25.76 GiB, so it needs its card to itself plus host RAM headroom; the agent declares a
   live limit (`host_ram_available_bytes >= 6 GiB`, `max_concurrent_per_agent = 1` above
-  1 MP) enforced by the backend scheduler.
+  3.5 MP, i.e. full size only; ½-size decodes peak under 8 GiB) enforced by the backend scheduler.
 - No peer-to-peer between the cards: move whole components or files, never split layers.
 - **`.safetensors`, never `torch.save` pickle files**, for cross-stage artifacts
   (`embeds.safetensors`, `latent.safetensors`), and initial noise is generated on CPU via
