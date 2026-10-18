@@ -20,6 +20,8 @@ services:
       - ARIES_METRICS_URL=${ARIES_METRICS_URL:-http://aries.lan:9464/metrics}
       - ARIES_MODEL_PATH=/models/qwen-image-2.1
       - ARIES_ENHANCER_MODEL_PATH=/models/qwen-image-2.1-pe-t2i
+      # Image-aware enhancer (Enhance with reference images); ignored until downloaded.
+      - ARIES_ENHANCER_I2I_MODEL_PATH=/models/qwen-image-2.1-pe-i2i
       - ARIES_SCRATCH_DIR=/tmp/aries-agent
     devices:
       - /dev/dri:/dev/dri
@@ -29,6 +31,7 @@ services:
     volumes:
       - ${MODELS_DIR:-/srv/models}/qwen-image-2.1:/models/qwen-image-2.1:ro
       - ${MODELS_DIR:-/srv/models}/qwen-image-2.1-pe-t2i:/models/qwen-image-2.1-pe-t2i:ro
+      - ${MODELS_DIR:-/srv/models}/qwen-image-2.1-pe-i2i:/models/qwen-image-2.1-pe-i2i:ro
       - /tmp/aries-agent:/tmp/aries-agent
     ports:
       - "${METRICS_PORT:-9464}:9464"

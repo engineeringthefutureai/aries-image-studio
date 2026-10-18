@@ -65,10 +65,22 @@ def test_enhance_parser():
     parsed_rewritten = _parse_enhanced_json(rewritten_case, "original")
     assert "solitary granite lighthouse" in parsed_rewritten["enhanced_prompt"]
 
-    # Raw prompt fallback without JSON
-    raw_fallback = "Just plain text without braces"
-    parsed_fallback = _parse_enhanced_json(raw_fallback, "original prompt")
+    # A reply without JSON after the reasoning is used as written.
+    parsed_fallback = _parse_enhanced_json("plan</think>Just plain text without braces", "original prompt")
     assert parsed_fallback["enhanced_prompt"] == "Just plain text without braces"
+
+
+def test_enhance_parser_never_takes_the_prompt_from_reasoning():
+    """Seen live: PE-I2I with three images hit the limit mid-reasoning. The reasoning became
+    the prompt, or "..." from where it drafted the output format."""
+    unfinished = "Let me carefully analyze the input images and the user's instruction.\n\n<image1>: a photo of a man"
+    parsed = _parse_enhanced_json(unfinished, "Turn me into an anime character")
+    assert parsed["enhanced_prompt"] == "Turn me into an anime character"
+    assert parsed["thinking"].startswith("Let me carefully analyze")
+    drafting = 'The output format is {"rewritten_prompt": "...", "wh_ratio": "3:2"}. Let me construct'
+    assert _parse_enhanced_json(drafting, "orig")["enhanced_prompt"] == "orig"
+    # A bare JSON reply (no reasoning at all) is still read.
+    assert _parse_enhanced_json('{"rewritten_prompt": "x", "wh_ratio": "3:2"}', "orig")["enhanced_prompt"] == "x"
 
 
 class FakeBatchEncoding(dict):
@@ -102,6 +114,174 @@ def test_enhance_runner_execution(test_job_dir):
     data = json.loads(Path(paths["enhanced_json"]).read_text())
     assert data["rewritten_prompt"] == "Enhanced masterpiece"
     assert data["wh_ratio"] == "4:3"
+
+
+def test_enhance_runner_uses_the_jobs_token_limit(test_job_dir):
+    """A job's `max_new_tokens` (Advanced "Enhancer tokens") replaces the default (4096) and
+    is what progress reports as the limit."""
+    runner = EnhanceStageRunner()
+    runner.tokenizer = _fake_tokenizer('{"rewritten_prompt": "A long infographic", "wh_ratio": "3:2"}')
+    runner.model = MagicMock()
+    runner.model.generate.return_value = [MagicMock()]
+    paths = {"enhanced_json": str(test_job_dir / "enhanced.json")}
+    emitted = []
+    runner.run_job("job-tok", paths, {"prompt": "p", "max_new_tokens": 6144}, progress_cb=lambda **kw: emitted.append(kw))
+    assert runner.model.generate.call_args.kwargs["max_new_tokens"] == 6144
+    assert emitted[0]["enhance_stats"]["max_new_tokens"] == 6144
+
+    runner.run_job("job-tok", paths, {"prompt": "p"})
+    assert runner.model.generate.call_args.kwargs["max_new_tokens"] == MAX_NEW_TOKENS
+    assert MAX_NEW_TOKENS == 4096
+
+
+def _i2i_runner(response: str) -> EnhanceStageRunner:
+    """A runner as `load()` leaves it for PE-I2I: a processor that builds the inputs."""
+    runner = EnhanceStageRunner()
+    runner.vision = True
+    input_ids = MagicMock()
+    input_ids.shape = (1, 5500)
+    runner.processor = MagicMock()
+    runner.processor.apply_chat_template.return_value = FakeBatchEncoding(input_ids=input_ids)
+    runner.tokenizer = _fake_tokenizer(response)
+    runner.model = MagicMock()
+    runner.model.generate.return_value = [MagicMock()]
+    return runner
+
+
+def test_enhance_i2i_reads_the_reference_images(test_job_dir):
+    """PE-I2I gets the job's references (upright, ~1 MP) before the instruction, thinks, and
+    may answer with `ratio_follow` instead of a ratio."""
+    runner = _i2i_runner('plan</think>{"rewritten_prompt": "x", "wh_ratio": "", "ratio_follow": "<image2>"}')
+    paths = {"enhanced_json": str(test_job_dir / "enhanced.json")}
+    for i, size in enumerate([(512, 256), (300, 300)]):
+        Image.new("RGB", size, (i * 90, 20, 20)).save(test_job_dir / f"ref{i}.png")
+        paths[f"ref{i}.image"] = str(test_job_dir / f"ref{i}.png")
+    timings, _ = runner.run_job(
+        "job-i2i", paths, {"prompt": "put image 1 into image 2", "max_new_tokens": 5000, "references": ["a" * 64, "b" * 64]}
+    )
+
+    call = runner.processor.apply_chat_template.call_args
+    content = call.args[0][1]["content"]
+    assert [part["type"] for part in content] == ["image", "image", "text"]
+    assert content[0]["image"].size == (1440, 736)  # 2:1 at ~1024², sides multiples of 32
+    assert content[1]["image"].size == (1024, 1024)
+    assert content[2]["text"] == "put image 1 into image 2"
+    assert call.kwargs["enable_thinking"] is True
+    kwargs = runner.model.generate.call_args.kwargs
+    assert (kwargs["temperature"], kwargs["top_p"], kwargs["top_k"]) == (1.0, 0.95, 20)
+    assert kwargs["max_new_tokens"] == 5000
+    data = json.loads(Path(paths["enhanced_json"]).read_text())
+    assert data["rewritten_prompt"] == "x"
+    assert data["ratio_follow"] == "<image2>"
+    assert timings["references"] == 2 and timings["prompt_tokens"] == 5500
+
+
+def test_enhance_ratio_follow_names_an_input_or_nothing():
+    reply = 'p</think>{"rewritten_prompt": "x", "wh_ratio": "2:3"}'
+    assert _parse_enhanced_json(reply, "o")["ratio_follow"] == ""
+    bad = 'p</think>{"rewritten_prompt": "x", "ratio_follow": "the first one"}'
+    assert _parse_enhanced_json(bad, "o")["ratio_follow"] == ""
+    # A reply cut by the token limit still yields both.
+    cut = 'p</think>{"rewritten_prompt": "a goblin in the cafe", "ratio_follow": "<image1>", "wh_ra'
+    parsed = _parse_enhanced_json(cut, "o")
+    assert parsed["enhanced_prompt"] == "a goblin in the cafe"
+    assert parsed["ratio_follow"] == "<image1>"
+
+
+@pytest.mark.parametrize("reasoning,expect_calls,expect_limits,cut", [
+    # Done within the limit: one generate().
+    (2000, 1, [4096], False),
+    # Runs out at 3072 (4096 minus the reply reserve): goes on with 8192 and finishes.
+    (5000, 2, [4096, 8192 - 3072], False),
+    # Never stops: 4096 -> 8192 -> 16384 -> 24576, then closed at 23040 for a reply in the last 1536.
+    (99999, 5, [4096, 8192 - 3072, 16384 - 6656, 24576 - 14848, 24576 - 23040], True),
+])
+def test_enhance_reasoning_that_runs_out_gets_a_doubled_limit(test_job_dir, reasoning, expect_calls, expect_limits, cut):
+    """Reasoning that reaches the limit minus the reply reserve continues with the limit
+    doubled (the same as a rerun with twice the limit, minus the redone reasoning), up to
+    24576; there it is closed with </think> and the model replies in what is left."""
+    runner = _i2i_runner("")
+    paths = {"enhanced_json": str(test_job_dir / "enhanced.json")}
+    Image.new("RGB", (64, 64)).save(test_job_dir / "ref0.png")
+    paths["ref0.image"] = str(test_job_dir / "ref0.png")
+    calls, thought = [], [0]
+
+    def generate(**kwargs):
+        calls.append(kwargs)
+        streamer = kwargs["streamer"]
+        streamer.put([0] * 10)  # the prompt echo
+        stop = (kwargs.get("stopping_criteria") or [None])[0]
+        if stop is None:  # the forced reply
+            streamer.put([5, 6])
+            return MagicMock()
+        for _ in range(kwargs["max_new_tokens"]):  # reasoning, one token at a time
+            if thought[0] >= reasoning:
+                streamer.put([4])  # </think>
+                streamer.put([5, 6])
+                break
+            streamer.put([2])
+            thought[0] += 1
+            stop(MagicMock(shape=(1, 1)), None)
+            if stop.triggered:
+                break
+        return MagicMock()
+
+    runner.model.generate.side_effect = generate
+    runner.tokenizer.batch_decode.return_value = ['plan\n</think>\n\n{"rewritten_prompt": "a goblin", "wh_ratio": "1:1"}']
+    runner.tokenizer.decode.side_effect = _decode
+    timings, _ = runner.run_job("job", paths, {"prompt": "p", "max_new_tokens": 4096, "references": ["a" * 64]})
+
+    assert [c["max_new_tokens"] for c in calls] == expect_limits
+    assert len(calls) == expect_calls
+    assert ("thinking_cut" in timings) is cut
+    assert ("limit_raised_from" in timings) is (expect_calls > 1)
+    assert timings["max_new_tokens"] == {1: 4096, 2: 8192, 5: 24576}[expect_calls]
+    assert json.loads(Path(paths["enhanced_json"]).read_text())["rewritten_prompt"] == "a goblin"
+
+
+def test_enhance_default_limit_grows_with_the_references(test_job_dir):
+    """4096, plus 2048 per reference image (each adds ~1,000 prompt tokens to look at)."""
+    runner = _i2i_runner('p</think>{"rewritten_prompt": "x", "wh_ratio": "1:1"}')
+    paths = {"enhanced_json": str(test_job_dir / "e.json")}
+    for i in range(3):
+        Image.new("RGB", (64, 64)).save(test_job_dir / f"ref{i}.png")
+        paths[f"ref{i}.image"] = str(test_job_dir / f"ref{i}.png")
+    runner.run_job("job", paths, {"prompt": "p", "references": ["a" * 64] * 3})
+    assert runner.model.generate.call_args.kwargs["max_new_tokens"] == 4096 + 3 * 2048
+    runner.run_job("job", paths, {"prompt": "p"})
+    assert runner.model.generate.call_args.kwargs["max_new_tokens"] == 4096
+    from aries_worker.stages.enhance import default_max_new_tokens
+    assert default_max_new_tokens(10) == 24576
+
+
+def test_text_enhancer_refuses_references(test_job_dir):
+    runner = EnhanceStageRunner()
+    runner.tokenizer = _fake_tokenizer('{"rewritten_prompt": "x", "wh_ratio": "1:1"}')
+    runner.model = MagicMock()
+    with pytest.raises(ValueError, match="reference images"):
+        runner.run_job("job", {"enhanced_json": str(test_job_dir / "e.json")}, {"prompt": "p", "references": ["a" * 64]})
+
+
+@pytest.mark.parametrize("vision", [False, True])
+def test_enhance_load_picks_the_variant_from_the_checkpoint(test_job_dir, monkeypatch, vision):
+    config = {"architectures": ["X"], **({"vision_config": {"depth": 27}} if vision else {})}
+    (test_job_dir / "config.json").write_text(json.dumps(config))
+    monkeypatch.setenv("ENHANCER_MODEL_PATH", str(test_job_dir))
+    import aries_worker.stages.enhance as enhance
+
+    with (
+        patch.object(enhance, "AutoProcessor") as processor,
+        patch.object(enhance, "AutoModelForImageTextToText") as i2i,
+        patch.object(enhance, "AutoTokenizer") as tokenizer,
+        patch.object(enhance, "AutoModelForCausalLM") as t2i,
+    ):
+        runner = EnhanceStageRunner()
+        runner.load()
+    assert runner.vision is vision
+    assert i2i.from_pretrained.called is vision and processor.from_pretrained.called is vision
+    assert t2i.from_pretrained.called is not vision and tokenizer.from_pretrained.called is not vision
+    if vision:
+        assert runner.tokenizer is processor.from_pretrained.return_value.tokenizer
 
 
 TOKEN_TEXT = {
@@ -276,6 +456,115 @@ def test_denoise_runner_execution(test_job_dir):
     assert progress_reports[-1] == (10, 10)
     save.assert_called_once()
     assert save.call_args[1]["metadata"]["seed"] == "42"
+
+
+def test_denoise_with_references_runs_its_own_loop(test_job_dir):
+    """References: stored latents and the mask go through our loop, never the pipeline call."""
+    runner = DenoiseStageRunner()
+    runner.pipe = MagicMock()
+    runner.pipe.config.sample_sigmas = [1.0, 0.5]
+    runner.pipe.scheduler.step.side_effect = lambda pred, t, latents, return_dict: (latents,)
+    paths = {
+        "embeds_safetensors": str(test_job_dir / "embeds.safetensors"),
+        "latent_safetensors": str(test_job_dir / "latent.safetensors"),
+        "ref0.safetensors": str(test_job_dir / "ref0.safetensors"),
+    }
+    Path(paths["embeds_safetensors"]).write_bytes(b"x")
+    loaded = {
+        paths["embeds_safetensors"]: (
+            {"prompt_embeds": MagicMock(), "image_pad_mask": MagicMock()},
+            {"prompt_source": "original", "reference_sizes": "[[1024, 1024]]"},
+        ),
+        paths["ref0.safetensors"]: ({"latents": MagicMock()}, {"width": "1024", "height": "1024"}),
+    }
+    progress = []
+    with (
+        patch("aries_worker.stages.denoise.load_safetensors_with_metadata", side_effect=lambda p, device: loaded[str(p)]),
+        patch("aries_worker.stages.denoise.atomic_safetensors_save", return_value=64) as save,
+        patch("aries_worker.stages.denoise.retrieve_timesteps", return_value=([MagicMock(), MagicMock()], 2)),
+        patch("aries_worker.stages.denoise.calculate_shift", return_value=1.0),
+        patch("torch.Generator"),
+    ):
+        timings, _ = runner.run_job(
+            "job-ref",
+            paths,
+            {"steps": 2, "seed": 7, "width": 1024, "height": 1024, "references": 1},
+            progress_cb=lambda step, steps, sps: progress.append(step),
+        )
+
+    runner.pipe.assert_not_called()
+    assert runner.pipe.transformer.call_count == 2
+    img_shapes = runner.pipe.transformer.call_args.kwargs["img_shapes"]
+    assert img_shapes == [[(1, 64, 64), (1, 64, 64)]]
+    assert progress == [1, 2]
+    assert timings["references"] == 1
+    assert save.call_args.kwargs["metadata"]["references"] == "1"
+
+    # Embeds encoded for other references than the latents: refuse rather than mix them up.
+    loaded[paths["embeds_safetensors"]][1]["reference_sizes"] = "[[512, 512]]"
+    with (
+        patch("aries_worker.stages.denoise.load_safetensors_with_metadata", side_effect=lambda p, device: loaded[str(p)]),
+        pytest.raises(ValueError, match="encoded for references"),
+    ):
+        runner.run_job("job-ref", paths, {"steps": 2, "seed": 7, "width": 1024, "height": 1024, "references": 1})
+
+
+def test_decode_split_columns_cover_the_image_once():
+    """Strips meet at their cuts, each reaching `overlap` past them, and are small enough."""
+    from aries_worker.stages.decode import split_columns
+
+    # 2752x1536: 172 decoder columns of 16 px -> two halves, 32 columns of overlap.
+    strips = split_columns(172, 16, 1536, 3_200_000, 32)
+    assert strips == [(0, 118, 0, 86), (54, 172, 86, 172)]
+    for columns, height in [(172, 1536), (128, 2048), (150, 1792), (300, 3000)]:
+        strips = split_columns(columns, 16, height, 3_200_000, 32)
+        assert len(strips) >= 2
+        assert strips[0][2] == 0 and strips[-1][3] == columns
+        for (a, b, ka, kb), nxt in zip(strips, strips[1:] + [None]):
+            assert a == max(0, ka - 32) and b == min(columns, kb + 32)
+            if nxt:
+                assert kb == nxt[2]  # contiguous, no gap, no double cover
+            assert (b - a) * 16 * height <= 3_200_000 or len(strips) == columns
+    # A bigger image gets more strips.
+    assert len(split_columns(300, 16, 3000, 3_200_000, 32)) > 2
+    # Portrait 1792x2400 is split across its 150 rows, like landscape across columns: 2 strips.
+    assert len(split_columns(150, 16, 1792, 3_200_000, 32)) == 2
+
+
+@pytest.mark.parametrize("mode,size,env,split", [
+    ("untiled", (2752, 1536), None, True),     # full size: split
+    ("untiled", (1376, 768), None, False),     # ½ size: plain untiled
+    ("tiled", (2752, 1536), None, False),      # tiling asked for: tiled
+    ("untiled", (2752, 1536), "0", False),     # split turned off
+])
+def test_decode_splits_large_untiled_decodes(test_job_dir, monkeypatch, mode, size, env, split):
+    import numpy as np
+    import aries_worker.stages.decode as decode
+
+    if env is not None:
+        monkeypatch.setenv("ARIES_DECODE_SPLIT_ABOVE_PX", env)
+    else:
+        monkeypatch.delenv("ARIES_DECODE_SPLIT_ABOVE_PX", raising=False)
+    runner = DecodeStageRunner()
+    runner.vae = MagicMock()
+    runner._prepare_latents = MagicMock(return_value="z")
+    w, h = size
+    decoded = MagicMock(ndim=4)
+    decoded.__truediv__.return_value.__add__.return_value.clamp.return_value.cpu.return_value.permute.return_value.float.return_value.numpy.return_value = [np.zeros((8, 8, 4), np.float32)]
+    runner.vae.decode.return_value = (decoded,)
+    latent_path = test_job_dir / "latent.safetensors"
+    latent_path.write_bytes(b"x")
+    with (
+        patch.object(decode, "load_safetensors_with_metadata", return_value=({"latent": MagicMock()}, {"width": str(w), "height": str(h)})),
+        patch.object(decode, "decode_split", return_value=(np.zeros((8, 8, 4), np.float32), 2)) as split_fn,
+    ):
+        timings, _ = runner.run_job("job", {"latent_safetensors": str(latent_path), "image_png": str(test_job_dir / "image.png")},
+                                    {"decode_mode": mode})
+    assert split_fn.called is split
+    assert runner.vae.decode.called is not split
+    assert timings["decode_parts"] == (2 if split else 1)
+    assert timings["decode_mode"] == mode
+    assert (test_job_dir / "image.png").exists()
 
 
 @pytest.mark.parametrize("mode", ["untiled", "tiled"])

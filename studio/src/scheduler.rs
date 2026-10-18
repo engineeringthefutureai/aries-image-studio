@@ -1,5 +1,5 @@
 use crate::config::BackendConfig;
-use crate::db::{
+use crate::db::{TaskShape, 
     now_s, AgentRecord, Database, ExecutorRecord, JobRecord, JobSubmitInput, ModelDecl,
     RequirementDecl, TaskRecord,
 };
@@ -8,6 +8,7 @@ use crate::proto;
 use crate::storage::BlobStore;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -37,8 +38,15 @@ pub struct StageCapabilityInfo {
 pub struct CapabilitiesResponse {
     pub max_px_now: u64,
     pub max_px_ever: u64,
+    /// Most reference images a job may carry (0: none accepted).
+    pub max_references_now: u32,
+    pub max_references_ever: u32,
     pub enhance_now: bool,
     pub enhance_ever: bool,
+    /// Most reference images Enhance reads (an image-aware enhancer, docs/ENHANCER_I2I.md);
+    /// 0: Enhance is off for jobs with references.
+    pub enhance_max_references_now: u32,
+    pub enhance_max_references_ever: u32,
     pub sizes: Vec<SizeCapabilityInfo>,
     pub stages: Vec<StageCapabilityInfo>,
 }
@@ -89,21 +97,41 @@ pub fn executor_supports_decode_mode(ex: &ExecutorRecord, tiled: bool) -> bool {
     }
 }
 
+/// The largest image an executor can both denoise and decode.
+fn executor_max_px(ex: &ExecutorRecord) -> u64 {
+    let max_px = |stage: &str| ex.stages.iter().find(|s| s.stage == stage).map(|s| s.max_px).unwrap_or(0);
+    max_px("denoise").min(max_px("decode"))
+}
+
 pub fn executor_supports_stage_static(
     ex: &ExecutorRecord,
     agent: &AgentRecord,
     stage: &str,
     px: u64,
+    refs: u32,
     required_model: Option<(&str, &str)>,
 ) -> Option<ModelDecl> {
     let cap = ex.stages.iter().find(|s| s.stage == stage)?;
     if matches!(stage, "denoise" | "decode") && cap.max_px > 0 && px > cap.max_px {
         return None;
     }
-    if stage == "decode" && !cap.modes.is_empty() && !cap.modes.iter().any(|m| m == "untiled") {
+    // Reference images go through encode and denoise, and enhance when the agent has an
+    // image-aware enhancer; decode never sees them.
+    if matches!(stage, "encode" | "denoise" | "enhance") && refs > cap.max_references {
         return None;
     }
-    for model_id in &cap.models {
+    // `reference_models` take references: a task with references needs one of them, one
+    // without prefers the others (enhance: PE-I2I vs PE-T2I).
+    let takes_refs = |id: &String| cap.reference_models.contains(id);
+    let models: Vec<&String> = if cap.reference_models.is_empty() {
+        cap.models.iter().collect()
+    } else if refs > 0 {
+        cap.models.iter().filter(|id| takes_refs(id)).collect()
+    } else {
+        let (plain, with_refs): (Vec<&String>, Vec<&String>) = cap.models.iter().partition(|id| !takes_refs(id));
+        plain.into_iter().chain(with_refs).collect()
+    };
+    for model_id in models {
         if let Some(m) = agent.models.iter().find(|m| &m.id == model_id) {
             if let Some((req_id, req_rev)) = required_model {
                 if m.id == req_id && m.rev == req_rev {
@@ -149,6 +177,75 @@ pub fn enhance_request(prompt: &str, width: u32, height: u32) -> String {
 /// Denoising steps a job may ask for (the UI's custom field allows the same range).
 pub const MAX_STEPS: u32 = 100;
 
+/// The prompt rewriter's token limit a job may set: below 256 it cannot finish reasoning,
+/// and 24576 (the PE-I2I model card generates with 24000) takes ~13 minutes at the int4
+/// enhancers' ~31 tok/s.
+pub const ENHANCE_TOKENS_RANGE: std::ops::RangeInclusive<u32> = 256..=24576;
+
+/// Qwen-Image-2.1 takes up to 10 condition images; agents declare their own, lower limit.
+pub const MAX_REFERENCES: usize = 10;
+
+/// Most references an executor takes through both encode and denoise.
+pub fn executor_max_references(ex: &ExecutorRecord) -> u32 {
+    let cap = |stage: &str| {
+        ex.stages
+            .iter()
+            .find(|s| s.stage == stage)
+            .map(|s| s.max_references)
+            .unwrap_or(0)
+    };
+    cap("encode").min(cap("denoise"))
+}
+
+/// Most references an executor's enhancer reads (0 without an image-aware enhancer).
+pub fn executor_enhance_max_references(ex: &ExecutorRecord) -> u32 {
+    ex.stages
+        .iter()
+        .find(|s| s.stage == "enhance" && !s.reference_models.is_empty())
+        .map(|s| s.max_references)
+        .unwrap_or(0)
+}
+
+/// Whether `ex`'s resident worker can take a task of `stage`: the same stage and, for
+/// enhance, the model the task needs on this executor (PE-I2I with references, PE-T2I
+/// without), so a text enhancer never gets a job with images or the other way round.
+fn resident_serves(ex: &ExecutorRecord, agent: Option<&AgentRecord>, stage: &str, px: u64, refs: u32) -> bool {
+    if ex.current_stage.as_deref() != Some(stage) {
+        return false;
+    }
+    if stage != "enhance" {
+        return true;
+    }
+    let Some(agent) = agent else {
+        return false;
+    };
+    match (executor_supports_stage_static(ex, agent, stage, px, refs, None), &ex.current_model_id) {
+        (Some(m), Some(cur)) => &m.id == cur,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// What a job's encode depends on (docs/REFERENCE_IMAGES.md §4): jobs of one send with the
+/// same key share one encode. Seed, steps, size and tiling do not change the embeddings.
+pub fn encode_cache_key(job: &JobRecord, reference_res: u32) -> String {
+    let (prompt, source) = match &job.enhanced_prompt {
+        Some(ep) => (ep.as_str(), "enhanced"),
+        None => (job.prompt.as_str(), "original"),
+    };
+    let cfg = job.true_cfg_scale > 1.0;
+    let refs: Vec<&str> = job.references.iter().map(|r| r.sha256.as_str()).collect();
+    let canonical = serde_json::json!({
+        "prompt": prompt,
+        "prompt_source": source,
+        "negative_prompt": if cfg { job.negative_prompt.as_str() } else { "" },
+        "true_cfg_scale": if cfg { job.true_cfg_scale } else { 1.0 },
+        "references": refs,
+        "reference_res": if refs.is_empty() { 0 } else { reference_res },
+    });
+    hex::encode(Sha256::digest(canonical.to_string().as_bytes()))
+}
+
 pub async fn check_submit_feasibility(
     db: &Database,
     input: &JobSubmitInput,
@@ -165,6 +262,22 @@ pub async fn check_submit_feasibility(
     }
     if input.steps == 0 || input.steps > MAX_STEPS {
         return Err(format!("invalid steps {} (must be 1–{MAX_STEPS})", input.steps));
+    }
+    if let Some(t) = input.enhance_max_tokens {
+        if !ENHANCE_TOKENS_RANGE.contains(&t) {
+            return Err(format!(
+                "invalid enhance_max_tokens {t} (must be {}–{})",
+                ENHANCE_TOKENS_RANGE.start(),
+                ENHANCE_TOKENS_RANGE.end()
+            ));
+        }
+    }
+    let refs = input.references.len() as u32;
+    if input.references.len() > MAX_REFERENCES {
+        return Err(format!("at most {MAX_REFERENCES} reference images"));
+    }
+    if refs > 0 && input.true_cfg_scale > 1.0 {
+        return Err("true_cfg_scale > 1 is not available with reference images".to_string());
     }
 
     let now = now_s();
@@ -193,16 +306,32 @@ pub async fn check_submit_feasibility(
     if input.tiling && !executors.iter().any(|ex| executor_supports_decode_mode(ex, true)) {
         return Err("no executor declares tiled decode".to_string());
     }
+    if refs > 0 {
+        let most = executors.iter().map(executor_max_references).max().unwrap_or(0);
+        if refs > most {
+            return Err(if most == 0 {
+                "no known executor accepts reference images".to_string()
+            } else {
+                format!("{refs} reference images, at most {most}")
+            });
+        }
+    }
 
     if input.enhance {
+        // With references only an image-aware enhancer will do: the text one could rewrite
+        // away what an edit asks for.
         let can_enhance = executors.iter().any(|ex| {
             agents
                 .get(&ex.agent_id)
-                .and_then(|ag| executor_supports_stage_static(ex, ag, "enhance", px, None))
+                .and_then(|ag| executor_supports_stage_static(ex, ag, "enhance", px, refs, None))
                 .is_some()
         });
         if !can_enhance {
-            return Err("no known executor supports stage 'enhance'".to_string());
+            return Err(if refs > 0 {
+                format!("no known executor can enhance with {refs} reference images")
+            } else {
+                "no known executor supports stage 'enhance'".to_string()
+            });
         }
     }
 
@@ -210,7 +339,7 @@ pub async fn check_submit_feasibility(
         let can_stage = executors.iter().any(|ex| {
             agents
                 .get(&ex.agent_id)
-                .and_then(|ag| executor_supports_stage_static(ex, ag, stage, px, None))
+                .and_then(|ag| executor_supports_stage_static(ex, ag, stage, px, refs, None))
                 .is_some()
         });
         if !can_stage {
@@ -239,7 +368,7 @@ pub async fn check_submit_feasibility(
     let mut candidate_models = Vec::new();
     for ex in &executors {
         if let Some(ag) = agents.get(&ex.agent_id) {
-            if let Some(m) = executor_supports_stage_static(ex, ag, "encode", px, None) {
+            if let Some(m) = executor_supports_stage_static(ex, ag, "encode", px, refs, None) {
                 if !candidate_models.contains(&m) {
                     candidate_models.push(m);
                 }
@@ -252,14 +381,14 @@ pub async fn check_submit_feasibility(
         let ok_denoise = executors.iter().any(|ex| {
             agents
                 .get(&ex.agent_id)
-                .and_then(|ag| executor_supports_stage_static(ex, ag, "denoise", px, req))
+                .and_then(|ag| executor_supports_stage_static(ex, ag, "denoise", px, refs, req))
                 .is_some()
         });
         let ok_decode = executors.iter().any(|ex| {
             executor_supports_decode_mode(ex, input.tiling)
                 && agents
                     .get(&ex.agent_id)
-                    .and_then(|ag| executor_supports_stage_static(ex, ag, "decode", px, req))
+                    .and_then(|ag| executor_supports_stage_static(ex, ag, "decode", px, 0, req))
                     .is_some()
         });
         ok_denoise && ok_decode
@@ -304,54 +433,32 @@ pub async fn compute_capabilities(db: &Database) -> Result<CapabilitiesResponse>
         execs.iter().any(|ex| {
             agents
                 .get(&ex.agent_id)
-                .and_then(|ag| executor_supports_stage_static(ex, ag, stage, px, None))
+                .and_then(|ag| executor_supports_stage_static(ex, ag, stage, px, 0, None))
                 .is_some()
         })
     };
 
     let all_refs: Vec<&ExecutorRecord> = all_executors.iter().collect();
 
-    let mut max_px_ever = 0u64;
-    let mut max_px_now = 0u64;
-    for ex in &all_executors {
-        let denoise_px = ex
-            .stages
-            .iter()
-            .find(|s| s.stage == "denoise")
-            .map(|s| s.max_px)
-            .unwrap_or(0);
-        let decode_px = ex
-            .stages
-            .iter()
-            .find(|s| s.stage == "decode")
-            .map(|s| s.max_px)
-            .unwrap_or(0);
-        let eff = denoise_px.min(decode_px);
-        if eff > max_px_ever {
-            max_px_ever = eff;
-        }
-    }
-    for ex in &online_executors {
-        let denoise_px = ex
-            .stages
-            .iter()
-            .find(|s| s.stage == "denoise")
-            .map(|s| s.max_px)
-            .unwrap_or(0);
-        let decode_px = ex
-            .stages
-            .iter()
-            .find(|s| s.stage == "decode")
-            .map(|s| s.max_px)
-            .unwrap_or(0);
-        let eff = denoise_px.min(decode_px);
-        if eff > max_px_now {
-            max_px_now = eff;
-        }
-    }
+    let max_px_ever = all_executors.iter().map(executor_max_px).max().unwrap_or(0);
+    let max_px_now = online_executors.iter().map(|ex| executor_max_px(ex)).max().unwrap_or(0);
+
+    let max_references_ever = all_executors.iter().map(executor_max_references).max().unwrap_or(0);
+    let max_references_now = online_executors
+        .iter()
+        .map(|ex| executor_max_references(ex))
+        .max()
+        .unwrap_or(0);
 
     let enhance_ever = can_run_stage(&all_refs, "enhance", 0);
     let enhance_now = can_run_stage(&online_executors, "enhance", 0);
+    let enhance_max_references_ever =
+        all_executors.iter().map(executor_enhance_max_references).max().unwrap_or(0);
+    let enhance_max_references_now = online_executors
+        .iter()
+        .map(|ex| executor_enhance_max_references(ex))
+        .max()
+        .unwrap_or(0);
 
     // The composer's full-size aspect presets (web/src/types.ts ASPECT_RATIOS).
     let standard_sizes = [
@@ -419,8 +526,12 @@ pub async fn compute_capabilities(db: &Database) -> Result<CapabilitiesResponse>
     Ok(CapabilitiesResponse {
         max_px_now,
         max_px_ever,
+        max_references_now,
+        max_references_ever,
         enhance_now,
         enhance_ever,
+        enhance_max_references_now,
+        enhance_max_references_ever,
         sizes,
         stages,
     })
@@ -437,7 +548,7 @@ fn explain_unavailable_now(
         let Some(ag) = agents.get(&ex.agent_id) else {
             continue;
         };
-        if executor_supports_stage_static(ex, ag, stage, px, None).is_none() {
+        if executor_supports_stage_static(ex, ag, stage, px, 0, None).is_none() {
             continue;
         }
         if !ag.online || ex.state == "offline" {
@@ -457,18 +568,19 @@ fn explain_unavailable_now(
 
 /// Checks live `limits` for a task on `(agent, executor)` (§5.1, §5.2).
 /// Returns `Ok(())` if all limits are satisfied, or `Err(blocked_reason)` if blocked.
+#[allow(clippy::too_many_arguments)]
 pub fn check_limits_for_task(
     agent: &AgentRecord,
     executor: &ExecutorRecord,
     stage: &str,
-    px: u64,
-    active_tasks_with_px: &[(TaskRecord, u64)],
+    shape: TaskShape,
+    active_tasks_with_px: &[(TaskRecord, TaskShape)],
     live_metrics: Option<&AgentLiveMetrics>,
     scrape_stale_s: f64,
     now: f64,
 ) -> Result<(), String> {
     for limit in &agent.limits {
-        if limit.stage != stage || px <= limit.above_px {
+        if !limit.applies(stage, shape) {
             continue;
         }
         let needs_metrics = limit.requires.iter().any(|r| {
@@ -506,18 +618,29 @@ pub fn check_limits_for_task(
                     }
                 }
                 RequirementDecl::MaxConcurrentPerAgent(max_conc) => {
+                    // Every limit that carries this shares one count: the tasks that spill
+                    // into host RAM (full-size decode, denoise with many references) take
+                    // turns, whatever their stage. Side by side on a 30 GB host they ended
+                    // in a global OOM (docs/HARDWARE.md F10).
+                    let shares_slot = |t_stage: &str, t_shape: TaskShape| {
+                        agent.limits.iter().any(|l| {
+                            l.requires
+                                .iter()
+                                .any(|r| matches!(r, RequirementDecl::MaxConcurrentPerAgent(_)))
+                                && l.applies(t_stage, t_shape)
+                        })
+                    };
                     let running_matching = active_tasks_with_px
                         .iter()
-                        .filter(|(t, t_px)| {
+                        .filter(|(t, t_shape)| {
                             t.assigned_agent.as_deref() == Some(agent.id.as_str())
-                                && t.stage == limit.stage
-                                && *t_px > limit.above_px
+                                && shares_slot(&t.stage, *t_shape)
                         })
                         .count() as u32;
                     if running_matching >= *max_conc {
                         return Err(format!(
-                            "waiting for concurrent {} limit on {} (max {})",
-                            limit.stage, agent.id, max_conc
+                            "waiting for a memory-heavy task on {} to finish (max {} at a time: full-size decode, denoise with many references)",
+                            agent.id, max_conc
                         ));
                     }
                 }
@@ -583,23 +706,21 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
     let active_tasks = state.db.list_active_tasks().await?;
 
     // Load jobs for queued and active tasks
-    let mut jobs_cache: HashMap<String, JobRecord> = HashMap::new();
-    for t in queued_tasks.iter().chain(active_tasks.iter()) {
-        if !jobs_cache.contains_key(&t.job_id) {
-            if let Some(j) = state.db.get_job(&t.job_id).await? {
-                jobs_cache.insert(j.id.clone(), j);
-            }
-        }
-    }
+    let job_ids: Vec<String> = queued_tasks
+        .iter()
+        .chain(active_tasks.iter())
+        .map(|t| t.job_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let jobs_cache: HashMap<String, JobRecord> =
+        state.db.get_jobs(&job_ids).await?.into_iter().map(|j| (j.id.clone(), j)).collect();
 
-    let mut active_with_px: Vec<(TaskRecord, u64)> = active_tasks
+    let mut active_with_px: Vec<(TaskRecord, TaskShape)> = active_tasks
         .into_iter()
         .map(|t| {
-            let px = jobs_cache
-                .get(&t.job_id)
-                .map(|j| (j.width as u64) * (j.height as u64))
-                .unwrap_or(0);
-            (t, px)
+            let shape = jobs_cache.get(&t.job_id).map(TaskShape::of).unwrap_or_default();
+            (t, shape)
         })
         .collect();
 
@@ -612,12 +733,49 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
     let mut assigned_task_ids: HashSet<String> = HashSet::new();
     let mut busy_executor_keys: HashSet<String> = HashSet::new();
 
+    // One encode per send (docs/REFERENCE_IMAGES.md §4): a queued encode whose inputs match a
+    // finished one takes its embeds; one whose inputs match an encode that is running, or a
+    // queued one ahead of it, waits for that one instead of running too. Waiting tasks are
+    // left out of this tick (`assigned_task_ids`), so they neither run nor look blocked.
+    let reference_res = state.config.reference_res;
+    let mut encode_keys: HashSet<String> = active_with_px
+        .iter()
+        .filter(|(t, _)| t.stage == "encode")
+        .filter_map(|(t, _)| jobs_cache.get(&t.job_id))
+        .map(|j| encode_cache_key(j, reference_res))
+        .collect();
+    let declared_models: HashSet<(String, String)> = agents
+        .values()
+        .flat_map(|a| a.models.iter().map(|m| (m.id.clone(), m.rev.clone())))
+        .collect();
+    for task in queued_tasks.iter().filter(|t| t.stage == "encode") {
+        let Some(job) = jobs_cache.get(&task.job_id) else {
+            continue;
+        };
+        let key = encode_cache_key(job, reference_res);
+        if let Some((source, model_id, model_rev)) = state.db.find_shared_embeds(&key).await? {
+            if declared_models.contains(&(model_id, model_rev))
+                && state.db.complete_task_from_shared(&task.id, &source, &key).await?
+            {
+                assigned_task_ids.insert(task.id.clone());
+                continue;
+            }
+        }
+        if !encode_keys.insert(key) {
+            assigned_task_ids.insert(task.id.clone());
+        }
+    }
+
     // Rule 1: Feed resident `ready(S)` workers first
     for task in &queued_tasks {
+        if assigned_task_ids.contains(&task.id) {
+            continue;
+        }
         let Some(job) = jobs_cache.get(&task.job_id) else {
             continue;
         };
         let px = (job.width as u64) * (job.height as u64);
+        let refs = job.references.len() as u32;
         let req_model = if matches!(task.stage.as_str(), "denoise" | "decode") {
             match (&job.model_id, &job.model_rev) {
                 (Some(id), Some(rev)) => Some((id.as_str(), rev.as_str())),
@@ -631,16 +789,16 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
             if busy_executor_keys.contains(&ex.key) || ex.state != "ready" || ex.lent || ex.pending_lend {
                 continue;
             }
-            if ex.current_stage.as_deref() != Some(task.stage.as_str()) {
-                continue;
-            }
             let Some(agent) = agents.get(&ex.agent_id) else {
                 continue;
             };
+            if !resident_serves(ex, Some(agent), &task.stage, px, refs) {
+                continue;
+            }
             if !agent.online {
                 continue;
             }
-            if executor_supports_stage_static(ex, agent, &task.stage, px, req_model).is_none() {
+            if executor_supports_stage_static(ex, agent, &task.stage, px, refs, req_model).is_none() {
                 continue;
             }
             if task.stage == "decode" && !executor_supports_decode_mode(ex, job.tiling) {
@@ -659,7 +817,7 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 agent,
                 ex,
                 &task.stage,
-                px,
+                TaskShape::of(job),
                 &active_with_px,
                 agent_metrics,
                 state.config.scrape_stale_s,
@@ -686,7 +844,7 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 let mut assigned_clone = task.clone();
                 assigned_clone.assigned_agent = Some(ex.agent_id.clone());
                 assigned_clone.assigned_executor = Some(ex.id.clone());
-                active_with_px.push((assigned_clone, px));
+                active_with_px.push((assigned_clone, TaskShape::of(job)));
                 break;
             }
         }
@@ -721,33 +879,33 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
     // another worker unless the workers already starting or ready for that stage cover
     // every queued task. Short stages (encode, decode) get one worker at a time; it works
     // through its queue faster than a second one could load.
-    let mut seen_per_stage: HashMap<String, usize> = HashMap::new();
+    // Enhance tasks queue per model (with or without references).
+    let mut seen_per_stage: HashMap<(String, bool), usize> = HashMap::new();
     for task in &remaining_tasks {
-        let seen = seen_per_stage.entry(task.stage.clone()).or_insert(0);
-        let ahead_in_queue = *seen;
-        *seen += 1;
-        let already_served = if matches!(task.stage.as_str(), "enhance" | "denoise") {
-            let free_workers = executors
-                .iter()
-                .filter(|e| {
-                    matches!(e.state.as_str(), "starting" | "ready")
-                        && e.current_stage.as_deref() == Some(task.stage.as_str())
-                })
-                .count();
-            free_workers > ahead_in_queue
-        } else {
-            executors.iter().any(|e| {
-                matches!(e.state.as_str(), "starting" | "ready" | "busy")
-                    && e.current_stage.as_deref() == Some(task.stage.as_str())
-            })
-        };
-        if already_served {
-            continue;
-        }
         let Some(job) = jobs_cache.get(&task.job_id) else {
             continue;
         };
         let px = (job.width as u64) * (job.height as u64);
+        let refs = job.references.len() as u32;
+        let lane = (task.stage.clone(), task.stage == "enhance" && refs > 0);
+        let seen = seen_per_stage.entry(lane).or_insert(0);
+        let ahead_in_queue = *seen;
+        *seen += 1;
+        let serves = |e: &ExecutorRecord| resident_serves(e, agents.get(&e.agent_id), &task.stage, px, refs);
+        let already_served = if matches!(task.stage.as_str(), "enhance" | "denoise") {
+            let free_workers = executors
+                .iter()
+                .filter(|e| matches!(e.state.as_str(), "starting" | "ready") && serves(e))
+                .count();
+            free_workers > ahead_in_queue
+        } else {
+            executors
+                .iter()
+                .any(|e| matches!(e.state.as_str(), "starting" | "ready" | "busy") && serves(e))
+        };
+        if already_served {
+            continue;
+        }
         let req_model = if matches!(task.stage.as_str(), "denoise" | "decode") {
             match (&job.model_id, &job.model_rev) {
                 (Some(id), Some(rev)) => Some((id.as_str(), rev.as_str())),
@@ -768,7 +926,7 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 continue;
             }
             let Some(model) =
-                executor_supports_stage_static(ex, agent, &task.stage, px, req_model)
+                executor_supports_stage_static(ex, agent, &task.stage, px, refs, req_model)
             else {
                 continue;
             };
@@ -780,7 +938,7 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 agent,
                 ex,
                 &task.stage,
-                px,
+                TaskShape::of(job),
                 &active_with_px,
                 agent_metrics,
                 state.config.scrape_stale_s,
@@ -844,17 +1002,25 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
             continue;
         }
         let cur_stage = ex_snap.current_stage.clone().unwrap_or_default();
+        // Whether this resident worker (stage, and enhancer model) could run `t`.
+        let serves = |e: &ExecutorRecord, t: &TaskRecord| {
+            jobs_cache.get(&t.job_id).is_some_and(|job| {
+                let px = (job.width as u64) * (job.height as u64);
+                resident_serves(e, agents.get(&e.agent_id), &t.stage, px, job.references.len() as u32)
+            })
+        };
 
         let has_queued_for_cur = queued_tasks
             .iter()
-            .any(|t| !assigned_task_ids.contains(&t.id) && t.stage == cur_stage);
+            .any(|t| !assigned_task_ids.contains(&t.id) && serves(&ex_snap, t));
 
         let idle_duration = now - ex_snap.idle_since.unwrap_or(now);
 
         // Find if any other stage has a runnable task for this executor
         let mut switch_candidate: Option<(&TaskRecord, ModelDecl, f64)> = None;
         for task in &remaining_tasks {
-            if assigned_task_ids.contains(&task.id) || task.stage == cur_stage {
+            // Another stage, or enhance with the other enhancer (a model switch).
+            if assigned_task_ids.contains(&task.id) || serves(&ex_snap, task) {
                 continue;
             }
             // Covered: other workers for that stage will take its queue. Free (starting or
@@ -866,14 +1032,20 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 .iter()
                 .filter(|other| {
                     other.key != ex_snap.key
-                        && other.current_stage.as_deref() == Some(task.stage.as_str())
+                        && serves(other, task)
                         && (matches!(other.state.as_str(), "starting" | "ready")
                             || (short_stage && other.state == "busy"))
                 })
                 .count();
+            let task_refs = jobs_cache.get(&task.job_id).map(|j| !j.references.is_empty());
             let waiting = queued_tasks
                 .iter()
-                .filter(|t| !assigned_task_ids.contains(&t.id) && t.stage == task.stage)
+                .filter(|t| {
+                    !assigned_task_ids.contains(&t.id)
+                        && t.stage == task.stage
+                        && (task.stage != "enhance"
+                            || jobs_cache.get(&t.job_id).map(|j| !j.references.is_empty()) == task_refs)
+                })
                 .count();
             if covering >= waiting && task_wait < state.config.max_wait_s {
                 continue;
@@ -882,6 +1054,7 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 continue;
             };
             let px = (job.width as u64) * (job.height as u64);
+            let refs = job.references.len() as u32;
             let req_model = if matches!(task.stage.as_str(), "denoise" | "decode") {
                 match (&job.model_id, &job.model_rev) {
                     (Some(id), Some(rev)) => Some((id.as_str(), rev.as_str())),
@@ -891,16 +1064,19 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 None
             };
             let Some(model) =
-                executor_supports_stage_static(&ex_snap, agent, &task.stage, px, req_model)
+                executor_supports_stage_static(&ex_snap, agent, &task.stage, px, refs, req_model)
             else {
                 continue;
             };
+            if task.stage == "decode" && !executor_supports_decode_mode(&ex_snap, job.tiling) {
+                continue;
+            }
             let agent_metrics = live_metrics_snap.get(&agent.id);
             if check_limits_for_task(
                 agent,
                 &ex_snap,
                 &task.stage,
-                px,
+                TaskShape::of(job),
                 &active_with_px,
                 agent_metrics,
                 state.config.scrape_stale_s,
@@ -946,6 +1122,8 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
                 );
                 executors[idx].state = "starting".to_string();
                 executors[idx].current_stage = Some(target_task.stage.clone());
+                executors[idx].current_model_id = Some(model.id.clone());
+                executors[idx].current_model_rev = Some(model.rev.clone());
                 busy_executor_keys.insert(ex_snap.key.clone());
                 continue;
             }
@@ -995,10 +1173,13 @@ pub async fn run_scheduler_tick(state: &Arc<AppState>) -> Result<()> {
             state.config.scrape_stale_s,
             now,
         );
-        state
-            .db
-            .set_task_blocked_reason(&task.id, &job.id, reason.as_deref())
-            .await?;
+        // Most ticks change nothing: skip the write transaction then.
+        if task.blocked_reason != reason {
+            state
+                .db
+                .set_task_blocked_reason(&task.id, &job.id, reason.as_deref())
+                .await?;
+        }
     }
 
     Ok(())
@@ -1010,12 +1191,13 @@ fn diagnose_queued_task_block(
     job: &JobRecord,
     executors: &[ExecutorRecord],
     agents: &HashMap<String, AgentRecord>,
-    active_with_px: &[(TaskRecord, u64)],
+    active_with_px: &[(TaskRecord, TaskShape)],
     live_metrics: &HashMap<String, AgentLiveMetrics>,
     scrape_stale_s: f64,
     now: f64,
 ) -> Option<String> {
     let px = (job.width as u64) * (job.height as u64);
+    let refs = job.references.len() as u32;
     let req_model = if matches!(task.stage.as_str(), "denoise" | "decode") {
         match (&job.model_id, &job.model_rev) {
             (Some(id), Some(rev)) => Some((id.as_str(), rev.as_str())),
@@ -1030,7 +1212,9 @@ fn diagnose_queued_task_block(
         let Some(ag) = agents.get(&ex.agent_id) else {
             continue;
         };
-        if executor_supports_stage_static(ex, ag, &task.stage, px, req_model).is_some() {
+        if executor_supports_stage_static(ex, ag, &task.stage, px, refs, req_model).is_some()
+            && (task.stage != "decode" || executor_supports_decode_mode(ex, job.tiling))
+        {
             capable_executors.push((ex, ag));
         }
     }
@@ -1080,7 +1264,7 @@ fn diagnose_queued_task_block(
             ag,
             ex,
             &task.stage,
-            px,
+            TaskShape::of(job),
             active_with_px,
             m,
             scrape_stale_s,
@@ -1104,6 +1288,32 @@ async fn dispatch_task_to_executor(
     job: &JobRecord,
     ex: &ExecutorRecord,
 ) -> Result<bool> {
+    let base_url = &state.config.artifact_base_url;
+    // Denoise reads each reference's stored latents, for the model the job was encoded with.
+    // Looked up before assigning, so a missing one leaves the task queued rather than stuck.
+    let mut reference_inputs = Vec::new();
+    if task.stage == "denoise" {
+        let (model_id, model_rev) = (
+            job.model_id.clone().unwrap_or_default(),
+            job.model_rev.clone().unwrap_or_default(),
+        );
+        for (i, r) in job.references.iter().enumerate() {
+            let Some(lat) = state
+                .db
+                .get_reference_latents(&r.sha256, &model_id, &model_rev, state.config.reference_res)
+                .await?
+            else {
+                anyhow::bail!("no stored latents for reference {i} of job {}", job.id);
+            };
+            reference_inputs.push(proto::ArtifactRef {
+                name: format!("ref{i}.safetensors"),
+                url: format!("{base_url}/agent/v1/blobs/{}", lat.blob_sha256),
+                sha256: lat.blob_sha256,
+                bytes: lat.bytes,
+            });
+        }
+    }
+
     let Some((assigned_task, _, attempt)) = state
         .db
         .assign_task(&task.id, &ex.agent_id, &ex.id)
@@ -1117,7 +1327,6 @@ async fn dispatch_task_to_executor(
         state.metrics.observe_task_wait(&task.stage, wait_s);
     }
 
-    let base_url = &state.config.artifact_base_url;
     let mut inputs = Vec::new();
     let mut uploads = Vec::new();
 
@@ -1129,8 +1338,22 @@ async fn dispatch_task_to_executor(
                 sha256: String::new(),
                 bytes: 0,
             });
+            // An image-aware enhancer reads the references' pixels, like encode.
+            let mut references = Vec::with_capacity(job.references.len());
+            for (i, r) in job.references.iter().enumerate() {
+                let bytes = state.db.get_upload(&r.sha256).await?.map(|u| u.bytes).unwrap_or(0);
+                inputs.push(proto::ArtifactRef {
+                    name: format!("ref{i}.image"),
+                    url: format!("{base_url}/agent/v1/blobs/{}", r.sha256),
+                    sha256: r.sha256.clone(),
+                    bytes,
+                });
+                references.push(proto::Reference { sha256: r.sha256.clone() });
+            }
             Some(proto::assign::Params::Enhance(proto::EnhanceParams {
                 prompt: enhance_request(&job.prompt, job.width, job.height),
+                max_new_tokens: job.enhance_max_tokens.unwrap_or(0),
+                references,
             }))
         }
         "encode" => {
@@ -1153,11 +1376,46 @@ async fn dispatch_task_to_executor(
             } else {
                 String::new()
             };
+            // Every reference's pixels go in; latents come back only for the ones Studio has
+            // none stored for (with this worker's model and the configured resolution).
+            let reference_res = state.config.reference_res;
+            let model = (
+                ex.current_model_id.clone().unwrap_or_default(),
+                ex.current_model_rev.clone().unwrap_or_default(),
+            );
+            let mut references = Vec::with_capacity(job.references.len());
+            for (i, r) in job.references.iter().enumerate() {
+                let bytes = state.db.get_upload(&r.sha256).await?.map(|u| u.bytes).unwrap_or(0);
+                inputs.push(proto::ArtifactRef {
+                    name: format!("ref{i}.image"),
+                    url: format!("{base_url}/agent/v1/blobs/{}", r.sha256),
+                    sha256: r.sha256.clone(),
+                    bytes,
+                });
+                let stored = state
+                    .db
+                    .get_reference_latents(&r.sha256, &model.0, &model.1, reference_res)
+                    .await?;
+                if stored.is_none() {
+                    uploads.push(proto::ArtifactRef {
+                        name: format!("ref{i}.safetensors"),
+                        url: format!(
+                            "{base_url}/agent/v1/artifacts/{}/{attempt}/ref{i}.safetensors",
+                            assigned_task.id
+                        ),
+                        sha256: String::new(),
+                        bytes: 0,
+                    });
+                }
+                references.push(proto::Reference { sha256: r.sha256.clone() });
+            }
             Some(proto::assign::Params::Encode(proto::EncodeParams {
                 prompt: effective_prompt,
                 prompt_source,
                 negative_prompt: neg,
                 true_cfg_scale: job.true_cfg_scale,
+                reference_res: if references.is_empty() { 0 } else { reference_res },
+                references,
             }))
         }
         "denoise" => {
@@ -1185,12 +1443,14 @@ async fn dispatch_task_to_executor(
                 sha256: String::new(),
                 bytes: 0,
             });
+            inputs.append(&mut reference_inputs);
             Some(proto::assign::Params::Denoise(proto::DenoiseParams {
                 width: job.width,
                 height: job.height,
                 steps: job.steps,
                 seed: job.seed,
                 true_cfg_scale: job.true_cfg_scale,
+                references: job.references.len() as u32,
             }))
         }
         "decode" => {

@@ -1,13 +1,16 @@
 use crate::config::bearer_matches;
-use crate::db::{is_valid_client_job_id, now_s, JobSubmitInput};
+use crate::db::{
+    is_valid_client_job_id, now_s, JobSubmitInput, ReferenceInput, ReferenceLatents, UploadRecord,
+};
 use crate::metrics::{ExecutorLiveMetrics, MetricsSnapshot};
 use crate::proto;
 use crate::scheduler::{
-    check_submit_feasibility, compute_capabilities, run_scheduler_tick, AppState,
+    check_submit_feasibility, compute_capabilities, encode_cache_key, run_scheduler_tick, AppState,
 };
 use crate::storage::{
-    validate_embeds_safetensors, validate_enhanced_json, validate_latent_safetensors,
-    validate_png_dimensions, THUMB_SIZES,
+    is_sha256_hex, probe_upload_image, upload_thumb_key, validate_embeds_safetensors,
+    validate_enhanced_json, validate_latent_safetensors, validate_png_dimensions,
+    validate_reference_latents, THUMB_SIZES,
 };
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -32,6 +35,9 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/:id/retry", post(retry_job))
         .route("/api/images/:id", get(get_image))
         .route("/api/images/:id/thumb", get(get_image_thumb))
+        .route("/api/uploads", post(upload_image))
+        .route("/api/uploads/:sha", get(get_upload))
+        .route("/api/uploads/:sha/thumb", get(get_upload_thumb))
         .route("/api/system", get(get_system))
         .route("/api/capabilities", get(get_capabilities))
         .route("/api/preferences", get(get_preferences).put(put_preferences))
@@ -43,6 +49,7 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
             "/agent/v1/artifacts/:task_id/:attempt/:name",
             get(download_artifact).put(upload_artifact),
         )
+        .route("/agent/v1/blobs/:sha", get(download_blob))
         .route("/metrics", get(get_metrics))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(CorsLayer::permissive())
@@ -126,12 +133,23 @@ async fn submit_job(
             .into_response();
     }
 
+    let references = match resolve_references(&state, &input.references).await {
+        Ok(r) => r,
+        Err(reason) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "rejected": reason })),
+            )
+                .into_response()
+        }
+    };
+
     let seed = input.seed.unwrap_or_else(|| {
         let t = (now_s() * 1_000_000.0) as u64;
         t ^ 0x5DEECE66Du64
     });
 
-    match state.db.create_job(&input, seed).await {
+    match state.db.create_job(&input, seed, &references).await {
         Ok(job) => {
             let _ = run_scheduler_tick(&state).await;
             let refreshed = state.db.get_job(&job.id).await.ok().flatten().unwrap_or(job);
@@ -142,6 +160,171 @@ async fn submit_job(
             Json(json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+/// Turns a job's references into upload hashes. An earlier result used as a reference
+/// becomes an upload of its PNG (same blob), so every reference is stored the same way.
+async fn resolve_references(
+    state: &Arc<AppState>,
+    refs: &[ReferenceInput],
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::with_capacity(refs.len());
+    for (i, r) in refs.iter().enumerate() {
+        match (&r.upload, &r.image) {
+            (Some(sha), None) => match state.db.get_upload(sha).await {
+                Ok(Some(up)) => out.push(up.sha256),
+                Ok(None) => return Err(format!("reference {} not found; attach it again", i + 1)),
+                Err(e) => return Err(e.to_string()),
+            },
+            (None, Some(job_id)) => {
+                let art = match state.db.get_job_artifact_by_name(job_id, "image.png").await {
+                    Ok(Some(a)) => a,
+                    Ok(None) => return Err(format!("reference {}: job {job_id} has no image", i + 1)),
+                    Err(e) => return Err(e.to_string()),
+                };
+                let Ok(Some(job)) = state.db.get_job(job_id).await else {
+                    return Err(format!("reference {}: job {job_id} not found", i + 1));
+                };
+                let up = UploadRecord {
+                    sha256: art.sha256,
+                    mime: "image/png".to_string(),
+                    width: job.width,
+                    height: job.height,
+                    bytes: art.bytes,
+                    created_at: now_s(),
+                };
+                match state.db.insert_upload(&up).await {
+                    Ok(up) => out.push(up.sha256),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            _ => return Err(format!("reference {} needs exactly one of upload or image", i + 1)),
+        }
+    }
+    Ok(out)
+}
+
+/// Reference images are photos and renders; anything larger is not worth carrying.
+const UPLOAD_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// `POST /api/uploads`: an image to use as a reference (PNG, JPEG or WebP, the raw bytes as
+/// the body). Stored by its SHA-256, so uploading the same image twice gives the same id.
+async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    if body.len() > UPLOAD_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": format!("images up to {} MB", UPLOAD_MAX_BYTES / (1024 * 1024)) })),
+        )
+            .into_response();
+    }
+    let (mime, width, height) = match probe_upload_image(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let _writing = state.blobs.writing().await;
+    let (sha256, bytes) = match state.blobs.put_blob(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let rec = UploadRecord {
+        sha256,
+        mime: mime.to_string(),
+        width,
+        height,
+        bytes,
+        created_at: now_s(),
+    };
+    match state.db.insert_upload(&rec).await {
+        Ok(up) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": up.sha256,
+                "sha256": up.sha256,
+                "width": up.width,
+                "height": up.height,
+                "mime": up.mime,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>) -> Response {
+    let Ok(Some(up)) = state.db.get_upload(&sha).await else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" }))).into_response();
+    };
+    match state.blobs.get_blob(&up.sha256) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, up.mime),
+                (header::CACHE_CONTROL, IMMUTABLE.to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "upload blob missing" }))).into_response(),
+    }
+}
+
+/// JPEG thumbnail of an upload, like `/api/images/{id}/thumb`; made on first request.
+async fn get_upload_thumb(
+    State(state): State<Arc<AppState>>,
+    Path(sha): Path<String>,
+    Query(query): Query<ThumbQuery>,
+) -> Response {
+    let size = query.size.unwrap_or(512);
+    if !THUMB_SIZES.contains(&size) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("size must be one of {THUMB_SIZES:?}") })),
+        )
+            .into_response();
+    }
+    let Ok(Some(up)) = state.db.get_upload(&sha).await else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" }))).into_response();
+    };
+    let key = upload_thumb_key(&up.sha256);
+    let found = match std::fs::read(state.blobs.thumb_path(&key, size)) {
+        Ok(bytes) => Some(bytes),
+        Err(_) => {
+            let blobs = state.blobs.clone();
+            tokio::task::spawn_blocking(move || {
+                let image = blobs.get_blob(&up.sha256).ok()?;
+                blobs.write_thumbnails(&key, &image).ok()?;
+                std::fs::read(blobs.thumb_path(&key, size)).ok()
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+    };
+    match found {
+        Some(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, IMMUTABLE)],
+            bytes,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "thumbnail not found" }))).into_response(),
     }
 }
 
@@ -254,11 +437,13 @@ async fn delete_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
         );
     }
 
+    let collecting = state.blobs.collecting().await;
     match state.db.delete_job(&id).await {
         Ok(Some(orphan_shas)) => {
             for sha in orphan_shas {
                 let _ = state.blobs.delete_blob(&sha);
             }
+            drop(collecting);
             state.blobs.delete_thumbnails(&id);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -707,6 +892,32 @@ async fn download_artifact(
     }
 }
 
+/// Agents fetch reference images and stored reference latents by hash.
+async fn download_blob(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(sha): Path<String>,
+) -> Response {
+    if !check_agent_http_auth(&headers, &state.config.agent_token) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+    }
+    if !is_sha256_hex(&sha) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "not a sha256" }))).into_response();
+    }
+    match state.blobs.get_blob(&sha) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::HeaderName::from_static("x-content-sha256"), sha),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "blob not found" }))).into_response(),
+    }
+}
+
 async fn upload_artifact(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -765,6 +976,8 @@ async fn upload_artifact(
 
     // Validate artifact payload before committing (§7.4)
     let mut meta_json: Option<String> = None;
+    let mut cache_key: Option<String> = None;
+    let mut reference_latents: Option<(ReferenceLatents, String)> = None;
     let kind = if name == "image.png" {
         "final"
     } else {
@@ -774,9 +987,39 @@ async fn upload_artifact(
     let validation_res: anyhow::Result<()> = match name.as_str() {
         "enhanced.json" => validate_enhanced_json(&body).map(|_| ()),
         "embeds.safetensors" => {
-            validate_embeds_safetensors(&body, job.true_cfg_scale > 1.0).map(|hdr| {
+            validate_embeds_safetensors(&body, job.true_cfg_scale > 1.0, job.references.len()).map(|hdr| {
                 meta_json = serde_json::to_string(&hdr.metadata).ok();
+                cache_key = Some(encode_cache_key(&job, state.config.reference_res));
             })
+        }
+        n if n.starts_with("ref") && n.ends_with(".safetensors") => {
+            // ref<i>.safetensors: latents of the job's i-th reference, stored for any later job.
+            match n["ref".len()..n.len() - ".safetensors".len()]
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| job.references.get(i))
+            {
+                None => Err(anyhow::anyhow!("job has no reference for '{n}'")),
+                Some(r) => validate_reference_latents(&body, &r.sha256, state.config.reference_res).map(
+                    |(hdr, width, height)| {
+                        let meta = |k: &str| hdr.metadata.get(k).cloned().unwrap_or_default();
+                        reference_latents = Some((
+                            ReferenceLatents {
+                                source_sha256: r.sha256.clone(),
+                                model_id: meta("model"),
+                                model_rev: meta("rev"),
+                                reference_res: state.config.reference_res,
+                                blob_sha256: String::new(),
+                                bytes: 0,
+                                width,
+                                height,
+                            },
+                            meta("dtype"),
+                        ));
+                        meta_json = serde_json::to_string(&hdr.metadata).ok();
+                    },
+                ),
+            }
         }
         "latent.safetensors" => {
             validate_latent_safetensors(&body, Some(job.width), Some(job.height)).map(|hdr| {
@@ -795,6 +1038,7 @@ async fn upload_artifact(
             .into_response();
     }
 
+    let _writing = state.blobs.writing().await;
     let (sha256, bytes_len) = match state.blobs.put_blob(&body) {
         Ok(res) => res,
         Err(e) => {
@@ -806,6 +1050,11 @@ async fn upload_artifact(
         }
     };
 
+    let reference_latents = reference_latents.map(|(mut lat, dtype)| {
+        lat.blob_sha256 = sha256.clone();
+        lat.bytes = bytes_len;
+        (lat, dtype)
+    });
     match state
         .db
         .insert_uploaded_artifact(
@@ -816,6 +1065,8 @@ async fn upload_artifact(
             bytes_len,
             kind,
             meta_json.as_deref(),
+            cache_key.as_deref(),
+            reference_latents.as_ref().map(|(lat, dtype)| (lat, dtype.as_str())),
         )
         .await
     {

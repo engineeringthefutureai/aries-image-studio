@@ -2,4 +2,4 @@
 
 IMPORTANT (§10.1): The agent never imports torch or any GPU runtime.
 """
-__version__ = "0.3.1"
+__version__ = "0.4.0"

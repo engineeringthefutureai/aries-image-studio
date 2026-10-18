@@ -3,6 +3,7 @@ import type { Generation } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { formatDuration, formatGiB, generationSeconds, queueSeconds } from '../utils/timings';
 import { ZoomableImage } from './ZoomableImage';
+import { ReferenceStrip } from './ReferenceStrip';
 import {
   X,
   ChevronLeft,
@@ -18,6 +19,7 @@ import {
   Info,
   ChevronDown,
   Trash2,
+  ImagePlus,
 } from 'lucide-react';
 
 interface LightboxProps {
@@ -32,6 +34,8 @@ interface LightboxProps {
   onVary: (generation: Generation) => void;
   /** Fill the composer from this image with its seed locked. */
   onRerun: (generation: Generation) => void;
+  /** Attach this image as a reference in the composer (absent: no room or not supported). */
+  onUseAsReference?: (generation: Generation) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -45,6 +49,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
   onToggleFavorite,
   onVary,
   onRerun,
+  onUseAsReference,
   onDelete,
 }) => {
   // The image is larger than the stage: ←/→ pan it instead of changing images.
@@ -103,14 +108,22 @@ export const Lightbox: React.FC<LightboxProps> = ({
       label: 'Enhance',
       seconds: timings.enhance_s,
       detail: [
-        timings.generated_tokens != null ? `${timings.generated_tokens} tokens` : null,
+        timings.generated_tokens != null
+          ? `${timings.generated_tokens} / ${timings.max_new_tokens ?? generation.params.enhanceMaxTokens ?? '?'} tokens`
+          : null,
+        // Reasoning ran out of room: the limit was doubled, or at the ceiling cut for the reply.
+        timings.limit_raised_from ? `limit raised from ${timings.limit_raised_from}` : null,
+        timings.thinking_cut ? 'reasoning cut short' : null,
         timings.generation_tps ? `${timings.generation_tps.toFixed(1)} tok/s` : null,
       ]
         .filter(Boolean)
         .join(' · '),
     });
   }
-  if (timings?.encode_s != null) timeRows.push({ label: 'Encode', seconds: timings.encode_s });
+  // An image of a send can take another image's encode (same prompt and references).
+  if (timings?.encode_s != null) {
+    timeRows.push({ label: timings.shared ? 'Encode (reused)' : 'Encode', seconds: timings.encode_s });
+  }
   if (timings?.denoise_s != null) {
     timeRows.push({
       label: 'Denoise',
@@ -262,6 +275,16 @@ export const Lightbox: React.FC<LightboxProps> = ({
             <span className="text-xs font-semibold mt-1">Vary</span>
             <span className="text-[10px] text-white/70">New seed · to composer</span>
           </button>
+          {onUseAsReference && (
+            <button
+              onClick={() => onUseAsReference(generation)}
+              className="col-span-2 flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all"
+              title="Attach this image to the next prompt as a reference"
+            >
+              <ImagePlus className="w-4 h-4" />
+              Use as reference
+            </button>
+          )}
         </div>
 
         {/* Scrollable Inspector Body */}
@@ -281,6 +304,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
             <div className="p-3 rounded-xl bg-white/5 border border-white/10 font-sans text-xs sm:text-sm leading-relaxed text-white/95">
               {generation.prompt}
             </div>
+            {generation.references && <ReferenceStrip references={generation.references} dark />}
           </div>
 
           {/* Enhanced Prompt & Reasoning (if available) */}
@@ -430,8 +454,16 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   return (
                     <div key={stage} className="space-y-0.5 pb-1.5 last:pb-0 border-b last:border-b-0 border-white/5">
                       <div className="flex items-center justify-between text-white">
-                        <span className="uppercase text-[10px] tracking-wider text-white/60">
+                        <span
+                          className="uppercase text-[10px] tracking-wider text-white/60"
+                          title={
+                            prov.timings?.shared
+                              ? 'Reused from another image of this send: same prompt and references, encoded once'
+                              : undefined
+                          }
+                        >
                           {stage}
+                          {prov.timings?.shared ? <span className="normal-case tracking-normal"> (reused)</span> : null}
                         </span>
                         <span>
                           {prov.agent}/{prov.executor}{' '}
@@ -444,8 +476,12 @@ export const Lightbox: React.FC<LightboxProps> = ({
                           {shortRev ? `@${shortRev}` : ''}
                         </span>
                         <span>
-                          {stageSeconds != null ? formatDuration(stageSeconds) : ''}
-                          {prov.peak_mem_bytes ? ` · ${formatGiB(prov.peak_mem_bytes)}` : ''}
+                          {[
+                            stageSeconds != null && formatDuration(stageSeconds),
+                            prov.peak_mem_bytes && formatGiB(prov.peak_mem_bytes),
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </span>
                       </div>
                     </div>

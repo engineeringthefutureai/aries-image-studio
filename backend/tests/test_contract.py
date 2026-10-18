@@ -53,6 +53,41 @@ def test_encode_writes_contract(tmp_path: Path, true_cfg_scale: float, with_mask
     assert set(spec["metadata"]) <= metadata
 
 
+def test_encode_with_references_writes_contract(tmp_path: Path):
+    """Encode with two references, one without stored latents: embeds carry the mask and the
+    sizes, and the missing reference's latents match `ref<i>.safetensors`."""
+    embeds_spec, ref_spec = CONTRACT["embeds.safetensors"], CONTRACT["ref<i>.safetensors"]
+    for i in range(2):
+        Image.new("RGB", (64, 48)).save(tmp_path / f"ref{i}.png")
+    runner = EncodeStageRunner()
+    runner.pipe = MagicMock()
+    runner.pipe.encode_prompt.return_value = (MagicMock(), None, MagicMock())
+    paths = {
+        "embeds_safetensors": str(tmp_path / "embeds.safetensors"),
+        "ref0.image": str(tmp_path / "ref0.png"),
+        "ref1.image": str(tmp_path / "ref1.png"),
+        "ref1.safetensors": str(tmp_path / "ref1.safetensors"),
+    }
+    with patch("aries_worker.stages.encode.atomic_safetensors_save", return_value=1) as save:
+        runner.run_job(
+            "task-enc",
+            paths,
+            {"prompt": "these two together", "references": ["a" * 64, "b" * 64], "reference_res": 1024, **MODEL},
+        )
+    saved = {str(c.args[1]): (set(c.args[0]), c.kwargs["metadata"]) for c in save.call_args_list}
+    assert set(saved) == {paths["ref1.safetensors"], paths["embeds_safetensors"]}
+
+    tensors, metadata = saved[paths["ref1.safetensors"]]
+    assert tensors == set(ref_spec["tensors"])
+    assert set(ref_spec["metadata"]) <= set(metadata)
+    assert metadata["source_sha256"] == "b" * 64
+
+    tensors, metadata = saved[paths["embeds_safetensors"]]
+    assert set(embeds_spec["tensors"]) | set(embeds_spec["tensors_when_references"]) <= tensors
+    assert set(embeds_spec["metadata"]) | set(embeds_spec["metadata_when_references"]) <= set(metadata)
+    assert json.loads(metadata["reference_sizes"]) == [[1184, 896]] * 2
+
+
 def test_denoise_writes_contract(tmp_path: Path):
     spec = CONTRACT["latent.safetensors"]
     runner = DenoiseStageRunner()
@@ -120,6 +155,37 @@ def test_enhance_writes_contract(tmp_path: Path):
     runner.run_job("task-enh", {"enhanced_json": str(out)}, {"prompt": "a photo"})
     data = json.loads(out.read_text())
     assert set(spec["fields"]) <= set(data)
+    assert set(data) <= set(spec["fields"]) | set(spec["optional_fields"])
+
+
+def test_image_enhancer_writes_contract(tmp_path: Path):
+    """PE-I2I's `ratio_follow` is a contract field."""
+    spec = CONTRACT["enhanced.json"]
+    runner = EnhanceStageRunner()
+    runner.vision = True
+    input_ids = MagicMock()
+    input_ids.shape = (1, 8)
+
+    class Encoding(dict):
+        def to(self, device):
+            return self
+
+    runner.processor = MagicMock()
+    runner.processor.apply_chat_template.return_value = Encoding(input_ids=input_ids)
+    runner.tokenizer = MagicMock()
+    runner.tokenizer.batch_decode.return_value = [
+        'plan</think>{"rewritten_prompt": "a goblin", "wh_ratio": "", "ratio_follow": "<image1>"}'
+    ]
+    runner.model = MagicMock()
+    runner.model.generate.return_value = [MagicMock()]
+    Image.new("RGB", (64, 64)).save(tmp_path / "ref0.png")
+    out = tmp_path / "enhanced.json"
+    runner.run_job(
+        "task-enh", {"enhanced_json": str(out), "ref0.image": str(tmp_path / "ref0.png")},
+        {"prompt": "add a hat", "references": ["a" * 64]},
+    )
+    data = json.loads(out.read_text())
+    assert data["ratio_follow"] == "<image1>"
     assert set(data) <= set(spec["fields"]) | set(spec["optional_fields"])
 
 

@@ -4,7 +4,8 @@ Product, UX and the browser-facing API live in **docs/SPEC.md** and **docs/SPEC_
 building, deploying and configuring in **docs/BUILD_AND_RUN.md**;
 Architecture V3 (one Rust backend, thin GPU agents, protobuf contract, capability matching,
 live resource scraping, provenance) lives in **docs/ARCHITECTURE_V3.md** (earlier v0.2
-design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HARDWARE.md**.
+design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HARDWARE.md**
+(memory and performance work so far summarized in **docs/OPTIMIZATIONS.md**).
 Treat them as the source of truth and flag disagreements instead of silently
 diverging. When behavior changes, update the doc in the same change.
 
@@ -30,10 +31,11 @@ deploy/aries/            Systemd unit for aries-agent + Docker Compose / Makefil
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.3.1 — Architecture V3)
+## Current state (v0.4.0 — Architecture V3)
 
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
-  `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/system`, `/api/capabilities`,
+  `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/uploads` (reference images),
+  `/api/system`, `/api/capabilities`,
   `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`), runs the gRPC
   `AgentGateway` server, scrapes each online agent's `/metrics` every 1 s, and owns
   SQLite state and the content-addressed blob store.
@@ -47,7 +49,8 @@ docs/  mockups/  reference/
 
 - **studio (backend):** Rust (axum 0.7, tonic 0.12, prost 0.13, sqlx 0.8 SQLite WAL,
   image 0.25).
-- **agent & workers:** Python 3.12, `diffusers` from git (needs `QwenImage21Pipeline`),
+- **agent & workers:** Python 3.12, `diffusers` from git pinned to `b800f828` (needs
+  `QwenImage21Pipeline`; the reference-image denoise loop uses its helpers),
   `transformers==5.20.1`, `torchao==0.18.0` (int4 enhancer), `safetensors`, `torch==2.14.1+xpu`/torchvision from the **XPU index** (workers
   only; `aries_agent` never imports `torch`). Base image `ubuntu:26.04` +
   `ppa:kobuk-team/intel-graphics` (`libze1 libze-intel-gpu1 intel-opencl-icd`),
@@ -71,10 +74,14 @@ Full detail in docs/HARDWARE.md.
 - **One big model per card, one process per stage.** Two large components on one card
   overflowed driver memory into host RAM and ended in an OOM kill; only process exit
   reliably frees VRAM, host RAM and driver overflow.
-- **No VAE tiling by default** (tiling makes seams). Untiled 2048² decode peaks at
-  25.76 GiB, so it needs its card to itself plus host RAM headroom; the agent declares a
-  live limit (`host_ram_available_bytes >= 6 GiB`, `max_concurrent_per_agent = 1` above
-  3.5 MP, i.e. full size only; ½-size decodes peak under 8 GiB) enforced by the backend scheduler.
+- **No VAE tiling by default** (tiling makes seams). A plain untiled 2048² decode peaks at
+  25.76 GiB and the driver then holds 13–17 GB of host RAM, so full-size decodes run as an
+  **exact split** (`ARIES_DECODE_SPLIT_ABOVE_PX`, HARDWARE.md §1.3): the decoder's
+  attention (`mid_block`) on the whole latent, the local upsampling blocks in two
+  overlapping strips: ≤ 12.5 GiB on the card, pixels within 1/255 of untiled. Untiled
+  decodes above 3.5 MP need `host_ram_available_bytes >= 6 GiB` (tiled ones do not); those that run plain untiled
+  (split off, or `ARIES_DECODE_SPLIT_ABOVE_PX` above `ARIES_DECODE_ABOVE_PX`) also take the
+  shared memory-heavy slot.
 - No peer-to-peer between the cards: move whole components or files, never split layers.
 - **`.safetensors`, never `torch.save` pickle files**, for cross-stage artifacts
   (`embeds.safetensors`, `latent.safetensors`), and initial noise is generated on CPU via

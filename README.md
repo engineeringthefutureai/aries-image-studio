@@ -6,10 +6,10 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) on a home server with
 two Intel Arc Pro B60 GPUs. Single user, LAN only.
 
-**Version 0.3.1.** A Rust Studio server owns jobs, history and images, and a thin
+**Version 0.4.0.** A Rust Studio server owns jobs, history and images, and a thin
 agent on the GPU host runs the pipeline. It works end to end on the hardware it was
 built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+Release notes: [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
 [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
@@ -25,6 +25,11 @@ Release notes: [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.
   with the official Qwen-Image-2.1-PE-T2I rewriter (its reasoning is kept and viewable;
   bf16 or a torchao int4 copy). **Advanced**: custom steps, fixed seed, VAE tiling, and
   rows of different settings sent together for side-by-side comparison.
+- **Reference images**: attach up to 4 images (pick, drop, paste, or "Use as reference" on
+  any result) and refer to them as "image 1", "image 2" in the prompt to edit or combine
+  them. Each reference is VAE-encoded once and stored, so later generations reuse it.
+  Enhance works with references too when the image-aware Qwen-Image-2.1-PE-I2I enhancer is
+  installed: it reads the images and writes a precise edit prompt.
 - **Gallery and viewer**: favorites, search, zoom to actual pixels with pan and a
   navigator, Rerun / Vary into the composer, download.
 - **Status panel**: each GPU's state, current stage and VRAM; queue depth per stage;

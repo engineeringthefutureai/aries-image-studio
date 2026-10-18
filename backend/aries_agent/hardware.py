@@ -45,6 +45,22 @@ def get_host_ram_available_bytes() -> int:
     return _read_meminfo_bytes("MemAvailable", 16106127360)
 
 
+def get_process_rss_bytes(pid: Optional[int]) -> int:
+    """Resident host RAM of `pid` (VmRSS), 0 when it is gone."""
+    if not pid or pid <= 0:
+        return 0
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        return int(parts[1]) * 1024
+    except OSError:
+        pass
+    return 0
+
+
 def get_device_mem_total_bytes(pci_address: str, default: int = 25668481024) -> int:
     """Read total VRAM bytes from sysfs if exposed by the driver, else return default."""
     if not pci_address:

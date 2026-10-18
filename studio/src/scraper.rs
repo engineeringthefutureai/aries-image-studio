@@ -51,9 +51,17 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
                     .disk_usage_pct()
                     .map(|pct| pct >= state.config.disk_watermark_pct)
                     .unwrap_or(false);
+                let _collecting = state.blobs.collecting().await;
                 if let Ok(orphans) = state.db.gc_intermediate_artifacts(86400.0, emergency).await {
                     for sha in orphans {
                         let _ = state.blobs.delete_blob(&sha);
+                    }
+                }
+                // Reference uploads no job uses, a day after upload (docs/REFERENCE_IMAGES.md §4).
+                if let Ok(orphans) = state.db.gc_uploads(86400.0).await {
+                    for sha in orphans {
+                        let _ = state.blobs.delete_blob(&sha);
+                        state.blobs.delete_thumbnails(&crate::storage::upload_thumb_key(&sha));
                     }
                 }
             }

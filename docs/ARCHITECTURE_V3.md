@@ -92,9 +92,9 @@ both sides (§7.2), so the two can't drift.
 
 | Stage | Input | Output | Notes |
 |---|---|---|---|
-| `enhance` (optional) | prompt, followed by `Aspect ratio: <preset nearest the job's size>` so the rewriter frames for the size that will render (its own `wh_ratio` is recorded, not used) | `enhanced.json` (`rewritten_prompt`, `wh_ratio`, `thinking`) | original prompt and the rewriter's reasoning kept on the job |
-| `encode` | prompt (original or enhanced), `true_cfg_scale` | `embeds.safetensors`: `prompt_embeds` (+ `negative_prompt_embeds` when `true_cfg_scale > 1`), and their masks when the pipeline returns them (it returns none when nothing is padded); header holds `prompt`, `prompt_source`, `model`, `rev`, `dtype` | 0.25–2.5 MB |
-| `denoise` | embeds + seed + size + steps | `latent.safetensors`: tensor `latent`, the input `vae.decode` receives; header holds `model`, `rev`, `dtype`, `width`, `height`, `seed`, `steps` | ~2 MB at 2048²; initial noise from `torch.Generator("cpu").manual_seed(seed)` |
+| `enhance` (optional) | prompt, followed by `Aspect ratio: <preset nearest the job's size>` so the rewriter frames for the size that will render (its own `wh_ratio` is recorded, not used); with references their pixels (`ref<i>.image`), for the image-aware enhancer PE-I2I ([ENHANCER_I2I.md](ENHANCER_I2I.md)) | `enhanced.json` (`rewritten_prompt`, `wh_ratio`, `thinking`; PE-I2I may answer `ratio_follow: "<imageN>"` instead of a ratio, recorded, not used) | original prompt and the rewriter's reasoning kept on the job |
+| `encode` | prompt (original or enhanced), `true_cfg_scale`, reference images (`ref<i>.image`) | `embeds.safetensors`: `prompt_embeds` (+ `negative_prompt_embeds` when `true_cfg_scale > 1`), and their masks when the pipeline returns them (it returns none when nothing is padded); header holds `prompt`, `prompt_source`, `model`, `rev`, `dtype`. With references also `image_pad_mask` and `reference_sizes`, and `ref<i>.safetensors` (VAE latents) for each reference Studio has none stored for | 0.25–2.5 MB; ~8 MB more per reference |
+| `denoise` | embeds + seed + size + steps, stored reference latents (`ref<i>.safetensors`) | `latent.safetensors`: tensor `latent`, the input `vae.decode` receives; header holds `model`, `rev`, `dtype`, `width`, `height`, `seed`, `steps` | ~2 MB at 2048²; initial noise from `torch.Generator("cpu").manual_seed(seed)`; with references our own copy of the pipeline's loop (REFERENCE_IMAGES.md §3.1) |
 | `decode` | latent | `image.png` | backend writes the PNG metadata chunk afterwards |
 
 The exact tensor, metadata and field names are one file,
@@ -116,7 +116,15 @@ Rules that make stages portable across agents and backends:
 - **Guidance:** `true_cfg_scale` defaults to 1.0 (no classifier-free guidance, one
   transformer pass per step, HARDWARE.md §1). `encode` writes the negative embeddings only
   when a job sets it above 1; upload validation and `denoise` refuse a job above 1
-  without them.
+  without them. Jobs with reference images cannot set it above 1 (`422`).
+- **Reference images** (REFERENCE_IMAGES.md): a reference's VAE latents depend only on
+  the image, the model revision and `ARIES_REFERENCE_RES`, so Studio stores them by those
+  and any later job reuses them; only the first encode that needs them loads the VAE.
+- **One encode per send:** encode output depends only on the effective prompt, guidance
+  and references (not seed, steps, size or tiling). A queued encode whose inputs match a
+  finished one takes its embeds (the attempt copies the source's provenance, timings and
+  peak memory, timings marked `"shared": 1`); one whose inputs match
+  an encode that is running or queued ahead of it waits for that one.
 
 ### 3.2 Provenance (audit trail, mandatory)
 
@@ -173,23 +181,27 @@ Shown in proto3 JSON form for readability; the wire type is `Register` (§7.2).
   "metrics_url": "http://aries.lan:9464/metrics",
   "host": { "ram_total_bytes": 32212254720 },
   "models": [ { "id": "Qwen/Qwen-Image-2.1", "rev": "<sha>", "dtype": "bf16" },
-              { "id": "Qwen/Qwen-Image-2.1-PE-T2I", "rev": "<sha>", "dtype": "bf16" } ],
+              { "id": "Qwen/Qwen-Image-2.1-PE-T2I", "rev": "<sha>", "dtype": "bf16" },
+              { "id": "Qwen/Qwen-Image-2.1-PE-I2I", "rev": "<sha>", "dtype": "int4" } ],
   "executors": [
     {
       "id": "xpu0",
       "device": "0000:04:00.0",
       "mem_total_bytes": 25668481024,
       "stages": {
-        "enhance": { "models": ["Qwen/Qwen-Image-2.1-PE-T2I"] },
-        "encode":  { "models": ["Qwen/Qwen-Image-2.1"] },
-        "denoise": { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4194304 },
+        "enhance": { "models": ["Qwen/Qwen-Image-2.1-PE-T2I", "Qwen/Qwen-Image-2.1-PE-I2I"],
+                     "reference_models": ["Qwen/Qwen-Image-2.1-PE-I2I"], "max_references": 4 },
+        "encode":  { "models": ["Qwen/Qwen-Image-2.1"], "max_references": 4 },
+        "denoise": { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4194304, "max_references": 4 },
         "decode":  { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4194304, "modes": ["untiled"] }
       }
     },
     { "id": "xpu1", "device": "0000:08:00.0", "...": "same shape" }
   ],
   "limits": [
-    { "stage": "decode", "above_px": 3500000,
+    { "stage": "decode", "above_px": 3500000, "decode_mode": "untiled",
+      "requires": { "host_ram_available_bytes": 6442450944 } },
+    { "stage": "denoise", "above_px": 0, "above_references": 2,
       "requires": { "host_ram_available_bytes": 6442450944, "max_concurrent_per_agent": 1 } }
   ],
   "running": []
@@ -227,14 +239,26 @@ and once a second; a mutex keeps ticks from overlapping.
 ### 6.2 Feasibility at submit
 
 Checked against known executors (seen in the last 7 days, online or not): every stage of
-the job needs an executor that declares it at the job's pixel count, with one model
-revision common to encode, denoise and decode. Otherwise `422 {rejected: reason}`.
+the job needs an executor that declares it at the job's pixel count (and, for encode and
+denoise, at least the job's number of reference images; for enhance with references, a
+model in `reference_models` taking that many), with one model revision common to encode,
+denoise and decode. Otherwise `422 {rejected: reason}`. A limit with
+`above_references` applies only to tasks with more references than that; a decode limit
+with `decode_mode` only to decodes in that mode (tiled decodes stay on the card, so the
+agent's full-size limit names `untiled`). Decode mode is matched per job: an executor that
+declares only `tiled` serves jobs that ask for tiling.
+`max_concurrent_per_agent` is one count shared by every limit that carries it: the tasks
+that spill into host RAM (full-size decode, denoise with many references) take turns
+whatever their stage, since side by side they ended in a global OOM (HARDWARE.md F10).
 `/api/capabilities` answers the same question ahead of time for the composer's presets.
 
 ### 6.3 Placement
 
 1. **Feed resident workers first:** a `ready(S)` worker gets the oldest queued `S` task
-   that fits its model revision and live limits.
+   that fits its model revision and live limits. For enhance the model must also be the
+   one the task needs (`reference_models` for a task with references, preferably another
+   for one without): a PE-T2I worker never gets a job with images, and a ready PE-T2I worker
+   with only such jobs waiting restarts with PE-I2I (rule 3).
 2. **Start workers on idle executors** for the oldest runnable task, stages with no worker
    first. Long stages (`enhance`, `denoise`) get another worker when the workers already
    starting or ready for that stage do not cover the queue, so a backlog runs on every
@@ -313,6 +337,8 @@ default token: the backend refuses to start and the agent refuses to run without
 ### 7.4 Artifacts
 
 - Inputs and outputs move over HTTP: `GET`/`PUT /agent/v1/artifacts/{task}/{attempt}/{name}`.
+  Reference images and stored reference latents are fetched by hash,
+  `GET /agent/v1/blobs/{sha256}` (agent token required).
 - An upload carries `X-Content-SHA256` and is validated before it is stored (safetensors
   header and names per `artifacts.json`, PNG dimensions, `enhanced.json` fields); uploads
   for a stale attempt get `409`, invalid payloads `422`. The agent retries other failures
@@ -321,7 +347,8 @@ default token: the backend refuses to start and the agent refuses to run without
   writes the job's metadata into the PNG (`tEXt` chunk `aries-image-studio`) and, in a
   blocking task, JPEG thumbnails (quality 82) whose longer side is 512, 768 and 1024 px; a
   missing one is made on request. Intermediate artifacts are deleted when the job is done, after 24 h for
-  failed or cancelled jobs, or at once above the disk watermark.
+  failed or cancelled jobs, or at once above the disk watermark. Stored reference latents
+  stay with their image; uploaded images no job uses are deleted a day after upload.
 
 ---
 
@@ -329,14 +356,15 @@ default token: the backend refuses to start and the agent refuses to run without
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
+| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `enhance_max_tokens` (256–24576, kept only with `enhance`) is the rewriter's token limit; unset, the worker's default: 4096 plus 2048 per reference image. Reasoning that runs out of room continues with the limit doubled, up to 24576, and only there is closed for the reply. `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. `references` lists reference images in prompt order, each `{upload: sha256}` or `{image: job_id}` (an earlier result); not with `true_cfg_scale > 1`, nor with `enhance` unless an executor has an image-aware enhancer for that many, and at most what an executor declares. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
+| `POST /api/uploads` · `GET /api/uploads/{sha256}` · `/thumb?size=` | upload a reference image (PNG, JPEG or WebP body, up to 32 MB, 16384 px a side and 64 MP; `422` otherwise) → `{id, sha256, width, height, mime}` (size upright by EXIF; the same image twice is one upload) · the image · a JPEG thumbnail like the job thumbnails (default 512) |
 | `GET /api/jobs?changed_since=<version>` | `{version, jobs, deleted}`: jobs changed since a version (all without it), each with tasks (status, step, enhance `sub_stage` and `stats`), per-stage provenance, `meta` and `favorite`; `deleted` lists ids deleted since that version. Poll 1 s while anything is active, 10 s when idle |
 | `GET /api/jobs/{id}` · `PATCH /api/jobs/{id}` · `DELETE /api/jobs/{id}` | detail · `{favorite}` · delete (cancels first; history is user-owned) |
 | `GET /api/preferences` · `PUT /api/preferences` | the UI's preferences (composer settings, theme): one JSON object up to 16 KiB, `{}` until saved |
 | `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact (`409` for any other state) |
 | `GET /api/images/{id}` · `/thumb?size=512\|768\|1024` | PNG with metadata · JPEG thumbnail (longer side; default 1024, `400` for other sizes). Both are sent with `Cache-Control: public, max-age=31536000, immutable`, since a finished job's image never changes |
 | `GET /api/system` | agents, executors, states, declared capabilities, latest scraped resources, scrape age, queue by stage, blocked reasons |
-| `GET /api/capabilities` | for the composer: max pixels and the full-size presets servable **now** vs **ever** |
+| `GET /api/capabilities` | for the composer: max pixels, most reference images (`max_references_now`/`_ever`), most Enhance reads (`enhance_max_references_now`/`_ever`, 0 without PE-I2I) and the full-size presets servable **now** vs **ever** |
 | `POST /api/executors/{id}/lend` · `/return` · `/disable` · `/enable` | operator controls |
 | `GET /metrics` | backend metrics (§9) |
 
@@ -380,10 +408,12 @@ facts from sysfs and `/proc/meminfo`, never from `xpu-smi`.
 
 Environment variables (`ARIES_*`): token (or `ARIES_AGENT_TOKEN_FILE`), backend gRPC and
 HTTP URLs, agent id, metrics listen address and the URL the backend scrapes, model paths
-(`ARIES_MODEL_PATH`, `ARIES_ENHANCER_MODEL_PATH`), executors. Without
+(`ARIES_MODEL_PATH`, `ARIES_ENHANCER_MODEL_PATH`, optional `ARIES_ENHANCER_I2I_MODEL_PATH`), executors. Without
 `ARIES_EXECUTORS_JSON` the agent declares one executor per `xe` device in sysfs
 (`ARIES_NUM_CARDS`, default 2) with `max_px` 2400 × 1792 (the largest composer preset)
-and refuses to start if sysfs shows fewer cards. Model revisions come from `MODEL_REV`, a
+and refuses to start if sysfs shows fewer cards. Encode and denoise declare
+`ARIES_MAX_REFERENCE_IMAGES` (default 4) references, with a denoise limit above
+`ARIES_DENOISE_REFS_LIMIT_ABOVE` (default 2). Model revisions come from `MODEL_REV`, a
 `revision` file, a git checkout or the metadata `hf download --local-dir` writes, else
 `unknown`.
 

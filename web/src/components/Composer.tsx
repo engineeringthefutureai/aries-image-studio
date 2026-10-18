@@ -8,24 +8,50 @@ import {
   type CapabilitiesInfo,
   type Quality,
   type ComposerSource,
+  type ComposerReference,
   ASPECT_RATIOS,
   SIZE_MULTIPLIERS,
   QUALITY_STEPS,
   MIN_STEPS,
   MAX_STEPS,
+  ENHANCE_TOKENS_DEFAULT,
+  ENHANCE_TOKENS_PER_REFERENCE,
+  enhanceTokensDefault,
+  MIN_ENHANCE_TOKENS,
+  MAX_ENHANCE_TOKENS,
   calculateDimensions,
   clampSteps,
   qualityForSteps,
   MAX_IMAGES_PER_SEND,
 } from '../types';
 import { buildJobs, sendSeeds, imagesPerSend, mainRow } from '../utils/composer';
-import { Sparkles, Dices, Send, ChevronDown, Check, Gauge, CornerDownRight, X, SlidersHorizontal, Plus, Grid2x2 } from 'lucide-react';
+import { REFERENCE_TYPES, moveEarlier, releasePreview } from '../utils/references';
+import { uploadReferenceApi } from '../services/api';
+import { generateUlid } from '../utils/ulid';
+import {
+  Sparkles,
+  Dices,
+  Send,
+  ChevronDown,
+  ChevronLeft,
+  Check,
+  Gauge,
+  CornerDownRight,
+  X,
+  SlidersHorizontal,
+  Plus,
+  Grid2x2,
+  ImagePlus,
+  Image as ImageIcon,
+  Loader2,
+  AlertCircle,
+} from 'lucide-react';
 
 interface ComposerProps {
   preferences: UserPreferences;
   onUpdatePreferences: (updates: Partial<UserPreferences>) => void;
-  /** One send: every job of the turn (rows × count), see utils/composer.ts. */
-  onSubmit: (prompt: string, jobs: JobParams[]) => void;
+  /** One send: every job of the turn (rows × count, see utils/composer.ts) and its references. */
+  onSubmit: (prompt: string, jobs: JobParams[], references: ComposerReference[]) => void;
   isSubmitting: boolean;
   workerState?: string;
   capabilities?: CapabilitiesInfo | null;
@@ -36,6 +62,11 @@ interface ComposerProps {
   onSourceChange?: (source: ComposerSource | null) => void;
   onClearPrefill?: () => void;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /** Reference images, in prompt order ("image 1" first). */
+  references: ComposerReference[];
+  onReferencesChange: React.Dispatch<React.SetStateAction<ComposerReference[]>>;
+  /** Most references a job may carry (0: Studio's agents accept none). */
+  maxReferences: number;
 }
 
 function getAspectIconDims(ratioWidth: number, ratioHeight: number, maxSize = 15) {
@@ -64,57 +95,83 @@ const SIZE_SHORT: Record<SizeMultiplier, string> = { full: 'Full', half: '½', q
 const TILING_TITLE =
   'VAE tiling at decode: faster and needs less memory, but can leave visible seams. Off by default.';
 
-/** A steps number field (1–100) that can be typed in freely and settles on blur or Enter. */
-const StepsField: React.FC<{ value: number; onChange: (steps: number) => void; label: string }> = ({
-  value,
-  onChange,
-  label,
-}) => {
+/** A whole-number field that can be typed in freely and settles on blur or Enter. */
+const NumberField: React.FC<{
+  value: number;
+  onChange: (n: number) => void;
+  label: string;
+  title: string;
+  min: number;
+  max: number;
+  unit: string;
+  width?: string;
+}> = ({ value, onChange, label, title, min, max, unit, width = 'w-8' }) => {
   const [draft, setDraft] = useState<string | null>(null);
   return (
-    <label className={chip} title={`Denoising steps (${MIN_STEPS}–${MAX_STEPS})`}>
+    <label className={chip} title={title}>
       <input
         type="number"
         inputMode="numeric"
-        min={MIN_STEPS}
-        max={MAX_STEPS}
+        min={min}
+        max={max}
         step={1}
         value={draft ?? String(value)}
         onChange={(e) => {
           setDraft(e.target.value);
           const n = Number(e.target.value);
-          if (e.target.value !== '' && Number.isInteger(n) && n >= MIN_STEPS && n <= MAX_STEPS) onChange(n);
+          if (e.target.value !== '' && Number.isInteger(n) && n >= min && n <= max) onChange(n);
         }}
         onBlur={() => {
           // Out of range snaps to the nearest limit; empty or not a number keeps the last value.
-          if (draft !== null && draft.trim() !== '' && Number.isFinite(Number(draft))) onChange(clampSteps(Number(draft)));
+          if (draft !== null && draft.trim() !== '' && Number.isFinite(Number(draft))) {
+            onChange(Math.min(max, Math.max(min, Math.round(Number(draft)))));
+          }
           setDraft(null);
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         }}
         aria-label={label}
-        className="w-8 bg-transparent text-right font-semibold tabular-nums text-[#1c1c18] dark:text-[#f3f0e9] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className={`${width} bg-transparent text-right font-semibold tabular-nums text-[#1c1c18] dark:text-[#f3f0e9] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
       />
-      <span className="opacity-60">steps</span>
+      <span className="opacity-60">{unit}</span>
     </label>
   );
 };
 
-/** An on/off chip (Enhance, Tiling) inside the advanced panel. */
-const ToggleChip: React.FC<{ on: boolean; onClick: () => void; label: string; title: string; icon?: React.ReactNode }> = ({
-  on,
-  onClick,
+/** A steps field (1–100). */
+const StepsField: React.FC<{ value: number; onChange: (steps: number) => void; label: string }> = ({
+  value,
+  onChange,
   label,
-  title,
-  icon,
 }) => (
+  <NumberField
+    value={value}
+    onChange={(n) => onChange(clampSteps(n))}
+    label={label}
+    title={`Denoising steps (${MIN_STEPS}–${MAX_STEPS})`}
+    min={MIN_STEPS}
+    max={MAX_STEPS}
+    unit="steps"
+  />
+);
+
+/** An on/off chip (Enhance, Tiling) inside the advanced panel. */
+const ToggleChip: React.FC<{
+  on: boolean;
+  onClick: () => void;
+  label: string;
+  title: string;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+}> = ({ on, onClick, label, title, icon, disabled }) => (
   <button
     type="button"
     onClick={onClick}
     aria-pressed={on}
     title={title}
-    className={`flex items-center gap-1 px-2 py-1 rounded-lg border font-medium transition-all cursor-pointer ${
+    disabled={disabled}
+    className={`flex items-center gap-1 px-2 py-1 rounded-lg border font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
       on
         ? 'bg-amber-500/10 text-amber-900 dark:text-amber-300 border-amber-500/30'
         : 'bg-[#f1eee7] dark:bg-[#232320] text-[#8c7169] dark:text-[#a09088] border-transparent'
@@ -145,6 +202,63 @@ const Fold: React.FC<{ open: boolean; children: React.ReactNode }> = ({ open, ch
   );
 };
 
+/** Why Enhance is off for a send with references, given the most images an enhancer reads. */
+const enhanceOffTitle = (most: number) =>
+  most > 0
+    ? `Enhance reads at most ${most} reference ${most === 1 ? 'image' : 'images'}`
+    : 'Enhance is off with reference images: the text enhancer cannot see them (install Qwen-Image-2.1-PE-I2I)';
+
+/** One attached reference: its number in the prompt, remove, and move earlier. */
+const ReferenceThumb: React.FC<{
+  reference: ComposerReference;
+  index: number;
+  onRemove: () => void;
+  onMoveEarlier?: () => void;
+}> = ({ reference, index, onRemove, onMoveEarlier }) => (
+  <div
+    className={`group relative w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-[#f1eee7] dark:bg-[#232320] ${
+      reference.status === 'failed' ? 'ring-2 ring-rose-500' : ''
+    }`}
+    title={reference.status === 'failed' ? reference.error || 'Upload failed' : `Image ${index + 1}`}
+    data-reference={index + 1}
+  >
+    {reference.previewUrl && <img src={reference.previewUrl} alt={`Reference image ${index + 1}`} className="w-full h-full object-cover" />}
+    {reference.status === 'uploading' && (
+      <div className="absolute inset-0 flex items-center justify-center bg-black/35" role="status" aria-label="Uploading">
+        <Loader2 className="w-4 h-4 text-white animate-spin" />
+      </div>
+    )}
+    {reference.status === 'failed' && (
+      <div className="absolute inset-0 flex items-center justify-center bg-rose-900/40">
+        <AlertCircle className="w-4 h-4 text-white" />
+      </div>
+    )}
+    <span className="absolute bottom-0.5 left-0.5 min-w-4 h-4 px-1 rounded bg-black/60 text-white font-mono text-[10px] leading-4 text-center">
+      {index + 1}
+    </span>
+    <button
+      type="button"
+      onClick={onRemove}
+      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center cursor-pointer"
+      title="Remove"
+      aria-label={`Remove reference image ${index + 1}`}
+    >
+      <X className="w-3 h-3" />
+    </button>
+    {onMoveEarlier && (
+      <button
+        type="button"
+        onClick={onMoveEarlier}
+        className="absolute bottom-0.5 right-0.5 w-4 h-4 rounded bg-black/60 text-white flex items-center justify-center cursor-pointer sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+        title={`Make it image ${index}`}
+        aria-label={`Move reference image ${index + 1} earlier`}
+      >
+        <ChevronLeft className="w-3 h-3" />
+      </button>
+    )}
+  </div>
+);
+
 const rowSummary = (row: ComposerRow) =>
   [row.aspect, SIZE_MULTIPLIERS[row.sizeMultiplier].label, `${row.steps} st`, row.enhance && 'Enhance', row.tiling && 'Tiled']
     .filter(Boolean)
@@ -162,8 +276,15 @@ export const Composer: React.FC<ComposerProps> = ({
   onSourceChange,
   onClearPrefill,
   textareaRef,
+  references,
+  onReferencesChange,
+  maxReferences,
 }) => {
   const [prompt, setPrompt] = useState('');
+  // A short note about attaching (too many, wrong type); clears itself.
+  const [notice, setNotice] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [isAspectOpen, setIsAspectOpen] = useState(false);
   const [isScaleOpen, setIsScaleOpen] = useState(false);
   // Folded to a one-line pill until the prompt is focused; a send, Esc or a tap outside folds it.
@@ -199,6 +320,96 @@ export const Composer: React.FC<ComposerProps> = ({
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [prompt, inputRef, expanded]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+
+  // A reference added from elsewhere (Rerun, "Use as reference") opens the composer to show it.
+  const refCount = useRef(references.length);
+  useEffect(() => {
+    if (references.length > refCount.current) setExpanded(true);
+    refCount.current = references.length;
+  }, [references.length]);
+
+  /** Attach image files (picker, drop, paste): each uploads at once, up to the limit. */
+  const attachFiles = (files: File[]) => {
+    const images = files.filter((f) => REFERENCE_TYPES.includes(f.type));
+    if (images.length === 0) {
+      if (files.length) setNotice('PNG, JPEG or WebP images only');
+      return;
+    }
+    if (maxReferences === 0) {
+      setNotice('No agent accepts reference images');
+      return;
+    }
+    const room = maxReferences - references.length;
+    if (room <= 0 || images.length > room) setNotice(`At most ${maxReferences} reference images`);
+    const added = images.slice(0, Math.max(0, room)).map((file) => ({
+      file,
+      ref: { key: generateUlid(), previewUrl: URL.createObjectURL(file), status: 'uploading' } as ComposerReference,
+    }));
+    if (added.length === 0) return;
+    onReferencesChange((prev) => [...prev, ...added.map((a) => a.ref)]);
+    setExpanded(true);
+    for (const { file, ref } of added) {
+      const settle = (patch: Partial<ComposerReference>) =>
+        onReferencesChange((prev) => prev.map((r) => (r.key === ref.key ? { ...r, ...patch } : r)));
+      uploadReferenceApi(file).then(
+        (up) => settle({ status: 'ready', upload: up.sha256 }),
+        (err) => settle({ status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' }),
+      );
+    }
+  };
+  const attachRef = useRef(attachFiles);
+  useEffect(() => {
+    attachRef.current = attachFiles;
+  });
+
+  // Images dropped anywhere on the page are attached; the composer shows where they go.
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth += 1;
+      setDragging(true);
+      setExpanded(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onOver = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      attachRef.current(Array.from(e.dataTransfer?.files || []));
+    };
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
+  const removeReference = (key: string) =>
+    onReferencesChange((prev) => {
+      prev.filter((r) => r.key === key).forEach(releasePreview);
+      return prev.filter((r) => r.key !== key);
+    });
+
   const collapse = () => {
     setExpanded(false);
     setIsAspectOpen(false);
@@ -225,15 +436,26 @@ export const Composer: React.FC<ComposerProps> = ({
   }, [expanded, inputRef]);
 
   const handleGenerate = () => {
-    if (!prompt.trim() || isSubmitting || overLimit) return;
-    onSubmit(prompt.trim(), buildJobs(preferences, sendSeeds(preferences)));
+    if (!prompt.trim() || isSubmitting || overLimit || referencesPending) return;
+    // Without an image-aware enhancer Enhance is off for a send with references: the text
+    // rewriter cannot see them and could rewrite away what the edit asks for.
+    const jobs = buildJobs(preferences, sendSeeds(preferences)).map((j) =>
+      enhanceBlocked ? { ...j, enhance: false } : j,
+    );
+    onSubmit(prompt.trim(), jobs, references);
+    // Like the prompt, attachments belong to the send; Rerun brings them back.
+    onReferencesChange((prev) => {
+      prev.forEach(releasePreview);
+      return [];
+    });
     // Advanced is for one send: close it and drop its settings, so nothing hidden carries
-    // over (custom steps back to Standard, random seed, no tiling, one row).
+    // over (custom steps back to Standard, random seed, no tiling, default token limit, one row).
     if (preferences.advancedOpen) {
       onUpdatePreferences({
         advancedOpen: false,
         extraRows: [],
         tiling: false,
+        enhanceMaxTokens: 0,
         isSeedLocked: false,
         ...(preferences.quality === 'custom' ? { quality: 'standard', steps: QUALITY_STEPS.standard } : {}),
       });
@@ -268,7 +490,14 @@ export const Composer: React.FC<ComposerProps> = ({
   };
 
   const advanced = preferences.advancedOpen;
-  const main = mainRow(preferences);
+  const hasReferences = references.length > 0;
+  // With references, Enhance needs an executor whose enhancer reads that many images.
+  const enhanceMostRefs = capabilities?.enhance_max_references_ever ?? 0;
+  const enhanceBlocked = hasReferences && references.length > enhanceMostRefs;
+  const anyEnhance = !enhanceBlocked && (preferences.enhance || preferences.extraRows.some((r) => r.enhance));
+  // Still uploading, or failed (remove it to send): the job would not have it.
+  const referencesPending = references.some((r) => r.status !== 'ready');
+  const main = { ...mainRow(preferences), ...(enhanceBlocked ? { enhance: false } : {}) };
   const count = Math.max(1, preferences.count || 1);
   const totalImages = imagesPerSend(preferences);
   const overLimit = totalImages > MAX_IMAGES_PER_SEND;
@@ -288,9 +517,14 @@ export const Composer: React.FC<ComposerProps> = ({
     `${main.steps} st`,
     `${totalImages} img`,
   ].join(' · ');
+  const sendTitle = referencesPending
+    ? references.some((r) => r.status === 'failed')
+      ? 'A reference image failed to upload: remove it to send'
+      : 'Uploading reference images…'
+    : 'Generate (Enter)';
   const summaryTitle = `${totalImages} ${totalImages === 1 ? 'image' : 'images'}: ${rowSummary(main)}${
     advanced ? ', Advanced on' : ''
-  }`;
+  }${hasReferences ? `, ${references.length} reference ${references.length === 1 ? 'image' : 'images'}` : ''}`;
 
   return (
     <div
@@ -309,10 +543,47 @@ export const Composer: React.FC<ComposerProps> = ({
         }`}
       >
         <div
-          className={`relative bg-[#fcf9f2] dark:bg-[#1a1a17] border border-[#e5e2db] dark:border-[#2e2e2a] shadow-2xl transition-[border-radius,padding] duration-200 ${
+          className={`relative bg-[#fcf9f2] dark:bg-[#1a1a17] border shadow-2xl transition-[border-radius,padding] duration-200 ${
             expanded ? 'rounded-2xl p-3 sm:p-4' : 'rounded-3xl py-1.5 pl-4 pr-1.5'
-          }`}
+          } ${dragging ? 'border-dashed border-[#a53705] ring-2 ring-[#a53705]/30' : 'border-[#e5e2db] dark:border-[#2e2e2a]'}`}
         >
+          <input
+            ref={fileRef}
+            type="file"
+            accept={REFERENCE_TYPES.join(',')}
+            multiple
+            hidden
+            onChange={(e) => {
+              attachFiles(Array.from(e.target.files || []));
+              e.target.value = '';
+            }}
+          />
+          {/* Reference images, in prompt order: "image 1" is the first */}
+          {(hasReferences || notice || dragging) && (
+            <Fold open={expanded}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-2 mb-2 border-b border-[#e5e2db]/50 dark:border-[#2e2e2a]/50" role="group" aria-label="Reference images">
+                <div className="flex gap-2 shrink-0 max-w-full overflow-x-auto">
+                  {references.map((ref, i) => (
+                    <ReferenceThumb
+                      key={ref.key}
+                      reference={ref}
+                      index={i}
+                      onRemove={() => removeReference(ref.key)}
+                      onMoveEarlier={i > 0 ? () => onReferencesChange((prev) => moveEarlier(prev, i)) : undefined}
+                    />
+                  ))}
+                </div>
+                <span className={`flex-1 min-w-[9rem] text-[11px] ${notice ? 'text-rose-600 dark:text-rose-400 font-medium' : 'text-[#8c7169] dark:text-[#a09088]'}`}>
+                  {notice ||
+                    (dragging
+                      ? 'Drop images to use them as references'
+                      : `"Image 1"${references.length > 1 ? `, "image 2"` : ''} in the prompt refer${references.length > 1 ? '' : 's'} to ${
+                          references.length > 1 ? 'these, in order' : 'this'
+                        }`)}
+                </span>
+              </div>
+            </Fold>
+          )}
           {/* Filled from an image (Rerun / Vary): which one, and original or enhanced prompt */}
           {source && (
             <Fold open={expanded}>
@@ -366,6 +637,13 @@ export const Composer: React.FC<ComposerProps> = ({
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={handleKeyDown}
               onFocus={() => setExpanded(true)}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files);
+                if (files.some((f) => f.type.startsWith('image/'))) {
+                  e.preventDefault();
+                  attachFiles(files);
+                }
+              }}
               aria-label="Prompt"
               placeholder={
                 expanded
@@ -386,6 +664,12 @@ export const Composer: React.FC<ComposerProps> = ({
                 className="self-center shrink-0 flex items-center gap-1 font-mono text-[11px] text-[#8c7169] dark:text-[#a09088] whitespace-nowrap cursor-pointer"
               >
                 {summary}
+                {hasReferences && (
+                  <span className="flex items-center gap-0.5">
+                    · <ImageIcon className="w-3 h-3" />
+                    {references.length}
+                  </span>
+                )}
                 {main.enhance && <Sparkles className="w-3 h-3 text-amber-600 dark:text-amber-400" />}
                 {advanced && <SlidersHorizontal className="w-3 h-3" />}
               </button>
@@ -394,11 +678,11 @@ export const Composer: React.FC<ComposerProps> = ({
             {/* Submit Button. Folded with Advanced on, it opens the composer first: nothing hidden is sent. */}
             <button
               onClick={!expanded && advanced ? expand : handleGenerate}
-              disabled={!prompt.trim() || isSubmitting || overLimit}
+              disabled={!prompt.trim() || isSubmitting || overLimit || referencesPending}
               className={`w-9 h-9 rounded-full bg-[#a53705] text-white flex items-center justify-center hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30 transition-all shadow-md shrink-0 cursor-pointer ${
                 expanded ? 'mb-1' : ''
               }`}
-              title="Generate (Enter)"
+              title={sendTitle}
               aria-label="Generate"
             >
               <Send className="w-4 h-4 ml-0.5" />
@@ -409,6 +693,23 @@ export const Composer: React.FC<ComposerProps> = ({
           {/* Controls and Settings Row */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-3 mt-2 border-t border-[#e5e2db]/50 dark:border-[#2e2e2a]/50 text-xs text-[#58423a] dark:text-[#a09088]">
             <div className="flex flex-wrap items-center gap-1.5">
+              {/* Attach reference images (also: drop anywhere, or paste) */}
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={maxReferences === 0 || references.length >= maxReferences}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#f1eee7] dark:bg-[#232320] hover:bg-[#e5e2db] dark:hover:bg-[#2c2c28] text-[#1c1c18] dark:text-[#f3f0e9] font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  maxReferences === 0
+                    ? 'No agent accepts reference images'
+                    : `Attach reference images (up to ${maxReferences}); you can also drop or paste them`
+                }
+                aria-label="Attach reference images"
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+                {hasReferences && <span className="font-mono">{references.length}/{maxReferences}</span>}
+              </button>
+
               {/* Aspect Ratio Picker Chip & Popover */}
               <div className="relative">
                 <button
@@ -632,21 +933,28 @@ export const Composer: React.FC<ComposerProps> = ({
               <button
                 type="button"
                 onClick={() => onUpdatePreferences({ enhance: !preferences.enhance })}
-                aria-pressed={preferences.enhance}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border cursor-pointer ${
-                  preferences.enhance
+                aria-pressed={main.enhance}
+                disabled={enhanceBlocked}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                  main.enhance
                     ? 'bg-amber-500/10 text-amber-900 dark:text-amber-300 border-amber-500/30'
                     : 'bg-[#f1eee7] dark:bg-[#232320] text-[#8c7169] dark:text-[#a09088] border-transparent hover:text-[#1c1c18] dark:hover:text-[#f3f0e9]'
                 }`}
-                title="Enhance prompt before generating (Qwen-Image-2.1-PE rewrites it on a free GPU)"
+                title={
+                  enhanceBlocked
+                    ? enhanceOffTitle(enhanceMostRefs)
+                    : hasReferences
+                      ? 'Enhance prompt before generating (Qwen-Image-2.1-PE-I2I reads the images and rewrites it on a free GPU)'
+                      : 'Enhance prompt before generating (Qwen-Image-2.1-PE rewrites it on a free GPU)'
+                }
               >
                 <Sparkles
                   className={`w-3.5 h-3.5 ${
-                    preferences.enhance ? 'text-amber-600 dark:text-amber-400' : ''
+                    main.enhance ? 'text-amber-600 dark:text-amber-400' : ''
                   }`}
                 />
                 <span>Enhance</span>
-                {preferences.enhance && (
+                {main.enhance && (
                   <Check className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                 )}
               </button>
@@ -711,6 +1019,22 @@ export const Composer: React.FC<ComposerProps> = ({
                   title={TILING_TITLE}
                   icon={<Grid2x2 className="w-3 h-3" />}
                 />
+
+                {/* The rewriter's token limit, for rows with Enhance on */}
+                {anyEnhance && (
+                  <NumberField
+                    value={preferences.enhanceMaxTokens || enhanceTokensDefault(references.length)}
+                    onChange={(n) =>
+                      onUpdatePreferences({ enhanceMaxTokens: n === enhanceTokensDefault(references.length) ? 0 : n })
+                    }
+                    label="Enhancer token limit"
+                    title={`Most tokens the prompt enhancer may write, reasoning included (${MIN_ENHANCE_TOKENS}–${MAX_ENHANCE_TOKENS}, default ${ENHANCE_TOKENS_DEFAULT} plus ${ENHANCE_TOKENS_PER_REFERENCE} per reference image). Raise it for long, detailed prompts such as multi-part infographics; ~30 tokens a second. Reasoning that runs out of room continues with the limit doubled, up to ${MAX_ENHANCE_TOKENS}.`}
+                    min={MIN_ENHANCE_TOKENS}
+                    max={MAX_ENHANCE_TOKENS}
+                    unit="enhancer tokens"
+                    width="w-12"
+                  />
+                )}
               </div>
 
               {/* Rows: each a full set of settings, sent with the same prompt and seed */}
@@ -750,11 +1074,12 @@ export const Composer: React.FC<ComposerProps> = ({
                     </select>
                     <StepsField label={`Row ${i + 2} steps`} value={row.steps} onChange={(n) => updateRow(i, { steps: n })} />
                     <ToggleChip
-                      on={row.enhance}
+                      on={row.enhance && !enhanceBlocked}
                       onClick={() => updateRow(i, { enhance: !row.enhance })}
                       label="Enhance"
-                      title="Rewrite the prompt with Qwen-Image-2.1-PE first"
+                      title={enhanceBlocked ? enhanceOffTitle(enhanceMostRefs) : 'Rewrite the prompt with Qwen-Image-2.1-PE first'}
                       icon={<Sparkles className="w-3 h-3" />}
+                      disabled={enhanceBlocked}
                     />
                     <ToggleChip
                       on={row.tiling}

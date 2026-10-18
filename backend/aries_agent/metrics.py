@@ -81,6 +81,12 @@ class AgentMetrics:
             ["executor", "stage", "class"],
             registry=self.registry,
         )
+        self.ram_guard_kills_total = Counter(
+            "aries_ram_guard_kills_total",
+            "Workers killed because host RAM fell below the guard floor",
+            ["executor", "stage"],
+            registry=self.registry,
+        )
 
         self._executor_pids: Dict[str, Optional[int]] = {}
         self._executor_devices: Dict[str, str] = {}

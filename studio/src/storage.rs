@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::ImageFormat;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -11,6 +11,7 @@ use std::fs;
 use std::io::Cursor;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Thumbnail sizes (longer side, px). Grid tiles are 160–430 CSS px wide: 512 covers them
 /// on ordinary screens, 768 and 1024 on high-density ones (1024 is also the viewer's
@@ -39,11 +40,19 @@ pub struct EnhancedJson {
     /// The rewriter's reasoning, kept with the job for the Inspector.
     #[serde(default)]
     pub thinking: String,
+    /// PE-I2I: `<imageN>` when the image should keep that reference's aspect.
+    #[serde(default)]
+    pub ratio_follow: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct BlobStore {
     data_dir: PathBuf,
+    /// Blobs are content-addressed and shared, and `put_blob` skips a file that already
+    /// exists: writers hold [`Self::writing`] from `put_blob` until the record pointing at
+    /// the blob is committed, and deleters hold [`Self::collecting`] from deciding a blob is
+    /// unreferenced until its file is gone, so no record ends up on a deleted file.
+    gc_lock: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl BlobStore {
@@ -60,7 +69,20 @@ impl BlobStore {
                 }
             }
         }
-        Ok(Self { data_dir })
+        Ok(Self {
+            data_dir,
+            gc_lock: Arc::new(tokio::sync::RwLock::new(())),
+        })
+    }
+
+    /// Held from `put_blob` until the record pointing at the blob is committed.
+    pub async fn writing(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.gc_lock.clone().read_owned().await
+    }
+
+    /// Held from choosing unreferenced blobs until their files are deleted.
+    pub async fn collecting(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.gc_lock.clone().write_owned().await
     }
 
     pub fn blob_path(&self, sha256: &str) -> PathBuf {
@@ -117,11 +139,11 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Writes a JPEG thumbnail at each of [`THUMB_SIZES`] (longer side, never upscaled).
-    /// CPU-heavy (decodes the full PNG): call it from a blocking task.
-    pub fn write_thumbnails(&self, job_id: &str, png_bytes: &[u8]) -> Result<()> {
-        let img = image::load_from_memory_with_format(png_bytes, ImageFormat::Png)
-            .context("failed to decode PNG for thumbnail")?;
+    /// Writes a JPEG thumbnail at each of [`THUMB_SIZES`] (longer side, never upscaled), of a
+    /// job's PNG or an uploaded image (key `up_<sha256>`, upright by its EXIF orientation).
+    /// CPU-heavy (decodes the full image): call it from a blocking task.
+    pub fn write_thumbnails(&self, job_id: &str, image_bytes: &[u8]) -> Result<()> {
+        let img = decode_upright(image_bytes).context("failed to decode image for thumbnail")?;
         // Largest first, each made from the previous one: cheaper, and the same quality.
         let mut source = img;
         for size in THUMB_SIZES.iter().rev().copied() {
@@ -163,6 +185,69 @@ impl BlobStore {
             Ok((used / total) * 100.0)
         }
     }
+}
+
+/// Image formats `POST /api/uploads` accepts, as `(format, MIME type)`.
+const UPLOAD_FORMATS: [(ImageFormat, &str); 3] = [
+    (ImageFormat::Png, "image/png"),
+    (ImageFormat::Jpeg, "image/jpeg"),
+    (ImageFormat::WebP, "image/webp"),
+];
+
+/// Largest reference image accepted: the model resizes references to ~1 MP anyway, and a
+/// small file can claim a huge size that thumbnailing would then decode.
+const UPLOAD_MAX_SIDE: u32 = 16384;
+const UPLOAD_MAX_PIXELS: u64 = 64_000_000;
+
+/// Upload thumbnails share the thumbnail directory with jobs; job ids are at most 64
+/// characters, so `up_` plus a 64-character hash never collides with one.
+pub fn upload_thumb_key(sha256: &str) -> String {
+    format!("up_{sha256}")
+}
+
+/// Whether `s` is a lowercase SHA-256 hex digest (blob names are nothing else).
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Decodes an image and turns it upright by its EXIF orientation (phone photos).
+fn decode_upright(bytes: &[u8]) -> Result<DynamicImage> {
+    let mut decoder = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(img)
+}
+
+/// MIME type and upright size of an uploaded reference image; PNG, JPEG or WebP only. Reads
+/// the header and EXIF, not the pixels.
+pub fn probe_upload_image(bytes: &[u8]) -> Result<(&'static str, u32, u32)> {
+    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let format = reader.format().ok_or_else(|| anyhow!("not an image"))?;
+    let mime = UPLOAD_FORMATS
+        .iter()
+        .find(|(f, _)| *f == format)
+        .map(|(_, m)| *m)
+        .ok_or_else(|| anyhow!("unsupported image format {format:?} (PNG, JPEG or WebP)"))?;
+    let mut decoder = reader.into_decoder().context("invalid image")?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 {
+        bail!("image has no pixels");
+    }
+    if w.max(h) > UPLOAD_MAX_SIDE || (w as u64) * (h as u64) > UPLOAD_MAX_PIXELS {
+        bail!("image is {w}×{h}; at most {UPLOAD_MAX_SIDE} px a side and 64 MP");
+    }
+    // Orientations 5–8 turn the image by 90°.
+    let turned = matches!(
+        decoder.orientation()?,
+        image::metadata::Orientation::Rotate90
+            | image::metadata::Orientation::Rotate270
+            | image::metadata::Orientation::Rotate90FlipH
+            | image::metadata::Orientation::Rotate270FlipH
+    );
+    Ok(if turned { (mime, h, w) } else { (mime, w, h) })
 }
 
 /// Parses and validates a safetensors binary buffer without loading tensor data into tensors.
@@ -228,15 +313,28 @@ pub fn parse_safetensors_header(bytes: &[u8]) -> Result<SafetensorsHeader> {
 }
 
 pub fn validate_enhanced_json(bytes: &[u8]) -> Result<EnhancedJson> {
-    let parsed: EnhancedJson =
+    let mut parsed: EnhancedJson =
         serde_json::from_slice(bytes).context("invalid enhanced.json payload")?;
     if parsed.rewritten_prompt.trim().is_empty() {
         bail!("enhanced.json rewritten_prompt cannot be empty");
     }
+    // Only `<imageN>` names an input; anything else is dropped.
+    let names_input = parsed
+        .ratio_follow
+        .strip_prefix("<image")
+        .and_then(|r| r.strip_suffix('>'))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+    if !names_input {
+        parsed.ratio_follow.clear();
+    }
     Ok(parsed)
 }
 
-pub fn validate_embeds_safetensors(bytes: &[u8], require_negative: bool) -> Result<SafetensorsHeader> {
+pub fn validate_embeds_safetensors(
+    bytes: &[u8],
+    require_negative: bool,
+    references: usize,
+) -> Result<SafetensorsHeader> {
     let header = parse_safetensors_header(bytes)?;
     // Masks are optional: the pipeline returns None for them when nothing is padded.
     for req_tensor in ["prompt_embeds"] {
@@ -266,7 +364,62 @@ pub fn validate_embeds_safetensors(bytes: &[u8], require_negative: bool) -> Resu
             bail!("embeds.safetensors metadata '{req_meta}' is empty");
         }
     }
+    if references > 0 {
+        // The transformer needs to know which embedding positions hold image tokens.
+        if !header.tensors.contains_key("image_pad_mask") {
+            bail!("embeds.safetensors missing 'image_pad_mask' required with reference images");
+        }
+        let sizes: Vec<[u32; 2]> = header
+            .metadata
+            .get("reference_sizes")
+            .and_then(|v| serde_json::from_str(v).ok())
+            .ok_or_else(|| anyhow!("embeds.safetensors missing metadata 'reference_sizes'"))?;
+        if sizes.len() != references {
+            bail!(
+                "embeds.safetensors encodes {} reference images, the job has {references}",
+                sizes.len()
+            );
+        }
+    }
     Ok(header)
+}
+
+/// `ref<i>.safetensors`: VAE latents of the reference image with hash `source_sha256`,
+/// resized for `reference_res`. Returns the header and the resized `(width, height)`.
+pub fn validate_reference_latents(
+    bytes: &[u8],
+    source_sha256: &str,
+    reference_res: u32,
+) -> Result<(SafetensorsHeader, u32, u32)> {
+    let header = parse_safetensors_header(bytes)?;
+    let t = header
+        .tensors
+        .get("latents")
+        .ok_or_else(|| anyhow!("reference latents missing tensor 'latents'"))?;
+    if t.shape.len() != 3 {
+        bail!("reference latents tensor 'latents' must be (1, tokens, channels), got {:?}", t.shape);
+    }
+    for req_meta in ["width", "height", "reference_res", "source_sha256", "model", "rev", "dtype"] {
+        match header.metadata.get(req_meta) {
+            Some(v) if !v.is_empty() => {}
+            _ => bail!("reference latents missing metadata '{req_meta}'"),
+        }
+    }
+    let meta = |k: &str| header.metadata.get(k).map(|s| s.as_str()).unwrap_or_default();
+    if meta("source_sha256") != source_sha256 {
+        bail!("reference latents are of image {}, expected {source_sha256}", meta("source_sha256"));
+    }
+    if meta("reference_res") != reference_res.to_string() {
+        bail!("reference latents at resolution {}, expected {reference_res}", meta("reference_res"));
+    }
+    let (Ok(w), Ok(h)) = (meta("width").parse::<u32>(), meta("height").parse::<u32>()) else {
+        bail!("reference latents width/height are not numbers");
+    };
+    // One latent token per 16x16 pixel tile.
+    if t.shape[1] != ((w / 16) * (h / 16)) as usize {
+        bail!("reference latents hold {} tokens, {w}x{h} needs {}", t.shape[1], (w / 16) * (h / 16));
+    }
+    Ok((header, w, h))
 }
 
 pub fn validate_latent_safetensors(

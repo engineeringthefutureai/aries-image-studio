@@ -82,6 +82,11 @@ message StageCapability {
   repeated string     models = 2;   // ModelRef.id values this stage can run
   uint64              max_px = 3;   // 0 = no pixel limit (enhance, encode)
   repeated DecodeMode modes  = 4;   // decode only
+  uint32              max_references = 5;   // most reference images per task (0 = none)
+  // Which of `models` take reference images (enhance: the image-aware PE-I2I). Empty: every
+  // model takes up to `max_references`. A task with references needs one of these models;
+  // one without prefers a model that is not listed.
+  repeated string     reference_models = 6;
 }
 
 message Executor {
@@ -106,6 +111,12 @@ message Limit {
   Stage                stage    = 1;
   uint64               above_px = 2;
   repeated Requirement requires = 3;
+  // Set: the limit applies only to tasks with more reference images than this (and
+  // more pixels than above_px). Unset: reference images do not matter.
+  optional uint32      above_references = 4;
+  // Decode only. Set: the limit applies only to decodes in this mode ("untiled" | "tiled").
+  // Unset: the mode does not matter.
+  optional string      decode_mode      = 5;
 }
 
 message RunningTask {
@@ -147,13 +158,29 @@ message ArtifactRef {
   uint64 bytes  = 4;
 }
 
-message EnhanceParams { string prompt = 1; }
+message EnhanceParams {
+  string prompt         = 1;
+  uint32 max_new_tokens = 2;   // the rewriter's token limit (reasoning + reply); 0 = worker default (4096 + 2048 per reference)
+  // The images the instruction talks about ("image 1" is index 0), for an image-aware
+  // enhancer; pixels arrive as the inputs `ref<i>.image`.
+  repeated Reference references = 3;
+}
+
+// A reference image, in prompt order ("image 1" is index 0). Its pixels arrive as the input
+// `ref<i>.image`; stored VAE latents as `ref<i>.safetensors` (docs/REFERENCE_IMAGES.md).
+message Reference {
+  string sha256 = 1;   // of the image file as uploaded
+}
 
 message EncodeParams {
   string prompt          = 1;   // the effective prompt, resolved by the backend
   string prompt_source   = 2;   // "original" | "enhanced"
   string negative_prompt = 3;   // set only when true_cfg_scale > 1
   float  true_cfg_scale  = 4;   // > 1: encode also writes negative_prompt_embeds
+  // Encode reads every reference's pixels with the prompt, and VAE-encodes the ones the
+  // backend has no latents for: those are this task's `ref<i>.safetensors` uploads.
+  repeated Reference references    = 5;
+  uint32             reference_res = 6;   // references are resized to ~reference_res² pixels
 }
 
 message DenoiseParams {
@@ -162,6 +189,7 @@ message DenoiseParams {
   uint32 steps          = 3;
   uint64 seed           = 4;    // noise from torch.Generator("cpu")
   float  true_cfg_scale = 5;
+  uint32 references     = 6;    // reference latents arrive as inputs ref0..ref<n-1>.safetensors
 }
 
 message DecodeParams { DecodeMode mode = 1; }

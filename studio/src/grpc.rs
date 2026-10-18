@@ -247,6 +247,8 @@ fn validate_and_parse_register(
             stage: stage_str.to_string(),
             above_px: lim.above_px,
             requires: reqs,
+            above_references: lim.above_references,
+            decode_mode: lim.decode_mode.clone().filter(|m| !m.is_empty()),
         });
     }
 
@@ -284,6 +286,8 @@ fn validate_and_parse_register(
                 models: sc.models.clone(),
                 max_px: sc.max_px,
                 modes,
+                max_references: sc.max_references,
+                reference_models: sc.reference_models.clone(),
             });
         }
         executors.push(ExecutorRecord {
@@ -398,7 +402,25 @@ async fn handle_agent_message(
             }
         }
         proto::agent_message::Msg::Done(done) => {
-            handle_done_message(state, agent_id, done).await?;
+            let (task, attempt) = (done.task.clone(), done.attempt);
+            if let Err(e) = handle_done_message(state, agent_id, done).await {
+                // Fail the attempt rather than leave the task running and its executor busy:
+                // the executor's next READY would be dropped as stale. A no-op once the task
+                // is done (an error while finalizing the image).
+                warn!(agent = %agent_id, task = %task, attempt, error = %e, "Error handling Done");
+                state
+                    .db
+                    .fail_task_attempt(
+                        &task,
+                        attempt,
+                        "upload_failed",
+                        &format!("Studio could not record the result: {e:#}"),
+                        -1,
+                        0,
+                        "",
+                    )
+                    .await?;
+            }
             run_scheduler_tick(state).await?;
         }
         proto::agent_message::Msg::Failed(failed) => {
@@ -535,13 +557,41 @@ async fn handle_done_message(
         return Ok(());
     };
 
-    let mut enhanced_info: Option<(String, String, String)> = None;
+    // Encode also uploads the latents of every reference Studio had none stored for; each one
+    // was recorded on upload. Without them denoise could not run.
+    if task.stage == "encode" {
+        if let Some(job) = state.db.get_job(&task.job_id).await? {
+            for (i, r) in job.references.iter().enumerate() {
+                let stored = state
+                    .db
+                    .get_reference_latents(&r.sha256, &model_proto.id, &model_proto.rev, state.config.reference_res)
+                    .await?;
+                if stored.is_none() {
+                    state
+                        .db
+                        .fail_task_attempt(
+                            &done.task,
+                            done.attempt,
+                            "upload_failed",
+                            &format!("Done received before artifact ref{i}.safetensors was uploaded"),
+                            -1,
+                            0,
+                            "",
+                        )
+                        .await?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let mut enhanced_info: Option<(String, String, String, String)> = None;
     let mut encode_model_info: Option<(String, String)> = None;
 
     if task.stage == "enhance" {
         let bytes = state.blobs.get_blob(&uploaded_art.sha256)?;
         let parsed = validate_enhanced_json(&bytes)?;
-        enhanced_info = Some((parsed.rewritten_prompt, parsed.wh_ratio, parsed.thinking));
+        enhanced_info = Some((parsed.rewritten_prompt, parsed.wh_ratio, parsed.thinking, parsed.ratio_follow));
     } else if task.stage == "encode" {
         encode_model_info = Some((model_proto.id.clone(), model_proto.rev.clone()));
     }
@@ -574,7 +624,7 @@ async fn handle_done_message(
             &prov_record,
             enhanced_info
                 .as_ref()
-                .map(|(p, r, t)| (p.as_str(), r.as_str(), t.as_str())),
+                .map(|(p, r, t, f)| (p.as_str(), r.as_str(), t.as_str(), f.as_str())),
             encode_model_info
                 .as_ref()
                 .map(|(id, rev)| (id.as_str(), rev.as_str())),
@@ -612,11 +662,13 @@ async fn finalize_completed_job_image(
         "steps": job.steps,
         "seed": job.seed,
         "true_cfg_scale": job.true_cfg_scale,
+        "references": job.references,
         "provenance": job.provenance,
     });
     let metadata_str = serde_json::to_string(&metadata_json)?;
 
     let tagged_png = inject_png_text_chunk(&raw_png, "aries-image-studio", &metadata_str)?;
+    let writing = state.blobs.writing().await;
     let (new_sha, new_bytes) = state.blobs.put_blob(&tagged_png)?;
 
     // Update artifact record to point to the metadata-tagged PNG
@@ -632,8 +684,14 @@ async fn finalize_completed_job_image(
     .execute(state.db.pool())
     .await?;
 
+    drop(writing);
+
+    // Another job may have decoded the same bytes: delete only what nothing points at.
     if new_sha != raw_png_sha256 {
-        let _ = state.blobs.delete_blob(raw_png_sha256);
+        let _collecting = state.blobs.collecting().await;
+        if !state.db.blob_in_use(raw_png_sha256).await? {
+            let _ = state.blobs.delete_blob(raw_png_sha256);
+        }
     }
 
     // Thumbnails off the async runtime; the grids fall back to generating one on request.
@@ -655,6 +713,7 @@ async fn finalize_completed_job_image(
     }
 
     // GC intermediate artifacts for this completed job (§7.4)
+    let _collecting = state.blobs.collecting().await;
     if let Ok(orphans) = state.db.gc_intermediate_artifacts(86400.0, false).await {
         for sha in orphans {
             let _ = state.blobs.delete_blob(&sha);

@@ -15,6 +15,9 @@ pub struct BackendConfig {
     pub scrape_stale_s: f64,
     pub reconnect_grace_s: f64,
     pub disk_watermark_pct: f64,
+    /// Reference images are resized to about this side squared (1024 → ~1 MP). Part of the
+    /// key their stored latents are found by (docs/REFERENCE_IMAGES.md §5).
+    pub reference_res: u32,
 }
 
 impl Default for BackendConfig {
@@ -32,6 +35,7 @@ impl Default for BackendConfig {
             scrape_stale_s: 5.0,
             reconnect_grace_s: 30.0,
             disk_watermark_pct: 80.0,
+            reference_res: 1024,
         }
     }
 }
@@ -85,6 +89,13 @@ impl BackendConfig {
         if let Ok(v) = env::var("ARIES_DISK_WATERMARK_PCT") {
             if let Ok(n) = v.parse() {
                 cfg.disk_watermark_pct = n;
+            }
+        }
+        if let Ok(v) = env::var("ARIES_REFERENCE_RES") {
+            if let Ok(n) = v.parse::<u32>() {
+                if n >= 256 && n % 32 == 0 {
+                    cfg.reference_res = n;
+                }
             }
         }
         cfg

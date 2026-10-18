@@ -13,5 +13,6 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   enhance: false,
   advancedOpen: false,
   tiling: false,
+  enhanceMaxTokens: 0, // 0: the default for the send
   extraRows: [],
 };

@@ -45,3 +45,6 @@ out/
 *~
 .DS_Store
 Thumbs.db
+
+# Local experiments; kept out of the repo (and so out of GitHub releases)
+prototypes/

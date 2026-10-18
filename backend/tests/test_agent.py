@@ -6,14 +6,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import grpc
 import httpx
 import pytest
 
 from aries.agent.v1 import agent_pb2, agent_pb2_grpc
-from aries_agent.agent import AriesAgent
+from aries_agent.agent import ActiveTask, AriesAgent
 from aries_agent.config import AgentConfig, ExecutorConfig, ModelConfig
 from aries_agent.hardware import classify_worker_crash
 
@@ -105,13 +105,179 @@ def test_register_declaration_shape(tmp_path: Path):
     assert stage_map[agent_pb2.STAGE_DECODE].max_px == 4194304
     assert list(stage_map[agent_pb2.STAGE_DECODE].modes) == [agent_pb2.DECODE_MODE_UNTILED]
 
-    assert len(reg.limits) == 1
+    assert stage_map[agent_pb2.STAGE_ENCODE].max_references == 4
+    assert stage_map[agent_pb2.STAGE_DENOISE].max_references == 4
+    assert stage_map[agent_pb2.STAGE_DECODE].max_references == 0
+
+    # Full-size untiled decodes need the RAM floor (tiled ones stay on the card); split (the
+    # default) they stay on the card too, so they do not take the memory-heavy slot.
+    assert len(reg.limits) == 2
     lim = reg.limits[0]
-    assert lim.stage == agent_pb2.STAGE_DECODE
-    assert lim.above_px == 3500000
+    assert (lim.stage, lim.above_px, lim.HasField("above_references")) == (agent_pb2.STAGE_DECODE, 3500000, False)
+    assert lim.decode_mode == "untiled"
     kinds = {r.WhichOneof("kind"): getattr(r, r.WhichOneof("kind")) for r in lim.requires}
-    assert kinds["host_ram_available_bytes"] == 6442450944
-    assert kinds["max_concurrent_per_agent"] == 1
+    assert kinds == {"host_ram_available_bytes": 6442450944}
+    # Denoise with more than 2 references spills into host RAM (docs/HARDWARE.md §1.1).
+    refs = reg.limits[1]
+    assert (refs.stage, refs.above_px, refs.above_references) == (agent_pb2.STAGE_DENOISE, 0, 2)
+    kinds = {r.WhichOneof("kind"): getattr(r, r.WhichOneof("kind")) for r in refs.requires}
+    assert kinds == {"host_ram_available_bytes": 6442450944, "max_concurrent_per_agent": 1}
+
+    # Plain untiled decode (split off) spills: it also takes the shared slot.
+    cfg.decode_split_above_px = 0
+    reg = agent.build_register_message()
+    kinds = {r.WhichOneof("kind"): getattr(r, r.WhichOneof("kind")) for r in reg.limits[0].requires}
+    assert kinds == {"host_ram_available_bytes": 6442450944, "max_concurrent_per_agent": 1}
+
+    # A cap at or below the threshold never spills: no denoise limit to declare.
+    cfg.max_reference_images = 2
+    assert len(agent.build_register_message().limits) == 1
+
+
+def test_reference_params_reach_the_worker(tmp_path: Path):
+    """Encode gets the references' hashes and resolution, denoise their count; the files
+    themselves arrive under their artifact names."""
+    agent = AriesAgent(config=_make_test_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    refs = [agent_pb2.Reference(sha256="a" * 64), agent_pb2.Reference(sha256="b" * 64)]
+    enc = agent_pb2.Assign(
+        task="t-enc", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_ENCODE,
+        encode=agent_pb2.EncodeParams(prompt="p", references=refs, reference_res=1024),
+    )
+    task = ActiveTask(assign=enc, scratch_dir=tmp_path)
+    task.input_paths["ref0.image"] = "/in/ref0.image"
+    task.output_paths["ref1.safetensors"] = tmp_path / "ref1.safetensors"
+    payload = rt._build_worker_job_payload(task)
+    assert payload["params"]["references"] == ["a" * 64, "b" * 64]
+    assert payload["params"]["reference_res"] == 1024
+    assert payload["paths"]["ref0.image"] == "/in/ref0.image"
+    assert payload["paths"]["ref1.safetensors"] == str(tmp_path / "ref1.safetensors")
+
+    den = agent_pb2.Assign(
+        task="t-den", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_DENOISE,
+        denoise=agent_pb2.DenoiseParams(width=1024, height=1024, steps=20, seed=1, references=2),
+    )
+    assert rt._build_worker_job_payload(ActiveTask(assign=den, scratch_dir=tmp_path))["params"]["references"] == 2
+
+    enh = agent_pb2.Assign(
+        task="t-enh", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_ENHANCE,
+        enhance=agent_pb2.EnhanceParams(prompt="p", max_new_tokens=4096),
+    )
+    assert rt._build_worker_job_payload(ActiveTask(assign=enh, scratch_dir=tmp_path))["params"]["max_new_tokens"] == 4096
+    enh.enhance.max_new_tokens = 0  # unset: the worker's default
+    assert "max_new_tokens" not in rt._build_worker_job_payload(ActiveTask(assign=enh, scratch_dir=tmp_path))["params"]
+
+    # More references than declared: rejected like any other contradiction.
+    rt.state, rt.stage = agent_pb2.EXECUTOR_STATE_READY, agent_pb2.STAGE_DENOISE
+    den.denoise.references = 5
+    assert "exceed max_references 4" in agent.validate_assignment(den)
+    rt.stage = agent_pb2.STAGE_ENCODE
+    enc.encode.references.extend(refs * 2)
+    assert "exceed max_references 4" in agent.validate_assignment(enc)
+
+
+I2I_ID = "Qwen/Qwen-Image-2.1-PE-I2I"
+
+
+def _make_i2i_config(tmp_path: Path) -> AgentConfig:
+    """The test agent with the image-aware enhancer installed (docs/ENHANCER_I2I.md)."""
+    cfg = _make_test_config(tmp_path)
+    cfg.models.append(ModelConfig(id=I2I_ID, rev="sha256i2i", dtype="int4", path="/models/pe-i2i"))
+    cfg.enhancer_i2i_model_id = I2I_ID
+    return cfg
+
+
+def test_enhance_declares_the_image_enhancer(tmp_path: Path):
+    enhance = {sc.stage: sc for sc in AriesAgent(config=_make_test_config(tmp_path)).build_register_message().executors[0].stages}[agent_pb2.STAGE_ENHANCE]
+    assert (enhance.max_references, list(enhance.reference_models)) == (0, [])
+
+    reg = AriesAgent(config=_make_i2i_config(tmp_path)).build_register_message()
+    assert [m.id for m in reg.models][-1] == I2I_ID
+    for ex in reg.executors:
+        enhance = {sc.stage: sc for sc in ex.stages}[agent_pb2.STAGE_ENHANCE]
+        assert list(enhance.models) == ["Qwen/Qwen-Image-2.1-PE-T2I", I2I_ID]
+        assert list(enhance.reference_models) == [I2I_ID]
+        assert enhance.max_references == 4
+
+
+def test_config_reads_the_image_enhancer_from_env(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARIES_AGENT_TOKEN", "t")
+    monkeypatch.setenv("ARIES_EXECUTORS_JSON", '[{"id": "xpu0", "device": "0000:04:00.0"}]')
+    monkeypatch.delenv("ARIES_ENHANCER_I2I_MODEL_PATH", raising=False)
+    assert AgentConfig.from_env().enhancer_i2i_model_id is None
+    monkeypatch.setenv("ARIES_ENHANCER_I2I_MODEL_PATH", str(tmp_path / "not-downloaded"))
+    assert AgentConfig.from_env().enhancer_i2i_model_id is None
+    (tmp_path / "config.json").write_text(json.dumps({"quantization_config": {"quant_method": "torchao"}}))
+    monkeypatch.setenv("ARIES_ENHANCER_I2I_MODEL_PATH", str(tmp_path))
+    monkeypatch.setenv("ARIES_ENHANCER_I2I_MODEL_DTYPE", "int4")
+    cfg = AgentConfig.from_env()
+    assert cfg.enhancer_i2i_model_id == I2I_ID
+    i2i = cfg.models[-1]
+    assert (i2i.id, i2i.path, i2i.dtype) == (I2I_ID, str(tmp_path), "int4")
+
+
+def test_enhance_references_reach_the_image_enhancer(tmp_path: Path):
+    agent = AriesAgent(config=_make_i2i_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    refs = [agent_pb2.Reference(sha256="a" * 64), agent_pb2.Reference(sha256="b" * 64)]
+    enh = agent_pb2.Assign(
+        task="t-enh", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_ENHANCE,
+        enhance=agent_pb2.EnhanceParams(prompt="p", references=refs),
+    )
+    task = ActiveTask(assign=enh, scratch_dir=tmp_path)
+    task.input_paths["ref0.image"] = "/in/ref0.image"
+    payload = rt._build_worker_job_payload(task)
+    assert payload["params"]["references"] == ["a" * 64, "b" * 64]
+    assert payload["paths"]["ref0.image"] == "/in/ref0.image"
+
+    rt.state, rt.stage = agent_pb2.EXECUTOR_STATE_READY, agent_pb2.STAGE_ENHANCE
+    rt.model = agent_pb2.ModelRef(id=I2I_ID)
+    assert agent.validate_assignment(enh) is None
+    # A text enhancer must not get references.
+    rt.model = agent_pb2.ModelRef(id="Qwen/Qwen-Image-2.1-PE-T2I")
+    assert "does not read reference images" in agent.validate_assignment(enh)
+    rt.model = agent_pb2.ModelRef(id=I2I_ID)
+    enh.enhance.references.extend(refs * 2)
+    assert "exceed max_references 4" in agent.validate_assignment(enh)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_id,path,dtype", [
+    (None, "/models/pe", "bf16"),
+    ("Qwen/Qwen-Image-2.1-PE-T2I", "/models/pe", "bf16"),
+    (I2I_ID, "/models/pe-i2i", "int4"),
+])
+async def test_enhance_worker_loads_the_requested_enhancer(tmp_path: Path, monkeypatch, model_id, path, dtype):
+    """StartWorker.model picks the enhancer; without one the text enhancer is the default."""
+    agent = AriesAgent(config=_make_i2i_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    spawned = {}
+
+    class Proc:
+        pid, returncode, stdout = 4242, None, None
+
+    async def fake_exec(*args, env, **kwargs):
+        spawned["env"] = env
+        spawned["preexec_fn"] = kwargs.get("preexec_fn")
+        return Proc()
+
+    async def no_socket():
+        return None
+
+    async def no_monitor(proc, stage):
+        return None
+
+    monkeypatch.setattr("aries_agent.agent.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(rt, "start_socket_server", no_socket)
+    monkeypatch.setattr(rt, "_monitor_process", no_monitor)
+    cmd = agent_pb2.StartWorker(executor="xpu0", stage=agent_pb2.STAGE_ENHANCE)
+    if model_id:
+        cmd.model.CopyFrom(agent_pb2.ModelRef(id=model_id))
+    await rt.start_worker(cmd)
+    env = spawned["env"]
+    assert (env["ENHANCER_MODEL_PATH"], env["MODEL_DTYPE"]) == (path, dtype)
+    assert spawned["preexec_fn"] is not None  # the worker's oom_score_adj (test below)
+    assert env["MODEL_PATH"] == "/models/main"
 
 
 @pytest.mark.asyncio
@@ -607,3 +773,133 @@ def test_enhancer_dtype_from_quantized_checkpoint(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setenv("ARIES_ENHANCER_MODEL_DTYPE", "int4-g128")
     assert AgentConfig.from_env().models[1].dtype == "int4-g128"
+
+
+async def _spawn_sleeper(rt) -> None:
+    rt.process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(60)", stdout=asyncio.subprocess.PIPE
+    )
+    rt.pid = rt.process.pid
+    rt.stage = agent_pb2.STAGE_DENOISE
+    rt.state = agent_pb2.EXECUTOR_STATE_BUSY
+    rt._monitor_task = asyncio.create_task(rt._monitor_process(rt.process, agent_pb2.STAGE_DENOISE))
+
+
+@pytest.mark.asyncio
+async def test_ram_guard_kills_hungriest_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """HARDWARE.md F9: below the host-RAM floor the worker holding most RAM is killed as oom_kill."""
+    cfg = _make_test_config(tmp_path)
+    agent = AriesAgent(config=cfg)
+    small, big = agent.executors["xpu0"], agent.executors["xpu1"]
+    for rt in (small, big):
+        await _spawn_sleeper(rt)
+    monkeypatch.setattr(small, "worker_ram_bytes", lambda: 4 << 30)
+    monkeypatch.setattr(big, "worker_ram_bytes", lambda: 20 << 30)
+    scratch = tmp_path / "task"
+    scratch.mkdir()
+    big.active_task = ActiveTask(
+        assign=agent_pb2.Assign(task="t1", attempt=1, stage=agent_pb2.STAGE_DENOISE), scratch_dir=scratch
+    )
+
+    monkeypatch.setenv("ARIES_HOST_RAM_AVAILABLE_BYTES", str(8 << 30))
+    assert agent.check_host_ram() is None
+    monkeypatch.setenv("ARIES_HOST_RAM_AVAILABLE_BYTES", str(2 << 30))
+    assert agent.check_host_ram() is None  # one low sample is not enough
+    assert agent.check_host_ram() == "xpu1"
+
+    msg = await asyncio.wait_for(agent.send_queue.get(), timeout=5.0)
+    assert msg.failed.task == "t1"
+    assert msg.failed.failure_class == agent_pb2.FAILURE_OOM_KILL
+    assert "host RAM guard: 2.0 GiB available, below the 4.0 GiB floor" in msg.failed.detail
+    assert small.is_worker_alive and not big.is_worker_alive
+    assert agent.metrics.ram_guard_kills_total.labels(executor="xpu1", stage="denoise")._value.get() == 1
+
+    agent.config.ram_guard_floor_bytes = 0  # turned off
+    assert agent.check_host_ram() is None
+    assert agent.check_host_ram() is None
+    await small.kill_worker(reason="test")
+
+
+def test_worker_preexec_raises_oom_score_adj(tmp_path: Path, monkeypatch):
+    """Workers are the kernel's first OOM victims, never the desktop session."""
+    from aries_agent.agent import worker_preexec
+
+    written = {}
+    real_open = open
+
+    def fake_open(path, mode="r", *a, **k):
+        if path == "/proc/self/oom_score_adj":
+            target = tmp_path / "adj"
+            written["path"] = target
+            return real_open(target, mode, *a, **k)
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    worker_preexec(1000)()
+    monkeypatch.undo()
+    assert written["path"].read_text() == "1000"
+    assert AgentConfig().worker_oom_score_adj == 1000
+
+    # The real thing, in a child: the value sticks.
+    proc = subprocess.run(
+        [sys.executable, "-c", "print(open('/proc/self/oom_score_adj').read().strip())"],
+        preexec_fn=worker_preexec(900), capture_output=True, text=True, check=True,
+    )
+    assert proc.stdout.strip() == "900"
+
+
+@pytest.mark.asyncio
+async def test_release_during_upload_waits_for_the_upload(tmp_path: Path):
+    """A release (lend, idle grace) that lands while a finished task's outputs upload must
+    not stop the worker under the upload, nor be followed by READY while the worker exits:
+    the worker exits once the upload is done, and Studio hears STOPPING, never READY."""
+    agent = AriesAgent(config=_make_test_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    rt.stage = agent_pb2.STAGE_DECODE
+    exited = asyncio.Event()
+
+    class _Proc:
+        pid, returncode = 4321, None
+
+        async def wait(self):
+            await exited.wait()
+            self.returncode = 0
+            return 0
+
+    rt.process = _Proc()
+    sent: List[Dict[str, Any]] = []
+
+    async def send_worker_json(obj):
+        sent.append(obj)
+        if obj.get("action") == "exit":
+            asyncio.get_running_loop().call_later(0.05, exited.set)  # exiting takes a moment
+
+    rt._send_worker_json = send_worker_json
+    out = tmp_path / "image.png"
+    out.write_bytes(b"png")
+    assign = agent_pb2.Assign(task="t1", attempt=1, stage=agent_pb2.STAGE_DECODE)
+    assign.uploads.add(name="image.png", url="http://studio/out/image.png")
+    rt.active_task = ActiveTask(assign=assign, scratch_dir=tmp_path / "scratch", output_paths={"image.png": out})
+    exit_sent_mid_upload = []
+    releases = []
+
+    async def upload(url, path, sha):
+        releases.append(asyncio.create_task(rt.release_worker()))  # arrives mid-upload
+        for _ in range(5):
+            await asyncio.sleep(0)
+        exit_sent_mid_upload.append(bool(sent))
+        return True, ""
+
+    rt._upload_artifact_with_retry = upload
+    await rt._on_worker_done({"id": "t1"})
+    await asyncio.gather(*releases)
+
+    assert exit_sent_mid_upload == [False]
+    assert sent == [{"action": "exit"}]
+    states = []
+    while not agent.send_queue.empty():
+        m = agent.send_queue.get_nowait()
+        if m.HasField("executor_state"):
+            states.append(m.executor_state.state)
+    assert agent_pb2.EXECUTOR_STATE_READY not in states
+    assert states[-1] == agent_pb2.EXECUTOR_STATE_STOPPING

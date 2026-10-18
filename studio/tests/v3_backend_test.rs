@@ -60,6 +60,7 @@ async fn start_test_harness() -> TestHarness {
         scrape_stale_s: 5.0,
         reconnect_grace_s: 0.2,
         disk_watermark_pct: 80.0,
+        reference_res: 1024,
     };
 
     let db = Database::connect(temp_dir.join("studio.db")).await.unwrap();
@@ -120,24 +121,32 @@ fn sample_register_msg(agent_id: &str) -> proto::Register {
                         models: vec!["Qwen/Qwen-Image-2.1-PE-T2I".to_string()],
                         max_px: 0,
                         modes: vec![],
+                        max_references: 0,
+                        reference_models: vec![],
                     },
                     proto::StageCapability {
                         stage: proto::Stage::Encode as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 0,
                         modes: vec![],
+                        max_references: 4,
+                        reference_models: vec![],
                     },
                     proto::StageCapability {
                         stage: proto::Stage::Denoise as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
                         modes: vec![],
+                        max_references: 4,
+                        reference_models: vec![],
                     },
                     proto::StageCapability {
                         stage: proto::Stage::Decode as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
                         modes: vec![proto::DecodeMode::Untiled as i32, proto::DecodeMode::Tiled as i32],
+                        max_references: 0,
+                        reference_models: vec![],
                     },
                 ],
             },
@@ -151,18 +160,24 @@ fn sample_register_msg(agent_id: &str) -> proto::Register {
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 0,
                         modes: vec![],
+                        max_references: 4,
+                        reference_models: vec![],
                     },
                     proto::StageCapability {
                         stage: proto::Stage::Denoise as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
                         modes: vec![],
+                        max_references: 4,
+                        reference_models: vec![],
                     },
                     proto::StageCapability {
                         stage: proto::Stage::Decode as i32,
                         models: vec!["Qwen/Qwen-Image-2.1".to_string()],
                         max_px: 2048 * 2048,
                         modes: vec![proto::DecodeMode::Untiled as i32, proto::DecodeMode::Tiled as i32],
+                        max_references: 0,
+                        reference_models: vec![],
                     },
                 ],
             },
@@ -170,6 +185,8 @@ fn sample_register_msg(agent_id: &str) -> proto::Register {
         limits: vec![proto::Limit {
             stage: proto::Stage::Decode as i32,
             above_px: 1024 * 1024,
+            above_references: None,
+            decode_mode: None,
             requires: vec![
                 proto::Requirement {
                     kind: Some(proto::requirement::Kind::HostRamAvailableBytes(
@@ -243,6 +260,8 @@ async fn test_unknown_requirement_kind_rejected() {
     reg.limits.push(proto::Limit {
         stage: proto::Stage::Decode as i32,
         above_px: 0,
+        above_references: None,
+        decode_mode: None,
         requires: vec![proto::Requirement { kind: None }],
     });
     tx.send(proto::AgentMessage {
@@ -1576,4 +1595,691 @@ async fn test_tiling_needs_an_executor_that_declares_it() {
     assert_eq!(resp.status(), 201);
     let job: Value = resp.json().await.unwrap();
     assert_eq!(job["tiling"], false, "off by default");
+}
+
+/// The next Assign, answering StartWorker with READY and Release with IDLE on the way.
+async fn next_assign(link: &mut AgentLink) -> proto::Assign {
+    let (tx, inbound) = link;
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), inbound.next())
+            .await
+            .expect("no Assign from the backend")
+            .unwrap()
+            .unwrap();
+        let reply = |executor: String, state: proto::ExecutorStateKind, stage: i32| proto::AgentMessage {
+            msg: Some(proto::agent_message::Msg::ExecutorState(proto::ExecutorState {
+                executor,
+                state: state as i32,
+                stage,
+                pid: 1,
+                load_s: 1.0,
+                detail: String::new(),
+            })),
+        };
+        match msg.msg {
+            Some(proto::backend_message::Msg::StartWorker(sw)) => {
+                tx.send(reply(sw.executor, proto::ExecutorStateKind::ExecutorStateReady, sw.stage)).unwrap()
+            }
+            Some(proto::backend_message::Msg::Release(rel)) => {
+                tx.send(reply(rel.executor, proto::ExecutorStateKind::ExecutorStateIdle, 0)).unwrap()
+            }
+            Some(proto::backend_message::Msg::Assign(a)) => return a,
+            _ => {}
+        }
+    }
+}
+
+/// PUTs `payload` to an upload URL of an assignment, as the agent does.
+async fn put_artifact(harness: &TestHarness, url: &str, payload: &[u8]) -> (String, reqwest::StatusCode) {
+    let sha = hex::encode(Sha256::digest(payload));
+    let status = reqwest::Client::new()
+        .put(url)
+        .header("Authorization", format!("Bearer {}", harness.token))
+        .header("x-content-sha256", &sha)
+        .body(payload.to_vec())
+        .send()
+        .await
+        .unwrap()
+        .status();
+    (sha, status)
+}
+
+fn done_msg(assign: &proto::Assign) -> proto::AgentMessage {
+    proto::AgentMessage {
+        msg: Some(proto::agent_message::Msg::Done(proto::Done {
+            task: assign.task.clone(),
+            attempt: assign.attempt,
+            artifacts: vec![],
+            timings: HashMap::from([("encode_s".to_string(), 1.0)]),
+            peak_mem_bytes: 1,
+            provenance: Some(proto::Provenance {
+                agent: "aries".to_string(),
+                executor: assign.executor.clone(),
+                device: "0000:04:00.0".to_string(),
+                backend_kind: "xpu".to_string(),
+                model: Some(proto::ModelRef {
+                    id: "Qwen/Qwen-Image-2.1".to_string(),
+                    rev: "rev123".to_string(),
+                    dtype: "bf16".to_string(),
+                }),
+                torch_version: "2.14.1+xpu".to_string(),
+                worker_version: "0.4.0".to_string(),
+            }),
+        })),
+    }
+}
+
+/// docs/REFERENCE_IMAGES.md: uploads, references on jobs, one encode per send, latents
+/// encoded once and reused, and denoise fed the stored latents.
+#[tokio::test]
+async fn test_reference_images_flow() {
+    let harness = start_test_harness().await;
+    let http = reqwest::Client::new();
+    let mut link = connect_agent(&harness, sample_register_msg("aries")).await;
+
+    // Uploads: stored by hash, the same image twice is one upload; not an image is refused.
+    let upload = |bytes: Vec<u8>| {
+        let http = http.clone();
+        let url = format!("{}/api/uploads", harness.http_url);
+        async move { http.post(url).body(bytes).send().await.unwrap() }
+    };
+    let a: Value = upload(build_png_bytes(640, 480)).await.json().await.unwrap();
+    let b: Value = upload(build_png_bytes(300, 300)).await.json().await.unwrap();
+    assert_eq!((a["width"].as_u64(), a["height"].as_u64()), (Some(640), Some(480)));
+    let again = upload(build_png_bytes(640, 480)).await;
+    assert_eq!(again.json::<Value>().await.unwrap()["id"], a["id"]);
+    assert_eq!(upload(b"not an image".to_vec()).await.status(), 422);
+    let (a, b) = (a["id"].as_str().unwrap().to_string(), b["id"].as_str().unwrap().to_string());
+    let got = http.get(format!("{}/api/uploads/{a}", harness.http_url)).send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/png");
+    let thumb = http.get(format!("{}/api/uploads/{a}/thumb?size=512", harness.http_url)).send().await.unwrap();
+    assert_eq!((thumb.status(), thumb.headers()["content-type"].to_str().unwrap()), (reqwest::StatusCode::OK, "image/jpeg"));
+
+    // Refused at submit: enhance with references, more than the agent declares, unknown uploads.
+    let refs = json!([{ "upload": a }, { "upload": b }]);
+    let job = |prompt: &str, seed: u64, refs: &Value| {
+        json!({ "prompt": prompt, "width": 1024, "height": 1024, "steps": 2, "seed": seed, "references": refs })
+    };
+    let mut enhanced = job("p", 1, &refs);
+    enhanced["enhance"] = json!(true);
+    assert_eq!(submit(&harness, enhanced).await.status(), 422);
+    let five = json!([{ "upload": a }, { "upload": a }, { "upload": a }, { "upload": a }, { "upload": a }]);
+    let resp = submit(&harness, job("p", 1, &five)).await;
+    assert_eq!(resp.status(), 422);
+    assert!(resp.json::<Value>().await.unwrap()["rejected"].as_str().unwrap().contains("at most 4"));
+    assert_eq!(submit(&harness, job("p", 1, &json!([{ "upload": "f".repeat(64) }]))).await.status(), 422);
+    let caps: Value = http.get(format!("{}/api/capabilities", harness.http_url)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(caps["max_references_ever"], 4);
+
+    // Two images of one send: same prompt and references, other seeds.
+    let j1: Value = submit(&harness, job("these two in one room", 1, &refs)).await.json().await.unwrap();
+    let j2: Value = submit(&harness, job("these two in one room", 2, &refs)).await.json().await.unwrap();
+    assert_eq!(j1["references"][1]["sha256"], b.as_str());
+    let enc = next_assign(&mut link).await;
+    assert_eq!(proto::Stage::try_from(enc.stage).unwrap(), proto::Stage::Encode);
+    let Some(proto::assign::Params::Encode(p)) = &enc.params else { panic!("expected EncodeParams") };
+    assert_eq!((p.references.len(), p.reference_res), (2, 1024));
+    let input_names: Vec<_> = enc.inputs.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(input_names, ["ref0.image", "ref1.image"]);
+    for inp in &enc.inputs {
+        let bytes = http
+            .get(&inp.url)
+            .header("Authorization", format!("Bearer {}", harness.token))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(hex::encode(Sha256::digest(&bytes)), inp.sha256);
+    }
+    let mut upload_names: Vec<_> = enc.uploads.iter().map(|u| u.name.as_str()).collect();
+    upload_names.sort();
+    assert_eq!(upload_names, ["embeds.safetensors", "ref0.safetensors", "ref1.safetensors"]);
+
+    // The worker's outputs: latents per reference, embeds with the mask and the sizes.
+    let sizes = [(1184u32, 896u32), (1024, 1024)];
+    for (i, (w, h)) in sizes.iter().enumerate() {
+        let tokens = (w / 16 * (h / 16)) as usize;
+        let latents = build_safetensors_bytes(
+            &[("latents", "BF16", vec![1, tokens, 64], &[0u8; 2])],
+            &[
+                ("width", &w.to_string()),
+                ("height", &h.to_string()),
+                ("reference_res", "1024"),
+                ("source_sha256", if i == 0 { &a } else { &b }),
+                ("model", "Qwen/Qwen-Image-2.1"),
+                ("rev", "rev123"),
+                ("dtype", "bf16"),
+            ],
+        );
+        let url = &enc.uploads.iter().find(|u| u.name == format!("ref{i}.safetensors")).unwrap().url;
+        assert_eq!(put_artifact(&harness, url, &latents).await.1, 201);
+    }
+    // Latents of the wrong image are refused.
+    let wrong = build_safetensors_bytes(
+        &[("latents", "BF16", vec![1, 4144, 64], &[0u8; 2])],
+        &[("width", "1184"), ("height", "896"), ("reference_res", "1024"), ("source_sha256", &b),
+          ("model", "m"), ("rev", "r"), ("dtype", "bf16")],
+    );
+    let url0 = &enc.uploads.iter().find(|u| u.name == "ref0.safetensors").unwrap().url;
+    assert_eq!(put_artifact(&harness, url0, &wrong).await.1, 422);
+    let embeds = build_safetensors_bytes(
+        &[("prompt_embeds", "BF16", vec![1, 16, 64], &[0u8; 2]), ("image_pad_mask", "BOOL", vec![1, 16], &[0u8; 2])],
+        &[("prompt", "these two in one room"), ("prompt_source", "original"), ("model", "Qwen/Qwen-Image-2.1"),
+          ("rev", "rev123"), ("dtype", "bf16"), ("reference_sizes", "[[1184, 896], [1024, 1024]]")],
+    );
+    let url = &enc.uploads.iter().find(|u| u.name == "embeds.safetensors").unwrap().url;
+    let (embeds_sha, status) = put_artifact(&harness, url, &embeds).await;
+    assert_eq!(status, 201);
+    link.0.send(done_msg(&enc)).unwrap();
+
+    // The other image of the send takes the same embeds instead of encoding again.
+    let job2 = harness.state.db.get_job(j2["id"].as_str().unwrap()).await.unwrap().unwrap();
+    let enc2 = job2.tasks.iter().find(|t| t.stage == "encode").unwrap();
+    wait_task(&harness, &enc2.id, |t| t.status == "done").await;
+    let shared = harness.state.db.get_job_artifact_by_name(&job2.id, "embeds.safetensors").await.unwrap().unwrap();
+    assert_eq!(shared.sha256, embeds_sha);
+    let job2 = harness.state.db.get_job(&job2.id).await.unwrap().unwrap();
+    // It records the encode it took: where it ran, its time and memory, marked shared.
+    let enc_prov = &job2.provenance["encode"];
+    assert_eq!(enc_prov.timings.get("shared"), Some(&1.0));
+    assert_eq!(enc_prov.timings.get("encode_s"), Some(&1.0));
+    assert_eq!(enc_prov.peak_mem_bytes, 1);
+    assert_eq!(job2.model_rev.as_deref(), Some("rev123"));
+
+    // Denoise reads the stored latents, never the pixels.
+    let den = next_assign(&mut link).await;
+    assert_eq!(proto::Stage::try_from(den.stage).unwrap(), proto::Stage::Denoise);
+    let Some(proto::assign::Params::Denoise(dp)) = &den.params else { panic!("expected DenoiseParams") };
+    assert_eq!(dp.references, 2);
+    let mut names: Vec<_> = den.inputs.iter().map(|i| i.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["embeds.safetensors", "ref0.safetensors", "ref1.safetensors"]);
+    for inp in den.inputs.iter().filter(|i| i.name.starts_with("ref")) {
+        let resp = http.get(&inp.url).header("Authorization", format!("Bearer {}", harness.token)).send().await.unwrap();
+        assert_eq!(hex::encode(Sha256::digest(resp.bytes().await.unwrap())), inp.sha256);
+    }
+    let anon = http.get(&den.inputs.iter().find(|i| i.name == "ref0.safetensors").unwrap().url).send().await.unwrap();
+    assert_eq!(anon.status(), 401);
+
+    // Free both cards: cancel the send, and the agent reports its denoise workers ready.
+    for j in [&j1, &j2] {
+        http.post(format!("{}/api/jobs/{}/cancel", harness.http_url, j["id"].as_str().unwrap())).send().await.unwrap();
+    }
+    for ex in ["xpu0", "xpu1"] {
+        link.0
+            .send(proto::AgentMessage {
+                msg: Some(proto::agent_message::Msg::ExecutorState(proto::ExecutorState {
+                    executor: ex.to_string(),
+                    state: proto::ExecutorStateKind::ExecutorStateReady as i32,
+                    stage: proto::Stage::Denoise as i32,
+                    pid: 1,
+                    load_s: 1.0,
+                    detail: String::new(),
+                })),
+            })
+            .unwrap();
+    }
+
+    // A later job with one of these references and another prompt: its own encode, but the
+    // reference's latents are reused, so nothing to upload but the embeds.
+    let j3: Value = submit(&harness, job("the same, at night", 3, &json!([{ "upload": b }]))).await.json().await.unwrap();
+    let job3 = harness.state.db.get_job(j3["id"].as_str().unwrap()).await.unwrap().unwrap();
+    let enc3_id = job3.tasks.iter().find(|t| t.stage == "encode").unwrap().id.clone();
+    let enc3 = loop {
+        let a = next_assign(&mut link).await;
+        if a.task == enc3_id {
+            break a;
+        }
+    };
+    assert_eq!(enc3.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["ref0.image"]);
+    assert_eq!(enc3.uploads.iter().map(|u| u.name.as_str()).collect::<Vec<_>>(), ["embeds.safetensors"]);
+}
+
+#[test]
+fn test_reference_limit_applies_only_above_its_count() {
+    use aries_image_studio::db::{LimitDecl, RequirementDecl, TaskShape};
+    let shape = |px, refs| TaskShape { px, refs, tiled: false };
+    let refs_limit = LimitDecl {
+        stage: "denoise".to_string(),
+        above_px: 0,
+        requires: vec![RequirementDecl::MaxConcurrentPerAgent(1)],
+        above_references: Some(3),
+        decode_mode: None,
+    };
+    assert!(!refs_limit.applies("denoise", shape(4_194_304, 3)));
+    assert!(refs_limit.applies("denoise", shape(262_144, 4)));
+    assert!(!refs_limit.applies("decode", shape(4_194_304, 4)));
+    // A limit without a reference condition (full-size decode) ignores references.
+    let decode = LimitDecl { above_references: None, stage: "decode".to_string(), above_px: 3_500_000, ..refs_limit };
+    assert!(decode.applies("decode", shape(4_194_304, 0)));
+    assert!(!decode.applies("decode", shape(1_048_576, 4)));
+    // One for untiled decodes leaves tiled ones alone (they stay on the card).
+    let untiled = LimitDecl { decode_mode: Some("untiled".to_string()), ..decode };
+    assert!(untiled.applies("decode", shape(4_194_304, 0)));
+    assert!(!untiled.applies("decode", TaskShape { px: 4_194_304, refs: 0, tiled: true }));
+}
+
+/// Uploads nobody refers to go a day after upload; ones a job uses stay, with their blob.
+#[tokio::test]
+async fn test_upload_gc_keeps_referenced_images() {
+    let harness = start_test_harness().await;
+    let db = &harness.state.db;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let old = now_s() - 2.0 * 86400.0;
+    let mut shas = Vec::new();
+    for size in [64, 96] {
+        let (sha, bytes) = harness.state.blobs.put_blob(&build_png_bytes(size, size)).unwrap();
+        db.insert_upload(&aries_image_studio::db::UploadRecord {
+            sha256: sha.clone(),
+            mime: "image/png".to_string(),
+            width: size,
+            height: size,
+            bytes,
+            created_at: old,
+        })
+        .await
+        .unwrap();
+        shas.push(sha);
+    }
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024, "references": [{ "upload": shas[0] }] })).await;
+    assert_eq!(resp.status(), 201);
+
+    let orphans = db.gc_uploads(86400.0).await.unwrap();
+    assert_eq!(orphans, vec![shas[1].clone()]);
+    assert!(db.get_upload(&shas[0]).await.unwrap().is_some());
+    assert!(db.get_upload(&shas[1]).await.unwrap().is_none());
+}
+
+/// Advanced "Enhancer tokens": the job's limit reaches the enhance assignment; outside
+/// 256–24576 it is refused, and without Enhance it is not kept.
+#[tokio::test]
+async fn test_enhance_max_tokens_reaches_the_worker() {
+    let harness = start_test_harness().await;
+    let mut link = connect_agent(&harness, sample_register_msg("aries")).await;
+    let job = |tokens: Value, enhance: bool| {
+        json!({ "prompt": "a detailed infographic", "width": 1024, "height": 1024, "enhance": enhance, "enhance_max_tokens": tokens })
+    };
+    for bad in [100, 24577] {
+        assert_eq!(submit(&harness, job(json!(bad), true)).await.status(), 422, "{bad}");
+    }
+    let j: Value = submit(&harness, job(json!(4096), true)).await.json().await.unwrap();
+    assert_eq!(j["enhance_max_tokens"], 4096);
+    let enhance_task = j["tasks"][0]["id"].as_str().unwrap().to_string();
+    let a = loop {
+        let a = next_assign(&mut link).await;
+        if a.task == enhance_task {
+            break a;
+        }
+    };
+    let Some(proto::assign::Params::Enhance(p)) = &a.params else { panic!("expected EnhanceParams") };
+    assert_eq!(p.max_new_tokens, 4096);
+
+    let plain: Value = submit(&harness, job(json!(4096), false)).await.json().await.unwrap();
+    assert!(plain["enhance_max_tokens"].is_null());
+    assert_eq!(submit(&harness, job(json!(24576), true)).await.status(), 201);
+}
+
+const T2I: &str = "Qwen/Qwen-Image-2.1-PE-T2I";
+const I2I: &str = "Qwen/Qwen-Image-2.1-PE-I2I";
+
+/// The sample agent with the image-aware enhancer on xpu0 (docs/ENHANCER_I2I.md).
+fn i2i_register_msg(agent_id: &str) -> proto::Register {
+    let mut reg = sample_register_msg(agent_id);
+    reg.models.push(proto::ModelRef { id: I2I.to_string(), rev: "revi2i".to_string(), dtype: "int4".to_string() });
+    let enhance = reg.executors[0]
+        .stages
+        .iter_mut()
+        .find(|s| s.stage == proto::Stage::Enhance as i32)
+        .unwrap();
+    enhance.models = vec![T2I.to_string(), I2I.to_string()];
+    enhance.reference_models = vec![I2I.to_string()];
+    enhance.max_references = 4;
+    reg
+}
+
+async fn upload_png(harness: &TestHarness, w: u32, h: u32) -> String {
+    let resp: Value = reqwest::Client::new()
+        .post(format!("{}/api/uploads", harness.http_url))
+        .body(build_png_bytes(w, h))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    resp["id"].as_str().unwrap().to_string()
+}
+
+/// The StartWorker models seen until the next Assign (answered READY), and that Assign.
+async fn next_assign_with_starts(link: &mut AgentLink) -> (Vec<String>, proto::Assign) {
+    let (tx, inbound) = link;
+    let mut started = Vec::new();
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), inbound.next())
+            .await
+            .expect("no Assign from the backend")
+            .unwrap()
+            .unwrap();
+        match msg.msg {
+            Some(proto::backend_message::Msg::StartWorker(sw)) => {
+                started.push(sw.model.map(|m| m.id).unwrap_or_default());
+                tx.send(proto::AgentMessage {
+                    msg: Some(proto::agent_message::Msg::ExecutorState(proto::ExecutorState {
+                        executor: sw.executor,
+                        state: proto::ExecutorStateKind::ExecutorStateReady as i32,
+                        stage: sw.stage,
+                        pid: 1,
+                        load_s: 1.0,
+                        detail: String::new(),
+                    })),
+                })
+                .unwrap();
+            }
+            Some(proto::backend_message::Msg::Assign(a)) => return (started, a),
+            _ => {}
+        }
+    }
+}
+
+/// Enhance with references runs on PE-I2I: accepted only when an agent declares it, the
+/// worker loads that model and gets the images; `ratio_follow` is kept on the job.
+#[tokio::test]
+async fn test_image_enhancer_takes_jobs_with_references() {
+    let harness = start_test_harness().await;
+    let http = reqwest::Client::new();
+    let caps_url = format!("{}/api/capabilities", harness.http_url);
+
+    // A text-only enhancer: Enhance with references is refused.
+    let plain = start_test_harness().await;
+    let _plain_agent = connect_agent(&plain, sample_register_msg("aries")).await;
+    let sha = upload_png(&plain, 640, 480).await;
+    let body = json!({ "prompt": "add a hat", "width": 1024, "height": 1024, "enhance": true, "references": [{ "upload": sha }] });
+    let resp = submit(&plain, body).await;
+    assert_eq!(resp.status(), 422);
+    assert!(resp.json::<Value>().await.unwrap()["rejected"].as_str().unwrap().contains("enhance with 1 reference"));
+    let caps: Value = http.get(format!("{}/api/capabilities", plain.http_url)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(caps["enhance_max_references_ever"], 0);
+
+    let mut link = connect_agent(&harness, i2i_register_msg("aries")).await;
+    let caps: Value = http.get(&caps_url).send().await.unwrap().json().await.unwrap();
+    assert_eq!((caps["enhance_max_references_ever"].as_u64(), caps["enhance_max_references_now"].as_u64()), (Some(4), Some(4)));
+    let (a, b) = (upload_png(&harness, 640, 480).await, upload_png(&harness, 300, 300).await);
+    let five = json!([{ "upload": a }, { "upload": a }, { "upload": a }, { "upload": a }, { "upload": a }]);
+    let body = |refs: Value| json!({ "prompt": "put image 1 into image 2", "width": 1024, "height": 1024, "enhance": true, "references": refs });
+    assert_eq!(submit(&harness, body(five)).await.status(), 422);
+
+    let j: Value = submit(&harness, body(json!([{ "upload": a }, { "upload": b }]))).await.json().await.unwrap();
+    let (started, enh) = next_assign_with_starts(&mut link).await;
+    assert_eq!(started, [I2I]);
+    assert_eq!(proto::Stage::try_from(enh.stage).unwrap(), proto::Stage::Enhance);
+    let Some(proto::assign::Params::Enhance(p)) = &enh.params else { panic!("expected EnhanceParams") };
+    assert_eq!(p.references.iter().map(|r| r.sha256.as_str()).collect::<Vec<_>>(), [a.as_str(), b.as_str()]);
+    assert_eq!(enh.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["ref0.image", "ref1.image"]);
+    assert_eq!(enh.inputs[1].sha256, b);
+
+    let enhanced = json!({ "rewritten_prompt": "a goblin in the cafe", "wh_ratio": "1:1", "ratio_follow": "<image2>" });
+    let url = &enh.uploads.iter().find(|u| u.name == "enhanced.json").unwrap().url;
+    assert_eq!(put_artifact(&harness, url, &serde_json::to_vec(&enhanced).unwrap()).await.1, 201);
+    link.0.send(done_msg(&enh)).unwrap();
+    wait_task(&harness, &enh.task, |t| t.status == "done").await;
+    let job = harness.state.db.get_job(j["id"].as_str().unwrap()).await.unwrap().unwrap();
+    assert_eq!(job.enhanced_prompt.as_deref(), Some("a goblin in the cafe"));
+    assert_eq!(job.ratio_follow.as_deref(), Some("<image2>"));
+    let api: Value = http.get(format!("{}/api/jobs/{}", harness.http_url, job.id)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(api["ratio_follow"], "<image2>");
+}
+
+/// A text job's enhance loads PE-T2I; a ready PE-T2I worker never gets a job with images:
+/// it switches to PE-I2I instead.
+#[tokio::test]
+async fn test_enhance_worker_matches_the_jobs_enhancer() {
+    let harness = start_test_harness().await;
+    let db = &harness.state.db;
+    let mut link = connect_agent(&harness, i2i_register_msg("aries")).await;
+    let text: Value = submit(&harness, json!({ "prompt": "a lighthouse", "width": 1024, "height": 1024, "enhance": true }))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let (started, enh) = next_assign_with_starts(&mut link).await;
+    assert_eq!((started.as_slice(), enh.task.as_str()), ([T2I.to_string()].as_slice(), text["tasks"][0]["id"].as_str().unwrap()));
+
+    // The text job's enhance is done; its worker is ready on PE-T2I.
+    http_cancel(&harness, text["id"].as_str().unwrap()).await;
+    db.update_executor_state("aries", "xpu0", "ready", Some("enhance"), Some(1), None).await.unwrap();
+    assert_eq!(executor(&harness, "aries:xpu0").await.current_model_id.as_deref(), Some(T2I));
+
+    let sha = upload_png(&harness, 640, 480).await;
+    let refs: Value = submit(&harness, json!({ "prompt": "add a hat", "width": 1024, "height": 1024, "enhance": true, "references": [{ "upload": sha }] }))
+        .await
+        .json()
+        .await
+        .unwrap();
+    run_scheduler_tick(&harness.state).await.unwrap();
+    let ex0 = executor(&harness, "aries:xpu0").await;
+    assert_eq!((ex0.state.as_str(), ex0.current_model_id.as_deref()), ("starting", Some(I2I)), "{ex0:?}");
+    let (started, enh) = next_assign_with_starts(&mut link).await;
+    assert_eq!(started.last().map(String::as_str), Some(I2I));
+    assert_eq!(enh.task, refs["tasks"][0]["id"].as_str().unwrap());
+}
+
+async fn http_cancel(harness: &TestHarness, job_id: &str) {
+    reqwest::Client::new()
+        .post(format!("{}/api/jobs/{job_id}/cancel", harness.http_url))
+        .send()
+        .await
+        .unwrap();
+}
+
+/// The tasks that spill into host RAM share one slot per agent, whatever their stage: a
+/// full-size decode and a denoise with many references never run side by side (seen live:
+/// together they ended in a global OOM that took the desktop session with it).
+#[test]
+fn test_memory_heavy_tasks_take_turns_across_stages() {
+    use aries_image_studio::db::{LimitDecl, RequirementDecl, TaskShape};
+    use aries_image_studio::scheduler::check_limits_for_task;
+    let slot = vec![RequirementDecl::MaxConcurrentPerAgent(1)];
+    let mut agent: aries_image_studio::db::AgentRecord = serde_json::from_value(json!({
+        "id": "aries", "agent_version": "t", "backend_kind": "xpu", "metrics_url": "", "online": true,
+        "host_ram_total_bytes": 0, "models": [], "limits": [], "last_seen_at": 0.0
+    }))
+    .unwrap();
+    agent.limits = vec![
+        LimitDecl { stage: "decode".into(), above_px: 3_500_000, requires: slot.clone(), above_references: None, decode_mode: None },
+        LimitDecl { stage: "denoise".into(), above_px: 0, requires: slot, above_references: Some(2), decode_mode: None },
+    ];
+    let ex: aries_image_studio::db::ExecutorRecord = serde_json::from_value(json!({
+        "key": "aries:xpu1", "agent_id": "aries", "id": "xpu1", "device": "", "mem_total_bytes": 0,
+        "stages": [], "state": "idle", "lent": false, "pending_lend": false, "last_seen_at": 0.0
+    }))
+    .unwrap();
+    let mut decode: aries_image_studio::db::TaskRecord = serde_json::from_value(json!({
+        "id": "t1", "job_id": "j1", "seq": 3, "stage": "decode", "status": "running", "attempts": 1,
+        "current_attempt": 1, "step": 0, "steps": 0, "s_per_step": 0.0
+    }))
+    .unwrap();
+    decode.assigned_agent = Some("aries".into());
+    let full = 2752 * 1536;
+    let shape = |px, refs| TaskShape { px, refs, tiled: false };
+    let running = vec![(decode, shape(full, 0))];
+    let check = |stage: &str, px: u64, refs: u32, active: &[(aries_image_studio::db::TaskRecord, TaskShape)]| {
+        check_limits_for_task(&agent, &ex, stage, shape(px, refs), active, None, 5.0, 0.0)
+    };
+    // A full-size decode is running: a denoise with 3 or 4 references waits, a plain one does not.
+    let err = check("denoise", full, 3, &running).unwrap_err();
+    assert!(err.contains("memory-heavy"), "{err}");
+    assert!(check("denoise", full, 4, &running).is_err());
+    assert!(check("denoise", full, 2, &running).is_ok());
+    assert!(check("denoise", full, 0, &running).is_ok());
+    // And the other way round: a heavy denoise holds back a full-size decode, not a ½-size one.
+    let mut den = running[0].0.clone();
+    den.stage = "denoise".into();
+    let running = vec![(den, shape(full, 4))];
+    assert!(check("decode", full, 0, &running).is_err());
+    assert!(check("decode", 1376 * 768, 0, &running).is_ok());
+    assert!(check("denoise", full, 4, &[]).is_ok());
+}
+
+/// The upload an agent sends for `assign`'s stage (1024², no enhance).
+fn stage_payload(assign: &proto::Assign) -> Vec<u8> {
+    match proto::Stage::try_from(assign.stage).unwrap() {
+        proto::Stage::Encode => {
+            let Some(proto::assign::Params::Encode(p)) = &assign.params else {
+                panic!("expected EncodeParams");
+            };
+            build_safetensors_bytes(
+                &[
+                    ("prompt_embeds", "BF16", vec![1, 16, 64], &[0u8; 2048]),
+                    ("prompt_embeds_mask", "I64", vec![1, 16], &[1u8; 128]),
+                    ("negative_prompt_embeds", "BF16", vec![1, 16, 64], &[0u8; 2048]),
+                    ("negative_prompt_embeds_mask", "I64", vec![1, 16], &[1u8; 128]),
+                ],
+                &[
+                    ("prompt", &p.prompt),
+                    ("prompt_source", &p.prompt_source),
+                    ("model", "Qwen/Qwen-Image-2.1"),
+                    ("rev", "rev123"),
+                    ("dtype", "bf16"),
+                ],
+            )
+        }
+        proto::Stage::Denoise => build_safetensors_bytes(
+            &[("latent", "BF16", vec![1, 16, 128, 128], &[0u8; 512])],
+            &[
+                ("model", "Qwen/Qwen-Image-2.1"),
+                ("rev", "rev123"),
+                ("dtype", "bf16"),
+                ("width", "1024"),
+                ("height", "1024"),
+                ("seed", "1"),
+                ("steps", "4"),
+            ],
+        ),
+        proto::Stage::Decode => build_png_bytes(1024, 1024),
+        s => panic!("unexpected stage {s:?}"),
+    }
+}
+
+/// Blobs are content-addressed: two jobs that decode to the same bytes share the raw PNG's
+/// blob, and the first to finish must not delete it from under the second.
+#[tokio::test]
+async fn test_identical_images_share_their_blob_safely() {
+    let harness = start_test_harness().await;
+    let mut link = connect_agent(&harness, sample_register_msg("aries")).await;
+    let mut jobs = Vec::new();
+    for prompt in ["a", "b"] {
+        let resp = submit(&harness, json!({ "prompt": prompt, "width": 1024, "height": 1024, "enhance": false })).await;
+        assert_eq!(resp.status(), 201);
+        jobs.push(resp.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_string());
+    }
+    // Both PNGs uploaded before either job finishes.
+    let mut decodes = Vec::new();
+    while decodes.len() < 2 {
+        let assign = next_assign(&mut link).await;
+        let (_, status) = put_artifact(&harness, &assign.uploads[0].url, &stage_payload(&assign)).await;
+        assert_eq!(status, 201);
+        if assign.stage == proto::Stage::Decode as i32 {
+            decodes.push(assign);
+        } else {
+            link.0.send(done_msg(&assign)).unwrap();
+        }
+    }
+    for assign in &decodes {
+        link.0.send(done_msg(assign)).unwrap();
+        wait_task(&harness, &assign.task, |t| t.status == "done").await;
+    }
+    for job_id in &jobs {
+        let mut ok = false;
+        for _ in 0..200 {
+            let job = harness.state.db.get_job(job_id).await.unwrap().unwrap();
+            let art = harness.state.db.get_job_artifact_by_name(job_id, "image.png").await.unwrap().unwrap();
+            if job.status == "done" && art.metadata_json.is_some() {
+                ok = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(ok, "job {job_id} never got its tagged PNG");
+        let img = reqwest::get(format!("{}/api/images/{job_id}", harness.http_url)).await.unwrap();
+        assert_eq!(img.status(), 200, "job {job_id}");
+    }
+}
+
+/// An agent that declares only tiled decode takes jobs that ask for tiling.
+#[tokio::test]
+async fn test_tiled_only_decoder_serves_tiled_jobs() {
+    let harness = start_test_harness().await;
+    let mut reg = sample_register_msg("aries");
+    for ex in &mut reg.executors {
+        for cap in &mut ex.stages {
+            if cap.stage == proto::Stage::Decode as i32 {
+                cap.modes = vec![proto::DecodeMode::Tiled as i32];
+            }
+        }
+    }
+    let mut link = connect_agent(&harness, reg).await;
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024, "enhance": false, "tiling": true })).await;
+    assert_eq!(resp.status(), 201);
+    loop {
+        let assign = next_assign(&mut link).await;
+        if assign.stage == proto::Stage::Decode as i32 {
+            break;
+        }
+        let (_, status) = put_artifact(&harness, &assign.uploads[0].url, &stage_payload(&assign)).await;
+        assert_eq!(status, 201);
+        link.0.send(done_msg(&assign)).unwrap();
+    }
+    // And untiled jobs are refused up front.
+    let resp = submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024 })).await;
+    assert_eq!(resp.status(), 422);
+}
+
+/// A Done that Studio cannot record fails the attempt instead of leaving the task running
+/// and its executor busy (which would drop the executor's next READY).
+#[tokio::test]
+async fn test_done_that_cannot_be_recorded_fails_the_attempt() {
+    let harness = start_test_harness().await;
+    let mut link = connect_agent(&harness, sample_register_msg("aries")).await;
+    submit(&harness, json!({ "prompt": "p", "width": 1024, "height": 1024, "enhance": true })).await;
+    let assign = next_assign(&mut link).await;
+    assert_eq!(assign.stage, proto::Stage::Enhance as i32);
+    let payload = serde_json::to_vec(&json!({ "rewritten_prompt": "x", "wh_ratio": "1:1" })).unwrap();
+    let (sha, status) = put_artifact(&harness, &assign.uploads[0].url, &payload).await;
+    assert_eq!(status, 201);
+    // The blob vanishes before Done arrives: reading enhanced.json fails.
+    harness.state.blobs.delete_blob(&sha).unwrap();
+    link.0.send(done_msg(&assign)).unwrap();
+    let task = wait_task(&harness, &assign.task, |t| t.current_attempt == 2 || t.status == "queued").await;
+    assert_ne!(task.status, "running");
+    let ex = executor(&harness, &format!("aries:{}", assign.executor)).await;
+    assert_ne!(ex.current_task_id.as_deref(), Some(assign.task.as_str()));
+}
+
+/// The scheduler loads its jobs in one batch: the same records as one by one.
+#[tokio::test]
+async fn test_get_jobs_matches_get_job() {
+    let harness = start_test_harness().await;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let sha = upload_png(&harness, 64, 64).await;
+    let mut ids = Vec::new();
+    for body in [
+        json!({ "prompt": "a", "width": 1024, "height": 1024 }),
+        json!({ "prompt": "b", "width": 1024, "height": 1024, "references": [{ "upload": sha }] }),
+    ] {
+        let resp = submit(&harness, body).await;
+        assert_eq!(resp.status(), 201);
+        ids.push(resp.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_string());
+    }
+    let db = &harness.state.db;
+    let mut asked = ids.clone();
+    asked.push("no-such-job".to_string());
+    let batch = db.get_jobs(&asked).await.unwrap();
+    assert_eq!(batch.len(), 2);
+    for job in batch {
+        let one = db.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&job).unwrap(), serde_json::to_value(&one).unwrap());
+    }
+    assert!(db.get_jobs(&[]).await.unwrap().is_empty());
 }

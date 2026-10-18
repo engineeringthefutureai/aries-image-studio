@@ -71,6 +71,7 @@ Each entry is a **turn** — one submission:
 |---|---|
 | Prompt | The text as typed. Can be long (up to a paragraph); truncate with expand. |
 | Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. To use it, Rerun the image and pick "Enhanced" in the composer (§4.2). |
+| Reference images | Small numbered thumbnails under the prompt, in the order the prompt names them ("image 1", …); each opens the original. |
 | Setting chips | e.g. `16:9 · seed 48213 · 40 steps · 2m 31s`. Compact, quiet. |
 | Image tiles | The images of one send (rows × count, up to 16), left to right in the order they were sent and are processed. Shown at their true aspect ratio. A batch is a carousel: one row at full tile height that snaps tile by tile, with edge fades and arrows while more is off-screen, and dots below. Swipe, wheel, the arrows, the dots, the batch pills or `←`/`→` (with the row focused) move through it, and an image the user picks is scrolled into view; a new turn starts at its first image and does not move as images finish. |
 | Lineage marker | When made from another image: "↳ variation of …" linking back to the source. |
@@ -93,7 +94,7 @@ looks stuck:
 | Phase | Typical length | What the tile says |
 |---|---|---|
 | Waking *(future)* | 10–30 s | "Waking generator" |
-| Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's 2048-token limit; past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest) |
+| Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's token limit (4096 by default, plus 2048 per reference image; the worker reports a raised limit and the bar follows it); past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest) |
 | Reading prompt | a few seconds | "Reading prompt" with an indeterminate bar (the encoder reports no steps) |
 | Drawing | most of the time | "Drawing", percent, live speed and time left ("6.40s/step · ~180s left") |
 | Finishing | 5–15 s | "Finishing" with an indeterminate bar — decoding the full-size image; must not look frozen |
@@ -107,8 +108,8 @@ Docked at the bottom of the Timeline. Should feel like a message box, not a form
 
 - **Folded by default** — a one-line pill with the send button: full width at the bottom
   on a phone, bottom right (26rem wide) from 640 px up. Beside the prompt it shows what the
-  next send makes (`16:9 · ¼ · 12 st · 4 img`, ✦ for Enhance, a sliders icon while
-  Advanced is open). Focusing the prompt, a tap on that summary, `/`, or Rerun / Vary
+  next send makes (`16:9 · ¼ · 12 st · 4 img`, ✦ for Enhance, an image icon with the
+  number of reference images, a sliders icon while Advanced is open). Focusing the prompt, a tap on that summary, `/`, or Rerun / Vary
   opens it to the full composer (growing from its corner on wider screens). A send, `Esc`
   or a tap outside folds it again; the prompt and settings stay. Folded with Advanced
   open, the send button opens the composer instead of sending, so nothing hidden is sent.
@@ -131,14 +132,16 @@ Every image gets its own random seed; the seed is not shown unless Advanced is o
 - **Advanced** (a toggle in the settings row; closed by default). Its settings apply only
   while it is open; closed, a send uses a preset's steps (a custom count counts as
   Standard), a random seed and no tiling. Advanced is for one send: sending closes it and
-  resets its settings (custom steps to Standard, random seed, no tiling, extra rows
-  removed), so nothing hidden carries over to the next send.
+  resets its settings (custom steps to Standard, random seed, no tiling, the default
+  enhancer token limit, extra rows removed), so nothing hidden carries over to the next
+  send.
 
 | Advanced setting | Options | Default |
 |---|---|---|
 | Steps | Any number from 1 to 100; a preset's number selects that preset | the preset's |
 | Seed | **Random seed** or **Fixed seed** (number, with a dice to roll a new one) | Random |
 | Tiling | VAE tiling at decode: faster and lighter, but can leave seams | Off |
+| Enhancer tokens | The prompt enhancer's token limit, reasoning included: 256–24576, for long, detailed prompts such as multi-part infographics (~30 tokens a second). Shown when a row has Enhance on; applies to those rows. Reasoning that runs out of room continues with the limit doubled, up to 24576. The viewer's time breakdown shows tokens used against the final limit, and notes a raised limit | 4096 + 2048 per reference image |
 | Rows | Row 1 is the main settings; **Add row** copies the last row; each extra row sets aspect, size, steps, Enhance and tiling, and can be removed | one row |
 
   All rows share the prompt and the seeds, so they compare like for like: image *k* of
@@ -149,14 +152,29 @@ Every image gets its own random seed; the seed is not shown unless Advanced is o
   that turn (e.g. "3:2 12st"), and icons for Enhance (✦) and tiling (⊞) when on; the
   tooltip spells everything out.
 
-- **Generate** button. Disabled when the prompt is empty. Sending scrolls the timeline to
-  the top, where the new turn appears.
+- **Reference images** (docs/REFERENCE_IMAGES.md). An attach button in the settings row
+  (with `n/4` once some are attached), a drop anywhere on the page (the composer opens
+  and outlines itself while files are dragged) or a paste into the prompt adds PNG, JPEG
+  or WebP images, up to the limit Studio reports (`/api/capabilities`
+  `max_references_ever`; the button is disabled at 0). Each uploads at once and shows in
+  a strip above the prompt: a thumbnail with its number (the prompt's "image 1", …), a
+  spinner while uploading, a red outline if the upload failed, × to remove and ‹ to move
+  it one place earlier. The strip says how the numbers map to the prompt; a short note
+  replaces that for a wrong file type or too many images. While references are attached,
+  Enhance uses the image-aware enhancer, which reads them; when no agent has one for that
+  many images (`/api/capabilities` `enhance_max_references_ever`), Enhance (and each row's)
+  is off and disabled, and its tooltip says why.
+  Attachments belong to one send, like the prompt: sending clears the strip.
+- **Generate** button. Disabled when the prompt is empty, and while a reference is still
+  uploading or has failed (remove it to send). Sending scrolls the timeline to the top,
+  where the new turn appears.
 - Aspect ratio picker should show the shapes visually, not just the numbers.
 - Settings are remembered between visits.
 - **Filled from an image.** Rerun and Vary (from a tile, the timeline or the viewer) fill
   the composer and never submit by themselves: prompt, aspect, size, steps and the
-  image's Enhance setting and tiling; Rerun locks the image's seed (opening Advanced so it
-  applies), Vary sets the seed to Random. Extra rows are cleared.
+  image's Enhance setting, enhancer token limit and tiling; Rerun locks the image's seed (opening Advanced so it
+  applies), Vary sets the seed to Random. Extra rows are cleared. The image's reference
+  images replace any attached ones.
   A bar above the prompt shows "From #seed" with a dismiss button. If the image had an
   enhanced prompt, the bar has an **Original · Enhanced** switch: Original is the prompt
   as typed with the image's Enhance setting; Enhanced puts the rewritten prompt in with
@@ -175,6 +193,8 @@ All finished images, newest first, infinite scroll.
 
 - Favorite (toggle)
 - Vary — fills the composer with this image's prompt and settings and a random seed (§4.2)
+- Use as reference (in the turn's action row) — attaches the image to the composer, which
+  opens to show it; hidden when the composer is at its limit
 - Open
 - Download
 
@@ -193,7 +213,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   order: from the timeline, left to right through a turn and then on to the next (older)
   turn; from the gallery, newest first.
 - **Details panel** (collapsible on desktop; a sheet on phone):
-  - Prompt (copy button) and, in future, enhanced prompt
+  - Prompt (copy button), its reference images, and the enhanced prompt
   - Seed (copy button), size and aspect, steps / quality
   - Model name and precision (e.g. "Qwen-Image 2.1 · bf16")
   - Total time (submit to done), and a Time breakdown: each stage's time (enhance with
@@ -214,7 +234,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 | Copy prompt / Copy seed | |
 | Favorite | |
 | Delete | With confirmation; permanent. |
-| Use as reference *(future)* | Adds the image to the composer for editing (see §6). |
+| Use as reference | Attaches the image to the composer as the next reference image and closes the viewer. Hidden when the composer is at its limit. |
 
 ### 4.6 Top bar
 
@@ -235,7 +255,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   - **Cards**: per graphics card, its state, the stage it runs (and sub-stage), and a
     memory bar with peak, reserved and any spill into host RAM
   - **Queue**: jobs waiting per stage
-  - **Host memory**: available RAM against the floor required for an untiled decode
+  - **Host memory**: available RAM (memory-heavy tasks wait for the agent's floor)
   - **Recent worker runs**: stage, card, duration, jobs processed, why it exited
   - *(future)* queue clear estimate, last image timing, a link to a dashboard
 
@@ -272,11 +292,10 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 ## 6. Future features — leave room, don't fully design
 
 1. **Aspect suggestion from the enhancer.** The enhancer already returns a
-   suggested aspect ratio (`wh_ratio`); the UI does not use it yet.
-2. **Edit with references.** Drag up to 10 images (from history or uploaded) into the
-   composer as references ("put these three characters around a campfire", "make
-   the sky a sunset"). The composer needs a reference strip that can appear above
-   the prompt.
+   suggested aspect ratio (`wh_ratio`, or with references `ratio_follow`: keep image N's
+   aspect); the UI does not use it yet.
+2. **More references.** Up to 10 images instead of 4, at a smaller reference
+   resolution (docs/REFERENCE_IMAGES.md §8).
 3. **Fast mode.** A third Quality option producing images in seconds at lower quality.
 4. **Transparent images.** Some results have transparent backgrounds — tiles and the
    viewer should show transparency (e.g. a checkerboard) rather than black.

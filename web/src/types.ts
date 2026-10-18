@@ -62,6 +62,15 @@ export const QUALITY_STEPS: Record<Exclude<Quality, 'custom'>, number> = {
 };
 
 /** Steps Studio accepts (`MAX_STEPS` in studio/src/scheduler.rs). */
+/** The prompt rewriter's token limit (reasoning and reply): default and the range Studio accepts. */
+export const ENHANCE_TOKENS_DEFAULT = 4096;
+/** Each reference image adds this much to the default (the worker's rule). */
+export const ENHANCE_TOKENS_PER_REFERENCE = 2048;
+export const enhanceTokensDefault = (references: number) =>
+  Math.min(MAX_ENHANCE_TOKENS, ENHANCE_TOKENS_DEFAULT + ENHANCE_TOKENS_PER_REFERENCE * references);
+export const MIN_ENHANCE_TOKENS = 256;
+export const MAX_ENHANCE_TOKENS = 24576;
+
 export const MIN_STEPS = 1;
 export const MAX_STEPS = 100;
 
@@ -90,6 +99,26 @@ export interface ComposerSource {
   /** The image's own Enhance setting, restored when switching back to the original. */
   originalEnhance: boolean;
   mode: 'original' | 'enhanced';
+}
+
+/** A job's reference image, stored in Studio by hash (docs/REFERENCE_IMAGES.md). */
+export interface JobReference {
+  sha256: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * A reference attached in the composer, in prompt order ("image 1" first): a file being
+ * uploaded or uploaded (`upload`, its hash), or an earlier result (`image`, its job id).
+ */
+export interface ComposerReference {
+  key: string;
+  previewUrl: string;
+  status: 'uploading' | 'ready' | 'failed';
+  upload?: string;
+  image?: string;
+  error?: string;
 }
 
 export function calculateDimensions(
@@ -124,6 +153,8 @@ export interface JobParams {
   seed: number;
   quality: Quality;
   enhance?: boolean;
+  /** The prompt rewriter's token limit (advanced; unset: the worker's default, 4096 + 2048 per reference image). */
+  enhanceMaxTokens?: number;
   /** VAE tiling at decode (advanced; off by default). */
   tiling?: boolean;
 }
@@ -160,6 +191,13 @@ export interface JobTimings {
   generated_tokens?: number;
   thought_tokens?: number;
   reply_tokens?: number;
+  /** The enhancer's final token limit; with `limit_raised_from` it was doubled from that
+   * because the reasoning ran out of room; `thinking_cut` 1: cut short for the reply at the ceiling. */
+  max_new_tokens?: number;
+  limit_raised_from?: number;
+  thinking_cut?: number;
+  /** 1 when the encode was reused from another image of the send (same prompt and references). */
+  shared?: number;
 }
 
 export interface StageProvenance {
@@ -211,6 +249,8 @@ export interface Generation {
   card?: number;
   executor?: string;
   peakVram?: number;
+  /** Reference images in prompt order (none for text-only jobs). */
+  references?: JobReference[];
 }
 
 /** One executor as the header's status pill sees it. */
@@ -290,8 +330,14 @@ export interface StageCapability {
 export interface CapabilitiesInfo {
   max_px_now: number;
   max_px_ever: number;
+  /** Most reference images a job may carry (0 or missing: none accepted). */
+  max_references_now?: number;
+  max_references_ever?: number;
   enhance_now: boolean;
   enhance_ever: boolean;
+  /** Most reference images Enhance reads (an image-aware enhancer); 0 or missing: Enhance is off with references. */
+  enhance_max_references_now?: number;
+  enhance_max_references_ever?: number;
   sizes: SizeCapability[];
   stages: StageCapability[];
 }
@@ -343,8 +389,11 @@ export interface V3JobRecord {
   seed: number;
   true_cfg_scale: number;
   enhance: boolean;
+  enhance_max_tokens?: number | null;
   tiling?: boolean;
   wh_ratio?: string | null;
+  /** The image enhancer's aspect answer: `<imageN>` keeps that reference's aspect (not used yet). */
+  ratio_follow?: string | null;
   model_id?: string | null;
   model_rev?: string | null;
   error_class?: string | null;
@@ -356,6 +405,7 @@ export interface V3JobRecord {
   finished_at?: number | null;
   tasks: V3TaskRecord[];
   provenance: Record<string, StageProvenance>;
+  references?: JobReference[];
 }
 
 /** One row of the advanced table: a full parameter set sent with the shared prompt and seed. */
@@ -383,6 +433,8 @@ export interface UserPreferences {
   /** Advanced options shown: custom steps, fixed seed, tiling and extra rows apply only then. */
   advancedOpen: boolean;
   tiling: boolean;
+  /** Advanced: the prompt rewriter's token limit for Enhance rows. */
+  enhanceMaxTokens: number;
   /** Rows after the first (the first row is the main settings above). */
   extraRows: ComposerRow[];
 }

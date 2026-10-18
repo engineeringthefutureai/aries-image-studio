@@ -28,6 +28,12 @@ pub struct StageCapDecl {
     pub max_px: u64,
     #[serde(default)]
     pub modes: Vec<String>,
+    /// Most reference images per task (0 = none).
+    #[serde(default)]
+    pub max_references: u32,
+    /// Which of `models` take references (enhance: PE-I2I); empty: all of them.
+    #[serde(default)]
+    pub reference_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +52,60 @@ pub struct LimitDecl {
     pub stage: String,
     pub above_px: u64,
     pub requires: Vec<RequirementDecl>,
+    /// Set: the limit applies only to tasks with more reference images than this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub above_references: Option<u32>,
+    /// Set: the limit applies only to decodes in this mode (`untiled` | `tiled`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_mode: Option<String>,
+}
+
+/// What the limits look at in a task: pixels, reference images and, for decode, tiling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TaskShape {
+    pub px: u64,
+    pub refs: u32,
+    pub tiled: bool,
+}
+
+impl TaskShape {
+    pub fn of(job: &JobRecord) -> Self {
+        Self {
+            px: (job.width as u64) * (job.height as u64),
+            refs: job.references.len() as u32,
+            tiled: job.tiling,
+        }
+    }
+}
+
+/// What [`Database::load_jobs`] binds to its condition's `?`.
+enum JobFilter {
+    Version(i64),
+    /// A JSON array of job ids, for `json_each`.
+    Ids(String),
+}
+
+impl JobFilter {
+    fn bind<'q>(
+        &self,
+        q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+        match self {
+            Self::Version(v) => q.bind(*v),
+            Self::Ids(ids) => q.bind(ids.clone()),
+        }
+    }
+}
+
+impl LimitDecl {
+    /// Whether this limit covers a task of `stage` with this shape.
+    pub fn applies(&self, stage: &str, shape: TaskShape) -> bool {
+        let mode = if shape.tiled { "tiled" } else { "untiled" };
+        self.stage == stage
+            && shape.px > self.above_px
+            && self.above_references.is_none_or(|r| shape.refs > r)
+            && (stage != "decode" || self.decode_mode.as_deref().is_none_or(|m| m == mode))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +146,52 @@ pub struct JobSubmitInput {
     /// Decode with VAE tiling: faster and lighter, but can leave seams (HARDWARE.md §2).
     #[serde(default)]
     pub tiling: bool,
+    /// Reference images in prompt order ("image 1" first): uploads or earlier results.
+    #[serde(default)]
+    pub references: Vec<ReferenceInput>,
+    /// The prompt rewriter's token limit (reasoning and reply); unset: the worker's 2048.
+    #[serde(default)]
+    pub enhance_max_tokens: Option<u32>,
+}
+
+/// One reference of a submitted job: an upload (`POST /api/uploads`) or a job's image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceInput {
+    #[serde(default)]
+    pub upload: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
+/// A reference image as stored with a job, and as listed by the API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobReference {
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadRecord {
+    pub sha256: String,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
+    pub created_at: f64,
+}
+
+/// Stored VAE latents of one reference image (docs/REFERENCE_IMAGES.md §4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceLatents {
+    pub source_sha256: String,
+    pub model_id: String,
+    pub model_rev: String,
+    pub reference_res: u32,
+    pub blob_sha256: String,
+    pub bytes: u64,
+    pub width: u32,
+    pub height: u32,
 }
 
 // The UI's Standard preset.
@@ -119,9 +225,13 @@ pub struct JobRecord {
     pub seed: u64,
     pub true_cfg_scale: f32,
     pub enhance: bool,
+    /// The prompt rewriter's token limit; unset: the worker's default.
+    pub enhance_max_tokens: Option<u32>,
     /// Decode with VAE tiling (off by default).
     pub tiling: bool,
     pub wh_ratio: Option<String>,
+    /// PE-I2I's aspect answer: `<imageN>` to keep that reference's aspect. Stored, not used yet.
+    pub ratio_follow: Option<String>,
     pub model_id: Option<String>,
     pub model_rev: Option<String>,
     pub error_class: Option<String>,
@@ -130,6 +240,9 @@ pub struct JobRecord {
     /// UI-owned metadata (turn id, aspect label, size and quality preset), opaque here.
     pub meta: serde_json::Value,
     pub favorite: bool,
+    /// Reference images in prompt order.
+    #[serde(default)]
+    pub references: Vec<JobReference>,
     pub version: i64,
     pub created_at: f64,
     pub started_at: Option<f64>,
@@ -374,6 +487,34 @@ impl Database {
                 connected_at REAL,
                 last_seen_at REAL NOT NULL
             );",
+            "CREATE TABLE IF NOT EXISTS uploads (
+                sha256 TEXT PRIMARY KEY,
+                mime TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                bytes INTEGER NOT NULL,
+                created_at REAL NOT NULL
+            );",
+            "CREATE TABLE IF NOT EXISTS job_references (
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                idx INTEGER NOT NULL,
+                sha256 TEXT NOT NULL REFERENCES uploads(sha256),
+                PRIMARY KEY (job_id, idx)
+            );",
+            "CREATE INDEX IF NOT EXISTS idx_job_references_sha ON job_references(sha256);",
+            "CREATE TABLE IF NOT EXISTS reference_latents (
+                source_sha256 TEXT NOT NULL REFERENCES uploads(sha256) ON DELETE CASCADE,
+                model_id TEXT NOT NULL,
+                model_rev TEXT NOT NULL,
+                reference_res INTEGER NOT NULL,
+                blob_sha256 TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                dtype TEXT,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (source_sha256, model_id, model_rev, reference_res)
+            );",
             "CREATE TABLE IF NOT EXISTS executors (
                 key TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -404,8 +545,15 @@ impl Database {
         self.ensure_column("jobs", "meta", "TEXT NOT NULL DEFAULT '{}'").await?;
         self.ensure_column("jobs", "favorite", "INTEGER NOT NULL DEFAULT 0").await?;
         self.ensure_column("jobs", "tiling", "INTEGER NOT NULL DEFAULT 0").await?;
+        self.ensure_column("jobs", "enhance_max_tokens", "INTEGER").await?;
+        self.ensure_column("jobs", "ratio_follow", "TEXT").await?;
         self.ensure_column("tasks", "sub_stage", "TEXT").await?;
         self.ensure_column("tasks", "stats_json", "TEXT").await?;
+        // Encode inputs, so jobs of one send share one encode (scheduler.rs `encode_cache_key`).
+        self.ensure_column("artifacts", "cache_key", "TEXT").await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_artifacts_cache_key ON artifacts(cache_key)")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -818,7 +966,13 @@ impl Database {
     }
 
     /// Creates a new job and its 3 or 4 tasks (`enhance`?, `encode`, `denoise`, `decode`).
-    pub async fn create_job(&self, input: &JobSubmitInput, seed: u64) -> Result<JobRecord> {
+    /// `references` are upload hashes in prompt order, already checked to exist.
+    pub async fn create_job(
+        &self,
+        input: &JobSubmitInput,
+        seed: u64,
+        references: &[String],
+    ) -> Result<JobRecord> {
         let mut tx = self.pool.begin().await?;
         let now = now_s();
         let ver = Self::next_version_tx(&mut tx).await?;
@@ -830,8 +984,8 @@ impl Database {
         sqlx::query(
             "INSERT INTO jobs (
                 id, status, prompt, negative_prompt, width, height, steps, seed,
-                true_cfg_scale, enhance, meta, tiling, version, created_at
-            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                true_cfg_scale, enhance, meta, tiling, version, created_at, enhance_max_tokens
+            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job_id)
         .bind(&input.prompt)
@@ -852,8 +1006,18 @@ impl Database {
         .bind(input.tiling as i64)
         .bind(ver)
         .bind(now)
+        .bind(input.enhance_max_tokens.filter(|_| input.enhance).map(|t| t as i64))
         .execute(&mut *tx)
         .await?;
+
+        for (idx, sha) in references.iter().enumerate() {
+            sqlx::query("INSERT INTO job_references (job_id, idx, sha256) VALUES (?, ?, ?)")
+                .bind(&job_id)
+                .bind(idx as i64)
+                .bind(sha)
+                .execute(&mut *tx)
+                .await?;
+        }
 
         let mut stages = Vec::new();
         if input.enhance {
@@ -900,39 +1064,61 @@ impl Database {
         let mut job = Self::row_to_job(&r);
         job.tasks = self.list_tasks_for_job(job_id).await?;
         job.provenance = self.get_job_provenance(job_id).await?;
+        job.references = self.list_job_references(job_id).await?;
         Ok(Some(job))
     }
 
-    /// Jobs (all, or changed since a version) with their tasks and provenance, in three
-    /// queries rather than two per job.
+    /// Jobs (all, or changed since a version) with their tasks and provenance.
     pub async fn list_jobs(&self, changed_since: Option<i64>) -> Result<Vec<JobRecord>> {
-        let since = changed_since.unwrap_or(i64::MIN);
-        let rows = sqlx::query("SELECT * FROM jobs WHERE version > ? ORDER BY created_at DESC")
-            .bind(since)
-            .fetch_all(&self.pool)
-            .await?;
+        self.load_jobs("j.version > ?", JobFilter::Version(changed_since.unwrap_or(i64::MIN)))
+            .await
+    }
+
+    /// The jobs with these ids that exist, in one batch (the scheduler tick's jobs).
+    pub async fn get_jobs(&self, ids: &[String]) -> Result<Vec<JobRecord>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = serde_json::to_string(ids)?;
+        self.load_jobs("j.id IN (SELECT value FROM json_each(?))", JobFilter::Ids(ids)).await
+    }
+
+    /// Jobs matching `cond` (on `jobs j`, with one `?` for `filter`) with their tasks,
+    /// provenance and references, in four queries rather than four per job.
+    async fn load_jobs(&self, cond: &str, filter: JobFilter) -> Result<Vec<JobRecord>> {
+        let jobs_sql = format!("SELECT j.* FROM jobs j WHERE {cond} ORDER BY j.created_at DESC");
+        let rows = filter.bind(sqlx::query(&jobs_sql)).fetch_all(&self.pool).await?;
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        let task_rows = sqlx::query(
+        let tasks_sql = format!(
             "SELECT t.* FROM tasks t JOIN jobs j ON t.job_id = j.id
-             WHERE j.version > ? ORDER BY t.job_id, t.seq ASC",
-        )
-        .bind(since)
-        .fetch_all(&self.pool)
-        .await?;
-        let attempt_rows = sqlx::query(
+             WHERE {cond} ORDER BY t.job_id, t.seq ASC"
+        );
+        let task_rows = filter.bind(sqlx::query(&tasks_sql)).fetch_all(&self.pool).await?;
+        let attempts_sql = format!(
             "SELECT a.* FROM task_attempts a JOIN jobs j ON a.job_id = j.id
-             WHERE j.version > ? AND a.status = 'done' ORDER BY a.attempt ASC",
-        )
-        .bind(since)
-        .fetch_all(&self.pool)
-        .await?;
+             WHERE {cond} AND a.status = 'done' ORDER BY a.attempt ASC"
+        );
+        let attempt_rows = filter.bind(sqlx::query(&attempts_sql)).fetch_all(&self.pool).await?;
 
         let mut tasks: HashMap<String, Vec<TaskRecord>> = HashMap::new();
         for r in &task_rows {
             let t = Self::row_to_task(r);
             tasks.entry(t.job_id.clone()).or_default().push(t);
+        }
+        let references_sql = format!(
+            "SELECT r.job_id, u.sha256, u.width, u.height FROM job_references r
+             JOIN jobs j ON r.job_id = j.id JOIN uploads u ON r.sha256 = u.sha256
+             WHERE {cond} ORDER BY r.job_id, r.idx"
+        );
+        let reference_rows = filter.bind(sqlx::query(&references_sql)).fetch_all(&self.pool).await?;
+        let mut references: HashMap<String, Vec<JobReference>> = HashMap::new();
+        for r in &reference_rows {
+            references
+                .entry(r.get("job_id"))
+                .or_default()
+                .push(Self::row_to_job_reference(r));
         }
         let mut provenance: HashMap<String, HashMap<String, ProvenanceRecord>> = HashMap::new();
         for r in &attempt_rows {
@@ -950,9 +1136,186 @@ impl Database {
                 let mut job = Self::row_to_job(r);
                 job.tasks = tasks.remove(&job.id).unwrap_or_default();
                 job.provenance = provenance.remove(&job.id).unwrap_or_default();
+                job.references = references.remove(&job.id).unwrap_or_default();
                 job
             })
             .collect())
+    }
+
+    pub async fn list_job_references(&self, job_id: &str) -> Result<Vec<JobReference>> {
+        let rows = sqlx::query(
+            "SELECT u.sha256, u.width, u.height FROM job_references r
+             JOIN uploads u ON r.sha256 = u.sha256 WHERE r.job_id = ? ORDER BY r.idx",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(Self::row_to_job_reference).collect())
+    }
+
+    fn row_to_job_reference(r: &sqlx::sqlite::SqliteRow) -> JobReference {
+        JobReference {
+            sha256: r.get("sha256"),
+            width: r.get::<i64, _>("width") as u32,
+            height: r.get::<i64, _>("height") as u32,
+        }
+    }
+
+    /// Records an uploaded image (its bytes are in the blob store under `sha256`). Uploading
+    /// the same image again keeps the first record.
+    pub async fn insert_upload(&self, up: &UploadRecord) -> Result<UploadRecord> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO uploads (sha256, mime, width, height, bytes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&up.sha256)
+        .bind(&up.mime)
+        .bind(up.width as i64)
+        .bind(up.height as i64)
+        .bind(up.bytes as i64)
+        .bind(up.created_at)
+        .execute(&self.pool)
+        .await?;
+        self.get_upload(&up.sha256)
+            .await?
+            .ok_or_else(|| anyhow!("upload {} missing after insert", up.sha256))
+    }
+
+    pub async fn get_upload(&self, sha256: &str) -> Result<Option<UploadRecord>> {
+        let row = sqlx::query("SELECT * FROM uploads WHERE sha256 = ?")
+            .bind(sha256)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| UploadRecord {
+            sha256: r.get("sha256"),
+            mime: r.get("mime"),
+            width: r.get::<i64, _>("width") as u32,
+            height: r.get::<i64, _>("height") as u32,
+            bytes: r.get::<i64, _>("bytes") as u64,
+            created_at: r.get("created_at"),
+        }))
+    }
+
+    /// Stored latents of a reference for a model and resolution, if any.
+    pub async fn get_reference_latents(
+        &self,
+        source_sha256: &str,
+        model_id: &str,
+        model_rev: &str,
+        reference_res: u32,
+    ) -> Result<Option<ReferenceLatents>> {
+        let row = sqlx::query(
+            "SELECT * FROM reference_latents
+             WHERE source_sha256 = ? AND model_id = ? AND model_rev = ? AND reference_res = ?",
+        )
+        .bind(source_sha256)
+        .bind(model_id)
+        .bind(model_rev)
+        .bind(reference_res as i64)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| ReferenceLatents {
+            source_sha256: r.get("source_sha256"),
+            model_id: r.get("model_id"),
+            model_rev: r.get("model_rev"),
+            reference_res: r.get::<i64, _>("reference_res") as u32,
+            blob_sha256: r.get("blob_sha256"),
+            bytes: r.get::<i64, _>("bytes") as u64,
+            width: r.get::<i64, _>("width") as u32,
+            height: r.get::<i64, _>("height") as u32,
+        }))
+    }
+
+    async fn upsert_reference_latents_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        lat: &ReferenceLatents,
+        dtype: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO reference_latents (
+                source_sha256, model_id, model_rev, reference_res, blob_sha256, bytes,
+                width, height, dtype, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_sha256, model_id, model_rev, reference_res) DO UPDATE SET
+                blob_sha256 = excluded.blob_sha256, bytes = excluded.bytes,
+                width = excluded.width, height = excluded.height, dtype = excluded.dtype",
+        )
+        .bind(&lat.source_sha256)
+        .bind(&lat.model_id)
+        .bind(&lat.model_rev)
+        .bind(lat.reference_res as i64)
+        .bind(&lat.blob_sha256)
+        .bind(lat.bytes as i64)
+        .bind(lat.width as i64)
+        .bind(lat.height as i64)
+        .bind(dtype)
+        .bind(now_s())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Whether any record still points at blob `sha256`. Hold [`BlobStore::collecting`]
+    /// from this check until the file is gone.
+    pub async fn blob_in_use(&self, sha256: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let used = Self::blob_in_use_tx(&mut tx, sha256).await?;
+        tx.commit().await?;
+        Ok(used)
+    }
+
+    /// Whether any record still points at blob `sha256`.
+    async fn blob_in_use_tx(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sha256: &str) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT 1 FROM artifacts WHERE sha256 = ?1
+             UNION ALL SELECT 1 FROM uploads WHERE sha256 = ?1
+             UNION ALL SELECT 1 FROM reference_latents WHERE blob_sha256 = ?1
+             LIMIT 1",
+        )
+        .bind(sha256)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Deletes uploads older than `max_age_s` that no job refers to, with their stored
+    /// latents. Returns the blobs nothing refers to any more.
+    pub async fn gc_uploads(&self, max_age_s: f64) -> Result<Vec<String>> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT u.sha256 FROM uploads u
+             WHERE u.created_at < ?
+               AND NOT EXISTS (SELECT 1 FROM job_references r WHERE r.sha256 = u.sha256)",
+        )
+        .bind(now_s() - max_age_s)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut candidates = Vec::new();
+        for r in rows {
+            let sha: String = r.get("sha256");
+            let latents = sqlx::query("SELECT blob_sha256 FROM reference_latents WHERE source_sha256 = ?")
+                .bind(&sha)
+                .fetch_all(&mut *tx)
+                .await?;
+            candidates.extend(latents.iter().map(|l| l.get::<String, _>("blob_sha256")));
+            sqlx::query("DELETE FROM reference_latents WHERE source_sha256 = ?")
+                .bind(&sha)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM uploads WHERE sha256 = ?")
+                .bind(&sha)
+                .execute(&mut *tx)
+                .await?;
+            candidates.push(sha);
+        }
+        let mut orphans = Vec::new();
+        for sha in candidates {
+            if !Self::blob_in_use_tx(&mut tx, &sha).await? && !orphans.contains(&sha) {
+                orphans.push(sha);
+            }
+        }
+        tx.commit().await?;
+        Ok(orphans)
     }
 
     /// Ids of jobs deleted after `version`.
@@ -1108,8 +1471,12 @@ impl Database {
             seed: r.get::<i64, _>("seed") as u64,
             true_cfg_scale: r.get::<f64, _>("true_cfg_scale") as f32,
             enhance: r.get::<i64, _>("enhance") != 0,
+            enhance_max_tokens: r
+                .get::<Option<i64>, _>("enhance_max_tokens")
+                .map(|t| t as u32),
             tiling: r.get::<Option<i64>, _>("tiling").unwrap_or(0) != 0,
             wh_ratio: r.get("wh_ratio"),
+            ratio_follow: r.get("ratio_follow"),
             model_id: r.get("model_id"),
             model_rev: r.get("model_rev"),
             error_class: r.get("error_class"),
@@ -1120,6 +1487,7 @@ impl Database {
                 .and_then(|m| serde_json::from_str(&m).ok())
                 .unwrap_or_else(|| serde_json::json!({})),
             favorite: r.get::<Option<i64>, _>("favorite").unwrap_or(0) != 0,
+            references: Vec::new(),
             version: r.get("version"),
             created_at: r.get("created_at"),
             started_at: r.get("started_at"),
@@ -1493,6 +1861,7 @@ impl Database {
         Ok(true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_uploaded_artifact(
         &self,
         task_id: &str,
@@ -1502,6 +1871,8 @@ impl Database {
         bytes: u64,
         kind: &str,
         metadata_json: Option<&str>,
+        cache_key: Option<&str>,
+        reference_latents: Option<(&ReferenceLatents, &str)>,
     ) -> Result<ArtifactRecord> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
@@ -1531,13 +1902,15 @@ impl Database {
 
         sqlx::query(
             "INSERT INTO artifacts (
-                id, job_id, task_id, attempt, name, sha256, bytes, kind, metadata_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, job_id, task_id, attempt, name, sha256, bytes, kind, metadata_json, created_at,
+                cache_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id, attempt, name) DO UPDATE SET
                 sha256 = excluded.sha256,
                 bytes = excluded.bytes,
                 metadata_json = excluded.metadata_json,
-                created_at = excluded.created_at",
+                created_at = excluded.created_at,
+                cache_key = excluded.cache_key",
         )
         .bind(&id)
         .bind(&job_id)
@@ -1549,8 +1922,14 @@ impl Database {
         .bind(kind)
         .bind(metadata_json)
         .bind(now)
+        .bind(cache_key)
         .execute(&mut *tx)
         .await?;
+
+        // Stored for later jobs only once the attempt fence above has passed.
+        if let Some((lat, dtype)) = reference_latents {
+            Self::upsert_reference_latents_tx(&mut tx, lat, dtype).await?;
+        }
 
         tx.commit().await?;
         Ok(ArtifactRecord {
@@ -1631,7 +2010,7 @@ impl Database {
         task_id: &str,
         attempt: u32,
         prov: &ProvenanceRecord,
-        enhanced_prompt: Option<(&str, &str, &str)>,
+        enhanced_prompt: Option<(&str, &str, &str, &str)>,
         encode_model: Option<(&str, &str)>,
     ) -> Result<Option<(String, bool)>> {
         let mut tx = self.pool.begin().await?;
@@ -1687,11 +2066,14 @@ impl Database {
         .execute(&mut *tx)
         .await?;
 
-        if let Some((rewritten, wh_ratio, thinking)) = enhanced_prompt {
-            sqlx::query("UPDATE jobs SET enhanced_prompt = ?, wh_ratio = ?, thinking = ? WHERE id = ?")
+        if let Some((rewritten, wh_ratio, thinking, ratio_follow)) = enhanced_prompt {
+            sqlx::query(
+                "UPDATE jobs SET enhanced_prompt = ?, wh_ratio = ?, thinking = ?, ratio_follow = ? WHERE id = ?",
+            )
                 .bind(rewritten)
                 .bind(wh_ratio)
                 .bind((!thinking.is_empty()).then_some(thinking))
+                .bind((!ratio_follow.is_empty()).then_some(ratio_follow))
                 .bind(&task.job_id)
                 .execute(&mut *tx)
                 .await?;
@@ -1705,39 +2087,7 @@ impl Database {
                 .await?;
         }
 
-        // Advance next waiting task or mark job done
-        let next_row = sqlx::query(
-            "SELECT id FROM tasks WHERE job_id = ? AND seq = ? AND status = 'waiting'",
-        )
-        .bind(&task.job_id)
-        .bind(task.seq + 1)
-        .fetch_optional(&mut *tx)
-        .await?;
-
-        let job_finished = if let Some(nr) = next_row {
-            let next_task_id: String = nr.get("id");
-            sqlx::query("UPDATE tasks SET status = 'queued', queued_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(&next_task_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("UPDATE jobs SET version = ?, blocked_reason = NULL WHERE id = ?")
-                .bind(ver)
-                .bind(&task.job_id)
-                .execute(&mut *tx)
-                .await?;
-            false
-        } else {
-            sqlx::query(
-                "UPDATE jobs SET status = 'done', blocked_reason = NULL, finished_at = ?, version = ? WHERE id = ?",
-            )
-            .bind(now)
-            .bind(ver)
-            .bind(&task.job_id)
-            .execute(&mut *tx)
-            .await?;
-            true
-        };
+        let job_finished = Self::advance_job_tx(&mut tx, &task, now, ver).await?;
 
         // Mark the executor the task was assigned to ready (provenance names are agent-reported)
         let key = match (&task.assigned_agent, &task.assigned_executor) {
@@ -1761,6 +2111,196 @@ impl Database {
 
         tx.commit().await?;
         Ok(Some((task.job_id, job_finished)))
+    }
+
+    /// After `task` is done: queue the job's next task, or mark the job done (returns true).
+    async fn advance_job_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        task: &TaskRecord,
+        now: f64,
+        ver: i64,
+    ) -> Result<bool> {
+        let next_row = sqlx::query(
+            "SELECT id FROM tasks WHERE job_id = ? AND seq = ? AND status = 'waiting'",
+        )
+        .bind(&task.job_id)
+        .bind(task.seq + 1)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        if let Some(nr) = next_row {
+            let next_task_id: String = nr.get("id");
+            sqlx::query("UPDATE tasks SET status = 'queued', queued_at = ? WHERE id = ?")
+                .bind(now)
+                .bind(&next_task_id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("UPDATE jobs SET version = ?, blocked_reason = NULL WHERE id = ?")
+                .bind(ver)
+                .bind(&task.job_id)
+                .execute(&mut **tx)
+                .await?;
+            Ok(false)
+        } else {
+            sqlx::query(
+                "UPDATE jobs SET status = 'done', blocked_reason = NULL, finished_at = ?, version = ? WHERE id = ?",
+            )
+            .bind(now)
+            .bind(ver)
+            .bind(&task.job_id)
+            .execute(&mut **tx)
+            .await?;
+            Ok(true)
+        }
+    }
+
+    /// Finished embeds with these encode inputs (`cache_key`), from a done encode whose
+    /// model is known: `(artifact, model_id, model_rev)`.
+    pub async fn find_shared_embeds(
+        &self,
+        cache_key: &str,
+    ) -> Result<Option<(ArtifactRecord, String, String)>> {
+        let row = sqlx::query(
+            "SELECT a.*, ta.model_id AS src_model_id, ta.model_rev AS src_model_rev
+             FROM artifacts a
+             JOIN tasks t ON a.task_id = t.id AND a.attempt = t.current_attempt
+             JOIN task_attempts ta ON ta.task_id = a.task_id AND ta.attempt = a.attempt
+             WHERE a.cache_key = ? AND a.name = 'embeds.safetensors' AND t.status = 'done'
+               AND ta.model_id IS NOT NULL AND ta.model_rev IS NOT NULL
+             ORDER BY a.created_at DESC LIMIT 1",
+        )
+        .bind(cache_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            (
+                ArtifactRecord {
+                    id: r.get("id"),
+                    job_id: r.get("job_id"),
+                    task_id: r.get("task_id"),
+                    attempt: r.get::<i64, _>("attempt") as u32,
+                    name: r.get("name"),
+                    sha256: r.get("sha256"),
+                    bytes: r.get::<i64, _>("bytes") as u64,
+                    kind: r.get("kind"),
+                    metadata_json: r.get("metadata_json"),
+                    created_at: r.get("created_at"),
+                },
+                r.get("src_model_id"),
+                r.get("src_model_rev"),
+            )
+        }))
+    }
+
+    /// Completes a queued encode task with another job's embeds (same `cache_key`) instead of
+    /// running it: one encode per send (docs/REFERENCE_IMAGES.md §4). The attempt copies the
+    /// source attempt's provenance, timings and peak memory, with `"shared": 1` added to the
+    /// timings. Returns false if the task is no longer queued.
+    pub async fn complete_task_from_shared(
+        &self,
+        task_id: &str,
+        source: &ArtifactRecord,
+        cache_key: &str,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let Some(tr) = sqlx::query("SELECT * FROM tasks WHERE id = ? AND status = 'queued'")
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        let task = Self::row_to_task(&tr);
+        let Some(src) = sqlx::query("SELECT * FROM task_attempts WHERE task_id = ? AND attempt = ?")
+            .bind(&source.task_id)
+            .bind(source.attempt as i64)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        let now = now_s();
+        let ver = Self::next_version_tx(&mut tx).await?;
+        let attempt = task.current_attempt + 1;
+        let mut timings: HashMap<String, f64> = src
+            .get::<Option<String>, _>("timings_json")
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        timings.insert("shared".to_string(), 1.0);
+
+        sqlx::query(
+            "INSERT INTO task_attempts (
+                task_id, job_id, stage, attempt, agent, executor, status, device, backend_kind,
+                model_id, model_rev, model_dtype, torch_version, worker_version, timings_json,
+                peak_mem_bytes, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'done', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(task_id)
+        .bind(&task.job_id)
+        .bind(&task.stage)
+        .bind(attempt as i64)
+        .bind(src.get::<String, _>("agent"))
+        .bind(src.get::<String, _>("executor"))
+        .bind(src.get::<Option<String>, _>("device"))
+        .bind(src.get::<Option<String>, _>("backend_kind"))
+        .bind(src.get::<Option<String>, _>("model_id"))
+        .bind(src.get::<Option<String>, _>("model_rev"))
+        .bind(src.get::<Option<String>, _>("model_dtype"))
+        .bind(src.get::<Option<String>, _>("torch_version"))
+        .bind(src.get::<Option<String>, _>("worker_version"))
+        .bind(serde_json::to_string(&timings)?)
+        .bind(src.get::<Option<i64>, _>("peak_mem_bytes").unwrap_or(0))
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO artifacts (
+                id, job_id, task_id, attempt, name, sha256, bytes, kind, metadata_json, created_at,
+                cache_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'intermediate', ?, ?, ?)",
+        )
+        .bind(format!("art_{}", ulid::Ulid::new().to_string().to_lowercase()))
+        .bind(&task.job_id)
+        .bind(task_id)
+        .bind(attempt as i64)
+        .bind(&source.name)
+        .bind(&source.sha256)
+        .bind(source.bytes as i64)
+        .bind(&source.metadata_json)
+        .bind(now)
+        .bind(cache_key)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE tasks
+             SET status = 'done', current_attempt = ?, blocked_reason = NULL, sub_stage = NULL,
+                 started_at = ?, finished_at = ?
+             WHERE id = ?",
+        )
+        .bind(attempt as i64)
+        .bind(now)
+        .bind(now)
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE jobs SET status = 'running', model_id = ?, model_rev = ?,
+                 started_at = COALESCE(started_at, ?) WHERE id = ?",
+        )
+        .bind(src.get::<Option<String>, _>("model_id"))
+        .bind(src.get::<Option<String>, _>("model_rev"))
+        .bind(now)
+        .bind(&task.job_id)
+        .execute(&mut *tx)
+        .await?;
+        Self::advance_job_tx(&mut tx, &task, now, ver).await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Handles a failed attempt (`Failed` message).
@@ -2163,11 +2703,7 @@ impl Database {
 
         let mut orphan_shas = Vec::new();
         for sha in candidate_shas {
-            let still_used = sqlx::query("SELECT 1 FROM artifacts WHERE sha256 = ? LIMIT 1")
-                .bind(&sha)
-                .fetch_optional(&mut *tx)
-                .await?;
-            if still_used.is_none() {
+            if !Self::blob_in_use_tx(&mut tx, &sha).await? {
                 orphan_shas.push(sha);
             }
         }
@@ -2320,11 +2856,7 @@ impl Database {
 
         let mut orphan_shas = Vec::new();
         for sha in candidate_shas {
-            let still_used = sqlx::query("SELECT 1 FROM artifacts WHERE sha256 = ? LIMIT 1")
-                .bind(&sha)
-                .fetch_optional(&mut *tx)
-                .await?;
-            if still_used.is_none() && !orphan_shas.contains(&sha) {
+            if !Self::blob_in_use_tx(&mut tx, &sha).await? && !orphan_shas.contains(&sha) {
                 orphan_shas.push(sha);
             }
         }

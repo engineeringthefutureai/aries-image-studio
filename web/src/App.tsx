@@ -7,6 +7,7 @@ import type {
   CapabilitiesInfo,
   AspectRatio,
   ComposerSource,
+  ComposerReference,
 } from './types';
 import { ASPECT_RATIOS, qualityForSteps } from './types';
 import { DEFAULT_PREFERENCES } from './services/preferences';
@@ -24,6 +25,7 @@ import {
   type JobSubmission,
 } from './services/api';
 import { sanitizeEnhancedPrompt } from './utils/prompt';
+import { fromGeneration, fromJobReference, referencePayload, releasePreview } from './utils/references';
 import { generateUlid } from './utils/ulid';
 
 import { Header } from './components/Header';
@@ -73,6 +75,9 @@ export function App() {
   const [prefilledPrompt, setPrefilledPrompt] = useState<string | null>(null);
   const [prefilledAspect, setPrefilledAspect] = useState<AspectRatio | null>(null);
   const [composerSource, setComposerSource] = useState<ComposerSource | null>(null);
+  // Reference images attached in the composer, in prompt order (docs/REFERENCE_IMAGES.md).
+  const [references, setReferences] = useState<ComposerReference[]>([]);
+  const maxReferences = capabilities?.max_references_ever ?? 0;
 
   // Preferences: load once from Studio, then save each change (debounced). Nothing is
   // saved before the load, so defaults never overwrite what Studio has.
@@ -188,7 +193,7 @@ export function App() {
 
   // Submit one turn: `count` jobs with consecutive seeds, sent as one batch
   /** Submits one turn: every job the composer built (rows × count, see utils/composer.ts). */
-  const handleSubmitTurn = async (prompt: string, jobs: JobParams[]) => {
+  const handleSubmitTurn = async (prompt: string, jobs: JobParams[], refs: ComposerReference[]) => {
     if (isSubmitting || jobs.length === 0) return;
     setIsSubmitting(true);
     setComposerSource(null);
@@ -224,6 +229,8 @@ export function App() {
         seed,
         enhance: params.enhance || false,
         tiling: params.tiling || false,
+        ...(params.enhanceMaxTokens ? { enhance_max_tokens: params.enhanceMaxTokens } : {}),
+        ...(refs.length ? { references: referencePayload(refs) } : {}),
         meta: {
           batch_id: batchId,
           aspect: params.aspect,
@@ -298,8 +305,14 @@ export function App() {
       mode: 'original',
     });
     setPrefilledPrompt(gen.prompt);
+    // The image's references come along, in the same order.
+    setReferences((prev) => {
+      prev.forEach(releasePreview);
+      return (gen.references || []).map(fromJobReference);
+    });
     const quality = qualityForSteps(gen.params.steps);
     const tiling = !!gen.params.tiling;
+    const enhanceMaxTokens = gen.params.enhanceMaxTokens || 0; // 0: the send's default
     setPreferences((prev) => ({
       ...prev,
       // Sizes outside the presets (older images) keep the composer's current aspect.
@@ -309,17 +322,28 @@ export function App() {
       steps: gen.params.steps,
       enhance: !!gen.params.enhance,
       tiling,
+      enhanceMaxTokens,
       isSeedLocked: !newSeed,
       lockedSeed: newSeed ? prev.lockedSeed : gen.params.seed,
-      // A fixed seed, custom steps and tiling are advanced options: open them when the
+      // A fixed seed, custom steps, tiling and a token limit are advanced options: open them when the
       // image needs one, so they apply. Extra rows are cleared to match this one image.
-      advancedOpen: prev.advancedOpen || !newSeed || quality === 'custom' || tiling,
+      advancedOpen:
+        prev.advancedOpen || !newSeed || quality === 'custom' || tiling || enhanceMaxTokens > 0,
       extraRows: [],
     }));
     setLightboxGenId(null);
   };
   const handleRerun = (gen: Generation) => handleToComposer(gen, { newSeed: false });
   const handleVary = (gen: Generation) => handleToComposer(gen, { newSeed: true });
+
+  /** Attach an earlier result as the next reference image (the composer opens to show it). */
+  const handleUseAsReference = (gen: Generation) => {
+    setReferences((prev) =>
+      prev.length >= maxReferences || prev.some((r) => r.image === gen.id) ? prev : [...prev, fromGeneration(gen)],
+    );
+    setLightboxGenId(null);
+  };
+  const canUseAsReference = maxReferences > 0 && references.length < maxReferences;
 
   // Retry Failed Job (V3: re-queues failed task in place if intermediate artifacts still exist, else re-submits)
   const handleRetry = async (gen: Generation) => {
@@ -442,6 +466,7 @@ export function App() {
               onSelectPrompt={handleSelectSamplePrompt}
               onDelete={handleDeleteGeneration}
               onDeleteTurn={handleDeleteTurn}
+              onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
               loading={!jobsLoaded}
             />
           ) : (
@@ -469,6 +494,9 @@ export function App() {
         prefilledAspect={prefilledAspect}
         source={composerSource}
         onSourceChange={setComposerSource}
+        references={references}
+        onReferencesChange={setReferences}
+        maxReferences={maxReferences}
         onClearPrefill={() => {
           setPrefilledPrompt(null);
           setPrefilledAspect(null);
@@ -501,6 +529,7 @@ export function App() {
           onToggleFavorite={handleToggleFavorite}
           onVary={handleVary}
           onRerun={handleRerun}
+          onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
           onDelete={handleDeleteGeneration}
         />
       )}

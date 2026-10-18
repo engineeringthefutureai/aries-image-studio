@@ -6,6 +6,7 @@
     ],
     "optional_fields": [
       "wh_ratio",
+      "ratio_follow",
       "thinking"
     ]
   },
@@ -17,6 +18,12 @@
       "prompt_embeds_mask",
       "image_pad_mask"
     ],
+    "tensors_when_references": [
+      "image_pad_mask"
+    ],
+    "metadata_when_references": [
+      "reference_sizes"
+    ],
     "tensors_when_cfg": [
       "negative_prompt_embeds"
     ],
@@ -26,6 +33,21 @@
     "metadata": [
       "prompt",
       "prompt_source",
+      "model",
+      "rev",
+      "dtype"
+    ]
+  },
+  "ref<i>.safetensors": {
+    "_comment": "VAE latents of reference image i, packed (1, tokens, 64). Stored by Studio and reused by any later job with the same image.",
+    "tensors": [
+      "latents"
+    ],
+    "metadata": [
+      "width",
+      "height",
+      "reference_res",
+      "source_sha256",
       "model",
       "rev",
       "dtype"

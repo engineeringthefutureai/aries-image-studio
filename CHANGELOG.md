@@ -1,5 +1,113 @@
 # Changelog
 
+## 0.4.0
+
+- **Fixes from a whole-project review.**
+  - Studio never deletes a blob something still points at. Blobs are content-addressed,
+    so identical bytes share one file. Cleanup could delete a file just as a new upload
+    of the same bytes reused it (a second job with the same embeds then failed twice),
+    and finishing a job deleted its raw PNG even when another job had decoded the same
+    bytes, leaving that job without its image. Uploads and cleanup now take turns on a
+    lock, and the raw PNG goes only when nothing points at it.
+  - A Done that Studio cannot record (a database error, an unreadable `enhanced.json`)
+    fails the attempt, which is retried. It used to leave the task running and the
+    executor busy, and the executor's next READY was dropped, so that card got no more work
+    until the agent reconnected.
+  - Agent: a release (lend or idle grace) that arrives while a finished task's outputs
+    upload waits for the upload. It used to stop the worker under the upload and then
+    report READY for a worker that was exiting.
+  - Decode mode is matched per job: an agent that declares only `tiled` now serves jobs
+    that ask for tiling (it was refused every decode). The full-size decode limit applies
+    to untiled decodes only (`Limit.decode_mode`, new), so tiled full-size decodes no longer
+    wait for the 6 GiB RAM floor.
+  - Reference latents uploaded by an encode attempt that was cancelled or retried are no
+    longer stored: they are recorded in the same transaction that checks the attempt.
+  - The scheduler tick loads its jobs in one batch (four queries, was four per task) and
+    writes a task's blocked reason only when it changes (was a transaction per queued task
+    every second).
+
+- **Full-size decode no longer spills into host RAM.** It runs as an exact split: the VAE
+  decoder's attention block on the whole latent, then the memory-heavy upsampling in two
+  overlapping strips across the longer side, joined where both agree bit for bit. Same
+  pixels as untiled within 1/255 (checked against production PNGs of live jobs), 11.6–12.5 GiB
+  on the card instead of 25.8, and the driver holds 0.09 GB of host RAM instead of
+  13–17 GB. Split decodes keep the 6 GiB RAM floor but leave the memory-heavy slot
+  (`ARIES_DECODE_SPLIT_ABOVE_PX`; `0` restores plain untiled and the slot). The decoder's
+  per-frame caches, which a single image never reads, are dropped. Timings record
+  `decode_parts`.
+
+- **Memory-heavy jobs can no longer take the desktop down.** Seen live: four full-size
+  images with three references ran a full-size decode on one card next to a denoise on the
+  other. The driver held 14 GB of host RAM for the cards, the kernel OOM-killed, and it
+  killed the desktop session first (its processes run at `oom_score_adj` 100–200).
+  - Agent: workers start at `oom_score_adj` 1000 (`ARIES_WORKER_OOM_SCORE_ADJ`), so the
+    kernel always takes a worker (its task is retried). The RAM guard samples every 0.25 s
+    at a 4 GiB floor (was 0.5 s, 3 GiB): the drop came faster than its 1 s window.
+  - Denoise with more than 2 references (was 3) is memory-heavy: one 4-reference
+    full-size denoise made the driver hold ~7 GB of host RAM, far more than torch reports.
+  - Studio: `max_concurrent_per_agent` is one count shared by every limit that carries it,
+    so a full-size decode and a heavy denoise take turns instead of running side by side.
+
+- **Enhance with reference images** (docs/ENHANCER_I2I.md). With the image-aware enhancer
+  Qwen-Image-2.1-PE-I2I installed, Enhance stays available while references are attached:
+  it reads the images with the instruction and writes a precise edit prompt (it may also
+  answer "keep image N's aspect", stored on the job as `ratio_follow`, not used yet).
+  Without it Enhance stays off with references, as before.
+  - Agent: `ARIES_ENHANCER_I2I_MODEL_PATH` (ignored when the directory has no
+    `config.json`; the compose file mounts `qwen-image-2.1-pe-i2i`), declared on enhance next
+    to PE-T2I. Use the int4 copy (BUILD_AND_RUN.md §3; its own recipe keeps the vision
+    tower): ~10 GiB and 31 tok/s, against ~20 GiB and 19 tok/s in bf16, ~2 minutes a job.
+  - Protocol: `EnhanceParams.references` (pixels as `ref<i>.image` inputs),
+    `StageCapability.reference_models`; `enhanced.json` may carry `ratio_follow`.
+  - Studio picks PE-I2I for enhance tasks with references and PE-T2I for the rest, and never
+    hands one enhancer's worker the other's task (it restarts the worker with the right
+    model); `enhance_max_references_now/_ever` in `/api/capabilities`.
+  - The enhancer token limit now defaults to 4096 plus 2048 per reference image and goes up
+    to 24576. Reasoning that runs out of room continues with the limit doubled (up to
+    24576, where it is closed so the model still replies) instead of ending without a
+    reply; text that never finished reasoning is no longer taken as the prompt (it was: the
+    first live runs with three references showed the reasoning, or "...", as the enhanced
+    prompt). The viewer notes a raised limit.
+
+- **Enhancer token limit** under Advanced (256–24576): long, detailed prompts
+  such as multi-part infographics ran out of the fixed 2048 tokens. It applies to the
+  send's Enhance rows, resets after the send like the other Advanced settings, comes back
+  with Rerun and Vary, and the viewer shows tokens used against it. Studio stores it per
+  job (`enhance_max_tokens` on `POST /api/jobs`) and sends it as
+  `EnhanceParams.max_new_tokens`; the agent and worker must be updated with Studio for it
+  to take effect (an older worker keeps 2048).
+
+- **Reference images** (docs/REFERENCE_IMAGES.md). Attach up to 4 images to a prompt
+  (the attach button, a drop anywhere on the page, a paste, or "Use as reference" on a
+  result in the timeline or the viewer) and refer to them as "image 1", "image 2", … in
+  the prompt. The composer shows them numbered, to remove or reorder; the folded pill
+  counts them; turns and the viewer show them; Rerun and Vary bring them back. Enhance is
+  off while references are attached.
+  - Studio: `POST /api/uploads` (PNG, JPEG or WebP up to 32 MB, upright by EXIF) and
+    `GET /api/uploads/{sha256}` with thumbnails; `references` on `POST /api/jobs`
+    (`{upload}` or `{image: job_id}`); `max_references_now/_ever` in `/api/capabilities`.
+    Unused uploads are deleted a day after upload.
+  - Each reference is VAE-encoded once and its latents stored (by image, model revision and
+    `ARIES_REFERENCE_RES`), so later jobs reuse them; denoise reads the stored latents.
+  - Jobs of one send with the same prompt and references share one encode (text-only
+    sends too).
+  - Agent: encode and denoise declare `ARIES_MAX_REFERENCE_IMAGES` (4); denoise with more
+    than `ARIES_DENOISE_REFS_LIMIT_ABOVE` (3) references needs the host-RAM floor and runs
+    one at a time. Protocol: `StageCapability.max_references`, `Limit.above_references`,
+    `EncodeParams.references`/`reference_res`, `DenoiseParams.references`; artifacts
+    `ref<i>.image` and `ref<i>.safetensors`; agents fetch them from `/agent/v1/blobs/{sha256}`.
+  - Worker: the encode stage loads the VAE only when a reference needs latents; denoise
+    with references runs its own copy of the pipeline's loop over the stored tensors.
+    diffusers is pinned to the tested commit.
+  - Update Studio and the agent together: a new Studio refuses references until the agent
+    declares them, and an old Studio would read the agent's new denoise limit without its
+    reference condition and hold every denoise to the host-RAM floor, one at a time.
+
+- The agent guards host RAM: when free RAM stays under `ARIES_RAM_GUARD_FLOOR_BYTES`
+  (3 GiB) for a second, it kills the worker holding the most host RAM, and that task
+  fails as `oom_kill` (retried once) instead of the host freezing. Counted in
+  `aries_ram_guard_kills_total`. HARDWARE.md §3.1 adds the matching kernel setting.
+
 ## 0.3.1
 
 - Page load shows a spinner until Studio's first job list arrives; the starter (and the

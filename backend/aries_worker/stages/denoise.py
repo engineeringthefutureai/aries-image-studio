@@ -2,16 +2,27 @@
 
 Emits progress every step. The latent is captured at the `vae.decode` input
 (output_type="latent"), so the decode stage needs only the VAE.
+
+With reference images the pipeline's `__call__` cannot be used: it VAE-encodes the
+references from pixels and takes neither stored latents nor `image_pad_mask`. Those jobs
+run `_denoise_with_references`, the pipeline's loop over the stored tensors
+(docs/REFERENCE_IMAGES.md §3.1).
 """
+import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 from diffusers import QwenImage21Pipeline, QwenImage21Transformer2DModel
+from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21KVCache
+from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_shift, retrieve_timesteps
+from diffusers.utils.torch_utils import randn_tensor
 
 from aries_worker.stages.files import atomic_safetensors_save, load_safetensors_with_metadata
+from aries_worker.stages.references import VAE_SCALE
 from aries_worker.stages.loader import (
     flush_xpu_cache,
     get_device,
@@ -60,6 +71,74 @@ class DenoiseStageRunner:
         logger.info("Transformer DiT loaded in %.2fs", self.load_s)
         return self.load_s
 
+    def _denoise_with_references(
+        self,
+        embeds: Dict[str, Any],
+        ref_latents: List[Any],
+        ref_sizes: List[Tuple[int, int]],
+        width: int,
+        height: int,
+        steps: int,
+        generator: Any,
+        step_callback: Callable[..., Any],
+    ) -> Any:
+        """`QwenImage21Pipeline.__call__`'s denoising loop over precomputed tensors.
+
+        Same noise, timesteps and conditioning KV cache as the pipeline; the transformer
+        sees `[reference latents, target latents]` and only the target slice is stepped.
+        """
+        pipe, transformer, scheduler = self.pipe, self.pipe.transformer, self.pipe.scheduler
+        device = get_device()
+        prompt_embeds = embeds["prompt_embeds"]
+        image_pad_mask = embeds["image_pad_mask"]
+        image_latents = torch.cat([lat.to(prompt_embeds.dtype) for lat in ref_latents], dim=1)
+
+        # Initial noise from the CPU generator, shaped and packed like `prepare_latents`.
+        channels = transformer.config.in_channels
+        h_lat, w_lat = 2 * (height // (VAE_SCALE * 2)), 2 * (width // (VAE_SCALE * 2))
+        noise = randn_tensor(
+            (1, 1, channels, h_lat, w_lat), generator=generator, device=torch.device(device), dtype=prompt_embeds.dtype
+        )
+        latents = pipe._pack_latents(noise, 1, channels, h_lat, w_lat)
+
+        img_shapes = [[
+            *[(1, rh // VAE_SCALE, rw // VAE_SCALE) for rw, rh in ref_sizes],
+            (1, height // VAE_SCALE, width // VAE_SCALE),
+        ]]
+        sigmas = pipe.config.sample_sigmas
+        if sigmas is None:
+            sigmas = np.linspace(1.0, 1 / steps, steps)
+        mu = calculate_shift(
+            latents.shape[1],
+            scheduler.config.get("base_image_seq_len", 256),
+            scheduler.config.get("max_image_seq_len", 4096),
+            scheduler.config.get("base_shift", 0.5),
+            scheduler.config.get("max_shift", 1.15),
+        )
+        timesteps, _ = retrieve_timesteps(scheduler, steps, device, sigmas=sigmas, mu=mu)
+        # The mask spans the joint sequence: one slot per 2x2 group of target latents.
+        img_mask = torch.cat([image_pad_mask, image_pad_mask.new_ones(image_pad_mask.shape[0], latents.shape[1] // 4)], dim=1)
+        cache = QwenImage21KVCache(len(transformer.transformer_blocks)) if transformer.config.causal_condition else None
+        scheduler.set_begin_index(0)
+
+        for i, t in enumerate(timesteps):
+            kv_mode = ("extract" if i == 0 else "cached") if cache is not None else None
+            with transformer.cache_context("cond"):
+                noise_pred = transformer(
+                    hidden_states=torch.cat([image_latents, latents], dim=1),
+                    timestep=t.expand(latents.shape[0]).to(latents.dtype) / 1000,
+                    encoder_hidden_states=prompt_embeds,
+                    encoder_hidden_states_mask=embeds.get("prompt_embeds_mask"),
+                    img_shapes=img_shapes,
+                    img_mask=img_mask,
+                    kv_cache=cache,
+                    kv_cache_mode=kv_mode,
+                    return_dict=False,
+                )[0]
+            latents = scheduler.step(noise_pred[:, -latents.size(1):], t, latents, return_dict=False)[0]
+            step_callback(pipe, i, t, {})
+        return latents
+
     def run_job(
         self,
         job_id: str,
@@ -95,6 +174,26 @@ class DenoiseStageRunner:
         true_cfg = float(params.get("true_cfg_scale", 1.0))
         if true_cfg > 1.0 and embeds.get("negative_prompt_embeds") is None:
             raise ValueError(f"{job_id}: true_cfg_scale={true_cfg} requested, but embeds has no negative_prompt_embeds")
+
+        # Stored reference latents (docs/REFERENCE_IMAGES.md), in prompt order.
+        n_refs = int(params.get("references") or 0)
+        ref_latents: List[Any] = []
+        ref_sizes: List[Tuple[int, int]] = []
+        for i in range(n_refs):
+            ref_path = paths.get(f"ref{i}.safetensors")
+            if not ref_path:
+                raise FileNotFoundError(f"{job_id}: reference {i} has no latents input")
+            tensors, ref_meta = load_safetensors_with_metadata(Path(ref_path), device=get_device())
+            ref_latents.append(tensors["latents"])
+            ref_sizes.append((int(ref_meta["width"]), int(ref_meta["height"])))
+        if n_refs:
+            if embeds.get("image_pad_mask") is None:
+                raise ValueError(f"{job_id}: {n_refs} references, but embeds has no image_pad_mask")
+            if true_cfg > 1.0:
+                raise ValueError(f"{job_id}: reference images with true_cfg_scale > 1 are not supported")
+            embed_sizes = [tuple(s) for s in json.loads(meta.get("reference_sizes") or "[]")]
+            if embed_sizes != ref_sizes:
+                raise ValueError(f"{job_id}: embeds were encoded for references {embed_sizes}, latents are {ref_sizes}")
 
         # ARCHITECTURE_V3.md §3.1: initial noise from torch.Generator("cpu").manual_seed(seed)
         generator = torch.Generator("cpu").manual_seed(seed)
@@ -135,8 +234,13 @@ class DenoiseStageRunner:
                     pipe_kwargs["negative_prompt_embeds_mask"] = embeds.get("negative_prompt_embeds_mask")
 
             with torch.inference_mode():
-                output = self.pipe(**pipe_kwargs)
-                latents = output.images if hasattr(output, "images") else output[0]
+                if n_refs:
+                    latents = self._denoise_with_references(
+                        embeds, ref_latents, ref_sizes, width, height, steps, generator, step_callback
+                    )
+                else:
+                    output = self.pipe(**pipe_kwargs)
+                    latents = output.images if hasattr(output, "images") else output[0]
                 cpu_latents = latents.detach().cpu()
 
             t1 = time.monotonic()
@@ -153,6 +257,7 @@ class DenoiseStageRunner:
                     "dtype": str(model_dtype),
                     "seed": str(seed),
                     "steps": str(steps),
+                    "references": str(n_refs),
                 },
             )
             save_s = round(time.monotonic() - t1, 3)
@@ -166,6 +271,7 @@ class DenoiseStageRunner:
                 "steps": steps,
                 "s_per_step": avg_sps,
                 "prompt_source": prompt_source,
+                **({"references": n_refs} if n_refs else {}),
             }, get_peak_vram_bytes()
         finally:
             flush_xpu_cache()

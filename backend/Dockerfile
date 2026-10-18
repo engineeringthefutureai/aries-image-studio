@@ -22,11 +22,13 @@ RUN uv venv --python 3.12 /opt/venv
 # checkpoint is tied to this torch + torchao pair)
 RUN uv pip install "torch==2.14.1+xpu" torchvision --index-url https://download.pytorch.org/whl/xpu
 
-# Supporting ML packages and git diffusers. torchao loads torchao-quantized (int4)
-# checkpoints. No flash-linear-attention: measured +6% decode for ~67 s of Triton compile
-# per fresh container and a C++ toolchain in the image (docs/HARDWARE.md).
+# Supporting ML packages and diffusers from git, pinned: the reference-image denoise loop
+# uses the pipeline's helpers and was tested against this commit (docs/REFERENCE_IMAGES.md).
+# torchao loads torchao-quantized (int4) checkpoints. No flash-linear-attention: measured
+# +6% decode for ~67 s of Triton compile per fresh container and a C++ toolchain in the
+# image (docs/HARDWARE.md).
 RUN uv pip install "transformers==5.20.1" "torchao==0.18.0" accelerate safetensors pillow
-RUN uv pip install "git+https://github.com/huggingface/diffusers.git"
+RUN uv pip install "git+https://github.com/huggingface/diffusers.git@b800f828f3951c4d206e154411bcbfa693cd322e"
 
 # Install V3 thin agent and worker dependencies (gRPC, protobuf, httpx, prometheus-client)
 RUN uv pip install "grpcio>=1.84.0" "protobuf>=7.35.1" "httpx>=0.27.0" "prometheus-client>=0.20.0" "safetensors>=0.4.0"

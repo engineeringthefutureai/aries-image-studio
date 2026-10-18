@@ -22,7 +22,13 @@ import httpx
 
 from aries.agent.v1 import agent_pb2, agent_pb2_grpc
 from aries_agent.config import AgentConfig, ExecutorConfig, ModelConfig
-from aries_agent.hardware import classify_worker_crash, get_kernel_log_tail
+from aries_agent.hardware import (
+    classify_worker_crash,
+    get_host_ram_available_bytes,
+    get_kernel_log_tail,
+    get_process_rss_bytes,
+    get_vram_overflow_bytes,
+)
 from aries_agent.metrics import AgentMetrics
 
 logger = logging.getLogger("aries_agent")
@@ -58,6 +64,21 @@ ARTIFACT_PATH_KEYS = {
     "latent.safetensors": "latent_safetensors",
     "image.png": "image_png",
 }
+
+
+def worker_preexec(oom_score_adj: int):
+    """Runs in the worker between fork and exec: raise its oom_score_adj so a global OOM kill
+    (or the kernel's thrash protection) takes a worker, not the desktop session. Raising it
+    needs no privilege."""
+
+    def apply() -> None:
+        try:
+            with open("/proc/self/oom_score_adj", "w") as f:
+                f.write(str(oom_score_adj))
+        except OSError:
+            pass
+
+    return apply
 
 
 def compute_file_sha256(path: Path) -> Tuple[str, int]:
@@ -115,13 +136,38 @@ class ExecutorRuntime:
 
         self.active_task: Optional[ActiveTask] = None
         self.release_requested: bool = False
+        # Set while a finished task's outputs upload: a release then waits for the upload.
+        self.finishing: bool = False
         self.socket_path = self.agent_cfg.scratch_dir / f"{self.cfg.id}.sock"
         self.unix_server: Optional[asyncio.Server] = None
         self._monitor_task: Optional[asyncio.Task] = None
+        # Why the agent killed the current worker itself; reported instead of the exit code.
+        self.kill_detail: str = ""
 
     @property
     def is_worker_alive(self) -> bool:
         return self.process is not None and self.process.returncode is None
+
+    def worker_ram_bytes(self) -> int:
+        """Host RAM held by the worker: resident pages plus driver spill out of VRAM."""
+        if not self.is_worker_alive:
+            return 0
+        return get_process_rss_bytes(self.pid) + get_vram_overflow_bytes(self.pid)
+
+    def kill_for_host_ram(self, detail: str) -> None:
+        """SIGKILL the worker; `_monitor_process` reports it as `oom_kill` with `detail`."""
+        proc = self.process
+        if proc is None or proc.returncode is not None:
+            return
+        logger.warning("Killing worker PID %s on %s: %s", proc.pid, self.cfg.id, detail)
+        self.kill_detail = detail
+        self.metrics.ram_guard_kills_total.labels(
+            executor=self.cfg.id, stage=STAGE_ENUM_TO_NAME.get(self.stage, "unknown")
+        ).inc()
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
     def set_state(self, kind: int, detail: str = "") -> None:
         self.state = kind
@@ -209,6 +255,7 @@ class ExecutorRuntime:
         self.load_s = 0.0
         self.pid = 0
         self.release_requested = False
+        self.kill_detail = ""
 
         await self.start_socket_server()
         self.set_state(agent_pb2.EXECUTOR_STATE_STARTING)
@@ -216,6 +263,7 @@ class ExecutorRuntime:
         env = os.environ.copy()
         env["ZE_ENABLE_PCI_ID_DEVICE_ORDER"] = "1"
         env["HF_HUB_OFFLINE"] = "1"
+        env["ARIES_DECODE_SPLIT_ABOVE_PX"] = str(self.agent_cfg.decode_split_above_px)
         if self.agent_cfg.backend_kind == "xpu":
             env["ONEAPI_DEVICE_SELECTOR"] = self.cfg.selector
         elif self.agent_cfg.backend_kind == "cuda":
@@ -228,6 +276,9 @@ class ExecutorRuntime:
 
         for m in self.agent_cfg.models:
             # MODEL_DTYPE is this stage's model: the enhancer's for enhance, else the main one's.
+            # The default enhancer is the text one; StartWorker.model picks PE-I2I below.
+            if m.id == self.agent_cfg.enhancer_i2i_model_id:
+                continue
             if "PE" in m.id or m.id.endswith("-PE-T2I"):
                 env["ENHANCER_MODEL_PATH"] = m.path
                 env["ENHANCER_MODEL_ID"] = m.id
@@ -272,6 +323,7 @@ class ExecutorRuntime:
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            preexec_fn=worker_preexec(self.agent_cfg.worker_oom_score_adj),
         )
         self.pid = self.process.pid or 0
         self.metrics.set_executor_pid(self.cfg.id, self.pid)
@@ -306,11 +358,12 @@ class ExecutorRuntime:
             self.active_task = None
             sig = -rc if rc < 0 else (rc - 128 if rc > 128 else 0)
             klog = get_kernel_log_tail(self.cfg.device)
-            fclass = (
-                agent_pb2.FAILURE_CANCELLED
-                if task.cancelled
-                else classify_worker_crash(rc, sig, self.cfg.device, klog)
-            )
+            if task.cancelled:
+                fclass = agent_pb2.FAILURE_CANCELLED
+            elif self.kill_detail:
+                fclass = agent_pb2.FAILURE_OOM_KILL
+            else:
+                fclass = classify_worker_crash(rc, sig, self.cfg.device, klog)
             fclass_name = FAILURE_CLASS_TO_NAME.get(fclass, "python_error")
             self.metrics.task_outcomes_total.labels(
                 executor=self.cfg.id,
@@ -330,7 +383,7 @@ class ExecutorRuntime:
                         task=task.assign.task,
                         attempt=task.assign.attempt,
                         failure_class=fclass,
-                        detail=f"Worker process exited with code {rc}",
+                        detail=self.kill_detail or f"Worker process exited with code {rc}",
                         exit_code=rc,
                         signal=sig,
                         kernel_log_tail=klog,
@@ -346,7 +399,11 @@ class ExecutorRuntime:
         if rc != 0 and self.state not in (agent_pb2.EXECUTOR_STATE_STOPPING, agent_pb2.EXECUTOR_STATE_IDLE):
             sig = -rc if rc < 0 else (rc - 128 if rc > 128 else 0)
             klog = get_kernel_log_tail(self.cfg.device)
-            fclass = classify_worker_crash(rc, sig, self.cfg.device, klog)
+            fclass = (
+                agent_pb2.FAILURE_OOM_KILL
+                if self.kill_detail
+                else classify_worker_crash(rc, sig, self.cfg.device, klog)
+            )
             fclass_name = FAILURE_CLASS_TO_NAME.get(fclass, "python_error")
             self.metrics.worker_exits_total.labels(
                 executor=self.cfg.id,
@@ -355,7 +412,7 @@ class ExecutorRuntime:
             ).inc()
             self.stage = agent_pb2.STAGE_UNSPECIFIED
             self.model = None
-            self.set_state(agent_pb2.EXECUTOR_STATE_FAILED, detail=f"{fclass_name}: exit {rc}")
+            self.set_state(agent_pb2.EXECUTOR_STATE_FAILED, detail=f"{fclass_name}: {self.kill_detail or f'exit {rc}'}")
             self.set_state(agent_pb2.EXECUTOR_STATE_IDLE)
         else:
             self.metrics.worker_exits_total.labels(
@@ -520,18 +577,26 @@ class ExecutorRuntime:
         which = assign.WhichOneof("params")
         if which == "enhance":
             params["prompt"] = assign.enhance.prompt
+            if assign.enhance.max_new_tokens:
+                params["max_new_tokens"] = assign.enhance.max_new_tokens
+            if assign.enhance.references:
+                params["references"] = [r.sha256 for r in assign.enhance.references]
         elif which == "encode":
             params["prompt"] = assign.encode.prompt
             params["prompt_source"] = assign.encode.prompt_source or "original"
             if assign.encode.negative_prompt:
                 params["negative_prompt"] = assign.encode.negative_prompt
             params["true_cfg_scale"] = assign.encode.true_cfg_scale or 1.0
+            if assign.encode.references:
+                params["references"] = [r.sha256 for r in assign.encode.references]
+                params["reference_res"] = assign.encode.reference_res
         elif which == "denoise":
             params["width"] = assign.denoise.width
             params["height"] = assign.denoise.height
             params["steps"] = assign.denoise.steps
             params["seed"] = assign.denoise.seed
             params["true_cfg_scale"] = assign.denoise.true_cfg_scale or 1.0
+            params["references"] = assign.denoise.references
         elif which == "decode":
             params["decode_mode"] = DECODE_MODE_TO_NAME.get(assign.decode.mode, "untiled")
 
@@ -591,6 +656,7 @@ class ExecutorRuntime:
             return
         task.completed = True
         self.active_task = None
+        self.finishing = True
         stage_name = STAGE_ENUM_TO_NAME.get(task.assign.stage, "unknown")
         elapsed = max(0.0, time.monotonic() - task.started_at)
         self.metrics.task_seconds.labels(executor=self.cfg.id, stage=stage_name).observe(elapsed)
@@ -692,6 +758,7 @@ class ExecutorRuntime:
             )
         finally:
             shutil.rmtree(task.scratch_dir, ignore_errors=True)
+            self.finishing = False
             if self.release_requested:
                 await self.release_worker()
             elif self.is_worker_alive:
@@ -837,7 +904,7 @@ class ExecutorRuntime:
             await self._send_worker_json({"action": "cancel", "id": task_id})
 
     async def release_worker(self) -> None:
-        if self.active_task and not self.active_task.completed:
+        if (self.active_task and not self.active_task.completed) or self.finishing:
             self.release_requested = True
             return
         self.release_requested = False
@@ -891,6 +958,8 @@ class AriesAgent:
         self.running = False
         self.session_id: Optional[str] = None
         self._inhibitor_proc: Optional[ subprocess.Popen ] = None
+        self._ram_guard_task: Optional[asyncio.Task] = None
+        self._ram_low_samples = 0
 
         for exec_cfg in self.config.executors:
             self.metrics.init_executor(exec_cfg.id, exec_cfg.device, exec_cfg.mem_total_bytes)
@@ -937,6 +1006,42 @@ class AriesAgent:
                 pass
             self._inhibitor_proc = None
 
+    def check_host_ram(self) -> Optional[str]:
+        """One host-RAM guard sample; returns the killed executor's id, if any.
+
+        The kernel's OOM killer does not save this host: when RAM runs out it keeps
+        dropping and re-reading the memory-mapped weights and the machine freezes instead
+        (HARDWARE.md F9). So when MemAvailable stays under the floor for
+        `ram_guard_samples` samples in a row, kill the worker holding the most host RAM.
+        Its task fails as `oom_kill` and the backend retries it as usual.
+        """
+        floor = self.config.ram_guard_floor_bytes
+        available = get_host_ram_available_bytes()
+        if floor <= 0 or available >= floor:
+            self._ram_low_samples = 0
+            return None
+        self._ram_low_samples += 1
+        if self._ram_low_samples < self.config.ram_guard_samples:
+            return None
+        self._ram_low_samples = 0
+        alive = [rt for rt in self.executors.values() if rt.is_worker_alive and not rt.kill_detail]
+        if not alive:
+            return None
+        victim = max(alive, key=lambda rt: rt.worker_ram_bytes())
+        victim.kill_for_host_ram(
+            f"host RAM guard: {available / 2**30:.1f} GiB available, "
+            f"below the {floor / 2**30:.1f} GiB floor"
+        )
+        return victim.cfg.id
+
+    async def _ram_guard_loop(self) -> None:
+        while self.running:
+            await asyncio.sleep(self.config.ram_guard_interval_s)
+            try:
+                self.check_host_ram()
+            except Exception:
+                logger.exception("Host RAM guard check failed")
+
     def build_register_message(
         self, pending_results: Optional[List[Tuple[str, int, str]]] = None
     ) -> agent_pb2.Register:
@@ -960,21 +1065,27 @@ class AriesAgent:
                 if m in DECODE_NAME_TO_MODE
             ] or [agent_pb2.DECODE_MODE_UNTILED]
 
+            # With PE-I2I installed, enhance also takes jobs with references (on that model).
+            i2i = self.config.enhancer_i2i_model_id
             stages = [
                 agent_pb2.StageCapability(
                     stage=agent_pb2.STAGE_ENHANCE,
                     models=pe_models,
                     max_px=0,
+                    max_references=self.config.max_reference_images if i2i else 0,
+                    reference_models=[i2i] if i2i else [],
                 ),
                 agent_pb2.StageCapability(
                     stage=agent_pb2.STAGE_ENCODE,
                     models=main_models,
                     max_px=0,
+                    max_references=self.config.max_reference_images,
                 ),
                 agent_pb2.StageCapability(
                     stage=agent_pb2.STAGE_DENOISE,
                     models=main_models,
                     max_px=ex.max_px,
+                    max_references=self.config.max_reference_images,
                 ),
                 agent_pb2.StageCapability(
                     stage=agent_pb2.STAGE_DECODE,
@@ -992,16 +1103,35 @@ class AriesAgent:
                 )
             )
 
+        # Full-size untiled decodes need the RAM floor (tiled ones stay on the card). A split
+        # decode holds ~0.1 GB of host RAM, so only plain untiled ones, which spill
+        # 13-17 GB, also take the memory-heavy slot.
+        split = self.config.decode_split_above_px
+        decode_requires = [agent_pb2.Requirement(host_ram_available_bytes=self.config.decode_host_ram_floor_bytes)]
+        if split <= 0 or split > self.config.decode_above_px:
+            decode_requires.append(
+                agent_pb2.Requirement(max_concurrent_per_agent=self.config.decode_max_concurrent_per_agent)
+            )
         limits_pb = [
             agent_pb2.Limit(
                 stage=agent_pb2.STAGE_DECODE,
                 above_px=self.config.decode_above_px,
-                requires=[
-                    agent_pb2.Requirement(host_ram_available_bytes=self.config.decode_host_ram_floor_bytes),
-                    agent_pb2.Requirement(max_concurrent_per_agent=self.config.decode_max_concurrent_per_agent),
-                ],
+                requires=decode_requires,
+                decode_mode="untiled",
             )
         ]
+        if self.config.max_reference_images > self.config.denoise_refs_limit_above:
+            limits_pb.append(
+                agent_pb2.Limit(
+                    stage=agent_pb2.STAGE_DENOISE,
+                    above_px=0,
+                    above_references=self.config.denoise_refs_limit_above,
+                    requires=[
+                        agent_pb2.Requirement(host_ram_available_bytes=self.config.decode_host_ram_floor_bytes),
+                        agent_pb2.Requirement(max_concurrent_per_agent=1),
+                    ],
+                )
+            )
 
         running_pb: List[agent_pb2.RunningTask] = []
         for ex_id, rt in self.executors.items():
@@ -1060,16 +1190,28 @@ class AriesAgent:
             px = int(assign.denoise.width) * int(assign.denoise.height)
             if rt.cfg.max_px > 0 and px > rt.cfg.max_px:
                 return f"denoise size {assign.denoise.width}x{assign.denoise.height} ({px} px) exceeds executor max_px {rt.cfg.max_px}"
+            if assign.denoise.references > self.config.max_reference_images:
+                return f"{assign.denoise.references} references exceed max_references {self.config.max_reference_images}"
         elif assign.stage == agent_pb2.STAGE_DECODE:
             if which != "decode":
                 return "decode assignment missing DecodeParams"
             mode_name = DECODE_MODE_TO_NAME.get(assign.decode.mode, "")
             if mode_name not in rt.cfg.decode_modes:
                 return f"decode mode '{mode_name}' not supported by executor '{assign.executor}'"
-        elif assign.stage == agent_pb2.STAGE_ENCODE and which != "encode":
-            return "encode assignment missing EncodeParams"
-        elif assign.stage == agent_pb2.STAGE_ENHANCE and which != "enhance":
-            return "enhance assignment missing EnhanceParams"
+        elif assign.stage == agent_pb2.STAGE_ENCODE:
+            if which != "encode":
+                return "encode assignment missing EncodeParams"
+            if len(assign.encode.references) > self.config.max_reference_images:
+                return f"{len(assign.encode.references)} references exceed max_references {self.config.max_reference_images}"
+        elif assign.stage == agent_pb2.STAGE_ENHANCE:
+            if which != "enhance":
+                return "enhance assignment missing EnhanceParams"
+            refs = len(assign.enhance.references)
+            if refs > self.config.max_reference_images:
+                return f"{refs} references exceed max_references {self.config.max_reference_images}"
+            i2i = self.config.enhancer_i2i_model_id
+            if refs and (not i2i or rt.model is None or rt.model.id != i2i):
+                return "the loaded enhancer does not read reference images"
 
         return None
 
@@ -1216,6 +1358,8 @@ class AriesAgent:
         """Main lifecycle loop: start /metrics server and maintain gRPC stream with backoff."""
         self.running = True
         await self.metrics.start_http_server(self.config.metrics_host, self.config.metrics_port)
+        if self.config.ram_guard_floor_bytes > 0:
+            self._ram_guard_task = asyncio.create_task(self._ram_guard_loop())
         backoff = self.config.reconnect_min_s
         first_connect = True
 
@@ -1245,6 +1389,9 @@ class AriesAgent:
     async def shutdown(self) -> None:
         self.running = False
         self.send_queue.put_nowait(None)  # type: ignore[arg-type]
+        if self._ram_guard_task is not None:
+            self._ram_guard_task.cancel()
+            self._ram_guard_task = None
         for rt in self.executors.values():
             await rt.kill_worker(reason="agent_shutdown", emit_idle=False)
         self._update_sleep_inhibitor()

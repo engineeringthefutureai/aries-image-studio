@@ -120,6 +120,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
       seed: v3.seed,
       quality: meta.quality || 'custom',
       enhance: v3.enhance,
+      enhanceMaxTokens: v3.enhance_max_tokens ?? undefined,
       tiling: !!v3.tiling,
     },
     status,
@@ -144,7 +145,23 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     executor: executorName,
     card: cardDigits ? Number(cardDigits[1]) : undefined,
     peakVram: peakVram || undefined,
+    references: v3.references?.length ? v3.references : undefined,
   };
+}
+
+/**
+ * Upload an image to use as a reference (`POST /api/uploads`). Resolves to its hash and
+ * size; rejects with Studio's reason (not an image, too large, ...).
+ */
+export async function uploadReferenceApi(file: Blob): Promise<{ sha256: string; width: number; height: number }> {
+  const res = await fetch('/api/uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  return data;
 }
 
 /**
@@ -257,8 +274,12 @@ export interface JobSubmission {
   steps: number;
   seed: number;
   enhance: boolean;
+  /** The prompt rewriter's token limit; omitted: Studio's default. */
+  enhance_max_tokens?: number;
   tiling: boolean;
   meta: JobMeta;
+  /** Reference images in prompt order: uploads (hash) or earlier results (job id). */
+  references?: ({ upload: string } | { image: string })[];
 }
 
 /**

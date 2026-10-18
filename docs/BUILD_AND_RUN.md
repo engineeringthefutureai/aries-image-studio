@@ -1,6 +1,6 @@
 # Aries Image Studio — Build and run
 
-How to build Aries Image Studio 0.3.1 (Architecture V3) and run it: with Docker Compose
+How to build Aries Image Studio 0.4.0 (Architecture V3) and run it: with Docker Compose
 (recommended), or from source for development. For the 0.2.1 manager, use the
 `release/v0.2.1` branch and its README.
 
@@ -53,6 +53,8 @@ the Rust build uses a vendored copy.
 sudo install -d -o "$USER" /srv/models
 hf download Qwen/Qwen-Image-2.1        --local-dir /srv/models/qwen-image-2.1
 hf download Qwen/Qwen-Image-2.1-PE-T2I --local-dir /srv/models/qwen-image-2.1-pe-t2i
+# Optional: the image-aware enhancer, for Enhance with reference images
+hf download Qwen/Qwen-Image-2.1-PE-I2I --local-dir /srv/models/qwen-image-2.1-pe-i2i
 ```
 
 **Optional: int4 enhancer.** A torchao int4 copy of the prompt enhancer needs ~8 GiB of card
@@ -76,6 +78,31 @@ PY
 Then point `ARIES_ENHANCER_MODEL_PATH` (and the compose mount) at
 `qwen-image-2.1-pe-t2i-int4`. The agent reads the precision from the checkpoint's config and
 records `int4` in provenance. Re-quantize after changing the torch or torchao pins.
+
+**Optional: int4 image enhancer.** PE-I2I (Enhance with reference images,
+[ENHANCER_I2I.md](ENHANCER_I2I.md)) in int4 needs ~10 GiB instead of ~20 and is 1.6× faster
+(31 tok/s). Its recipe differs from the one above: load it as an image-text model and keep
+the vision tower and `lm_head` in bf16, and copy the processor and its own system prompt
+(the T2I recipe saves a text-only model that cannot see the images):
+
+```bash
+docker run -i --rm --device /dev/dri --group-add render -v /srv/models:/models \
+  aries-image-studio-agent:latest python - <<'PY'
+import shutil, torch
+from transformers import AutoModelForImageTextToText, AutoProcessor, TorchAoConfig
+from torchao.quantization import Int4WeightOnlyConfig
+src, out = "/models/qwen-image-2.1-pe-i2i", "/models/qwen-image-2.1-pe-i2i-int4"
+q = TorchAoConfig(quant_type=Int4WeightOnlyConfig(group_size=128, int4_packing_format="plain_int32"),
+                  modules_to_not_convert=["model.visual", "lm_head"])
+m = AutoModelForImageTextToText.from_pretrained(src, dtype=torch.bfloat16, device_map="xpu", quantization_config=q)
+m.save_pretrained(out); AutoProcessor.from_pretrained(src).save_pretrained(out)
+for f in ("system_prompt.txt", "chat_template.jinja", "generation_config.json", "LICENSE", "README.md"):
+    shutil.copy(f"{src}/{f}", f"{out}/{f}")
+PY
+```
+
+Then point `ARIES_ENHANCER_I2I_MODEL_PATH` (and the compose mount) at
+`qwen-image-2.1-pe-i2i-int4`.
 
 Another location works: set `MODELS_DIR` in the agent's `.env` (section 5). The agent
 reads each model's revision from the metadata `hf download` leaves, and records it in
@@ -140,7 +167,7 @@ ARIES_AGENT_TOKEN=<the same value as Studio's>
 ARIES_BACKEND_GRPC_URL=studio.lan:50051          # Studio's gRPC port
 ARIES_METRICS_URL=http://gpu-host.lan:9464/metrics  # this host's agent metrics, as Studio sees it
 # ARIES_AGENT_ID=aries                           # unique per GPU host
-# MODELS_DIR=/srv/models                         # holds qwen-image-2.1/ and qwen-image-2.1-pe-t2i/
+# MODELS_DIR=/srv/models                         # holds qwen-image-2.1/, qwen-image-2.1-pe-t2i/ (and -pe-i2i/)
 ```
 
 Build and start with `make`, not plain `docker compose`. The Makefile finds the host's
@@ -285,7 +312,7 @@ cd backend
 uv venv --python 3.12 .venv && . .venv/bin/activate
 uv pip install "torch==2.14.1+xpu" torchvision --index-url https://download.pytorch.org/whl/xpu
 uv pip install "transformers==5.20.1" "torchao==0.18.0" accelerate safetensors pillow
-uv pip install "git+https://github.com/huggingface/diffusers.git"
+uv pip install "git+https://github.com/huggingface/diffusers.git@b800f828f3951c4d206e154411bcbfa693cd322e"
 uv pip install -e .
 python -c "import torch; assert '+xpu' in torch.__version__"
 
@@ -341,6 +368,7 @@ validation and the contract tests on both sides.
 | `ARIES_SCRAPE_STALE_S` | `5` | A scrape older than this blocks memory-limited work |
 | `ARIES_RECONNECT_GRACE_S` | `30` | How long a disconnected agent keeps its running tasks |
 | `ARIES_DISK_WATERMARK_PCT` | `80` | Refuse new jobs above this disk usage |
+| `ARIES_REFERENCE_RES` | `1024` | Reference images are resized to about this side squared (~1 MP); multiples of 32 from 256. Changing it re-encodes references once (their stored latents are keyed by it) |
 | `RUST_LOG` | `info` | Log filter, e.g. `info,aries_image_studio=debug` |
 
 **Agent** (environment; `deploy/aries/compose.yaml` sets the paths)
@@ -356,12 +384,20 @@ validation and the contract tests on both sides.
 | `ARIES_MODEL_PATH` | `/models/qwen-image-2.1` | Qwen-Image-2.1 weights |
 | `ARIES_ENHANCER_MODEL_PATH` | `/models/qwen-image-2.1-pe-t2i` | Prompt rewriter weights (bf16, or a torchao int4 copy, section 3) |
 | `ARIES_ENHANCER_MODEL_DTYPE` | from the checkpoint (`int4`/`int8`), else `MODEL_DTYPE` | Enhancer precision recorded in provenance |
+| `ARIES_ENHANCER_I2I_MODEL_PATH` | unset (compose: `/models/qwen-image-2.1-pe-i2i`) | Image-aware enhancer (PE-I2I, bf16 or int4): Enhance with reference images. Ignored when the directory has no `config.json` |
+| `ARIES_ENHANCER_I2I_MODEL_DTYPE` | from the checkpoint, else `MODEL_DTYPE` | Its precision recorded in provenance |
 | `ARIES_NUM_CARDS` | `2` | Executors to declare when found in sysfs |
 | `ARIES_EXECUTORS_JSON` | — | Explicit executors (`id`, `device`, `selector`, optional `max_px`) |
 | `ARIES_MAX_PX` | `4300800` (2400×1792) | Largest image per executor |
-| `ARIES_DECODE_ABOVE_PX` | `3500000` (3.5 MP: full size only) | Decodes above this need the RAM floor and the concurrency limit; ½-size decodes peak under 8 GiB and run freely |
+| `ARIES_DECODE_SPLIT_ABOVE_PX` | `3500000` | Untiled decodes above this run as an exact split (HARDWARE.md §1.3): same pixels within 1/255, ≤ 12.5 GiB on the card, no host-RAM spill, so they skip the memory-heavy slot. `0`: plain untiled |
+| `ARIES_DECODE_ABOVE_PX` | `3500000` (3.5 MP: full size only) | Decodes above this need the RAM floor; plain untiled ones (not split) also the memory-heavy slot. ½-size decodes peak under 8 GiB and run freely |
 | `ARIES_DECODE_RAM_FLOOR_BYTES` | `6442450944` (6 GiB) | Free host RAM required for those decodes |
-| `ARIES_DECODE_MAX_CONCURRENT` | `1` | How many of those decodes run at once on this agent (at least 1); `2` allows one per card |
+| `ARIES_DECODE_MAX_CONCURRENT` | `1` | How many memory-heavy tasks (those decodes, and denoise above `ARIES_DENOISE_REFS_LIMIT_ABOVE` references) run at once on this agent (at least 1; one count shared by both); `2` allows one per card |
+| `ARIES_MAX_REFERENCE_IMAGES` | `4` | Most reference images a job may carry on this agent; each adds ~2.6 GiB to denoise (HARDWARE.md §1.1). `0` turns references off |
+| `ARIES_DENOISE_REFS_LIMIT_ABOVE` | `2` | Denoise with more references than this spills into host RAM: it needs the decode RAM floor and takes the memory-heavy slot it shares with full-size decodes |
+| `ARIES_RAM_GUARD_FLOOR_BYTES` | `4294967296` (4 GiB) | Host-RAM guard: when free host RAM stays below this for two samples, the agent kills the worker holding the most host RAM and its task fails as `oom_kill` (retried once). `0` turns it off |
+| `ARIES_RAM_GUARD_INTERVAL_S` | `0.25` | How often the guard samples `MemAvailable` |
+| `ARIES_WORKER_OOM_SCORE_ADJ` | `1000` | Workers' `oom_score_adj`: if the kernel has to OOM-kill, it takes a worker (its task is retried), never the desktop session |
 | `ARIES_SCRATCH_DIR` | `/run/aries-agent` (`/tmp/aries-agent` in compose) | Per-task files, deleted after each task |
 | `ARIES_SLEEP_INHIBITOR` | `1` | Hold a systemd sleep inhibitor while workers run (needs `systemd-inhibit`) |
 | `ARIES_CA_CERT` | — | CA bundle for a TLS gRPC endpoint |

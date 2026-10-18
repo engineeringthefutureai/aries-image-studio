@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { type Generation, type AspectRatio, ASPECT_RATIOS, SIZE_MULTIPLIERS } from '../types';
+import { type Generation, type AspectRatio, ASPECT_RATIOS, ENHANCE_TOKENS_DEFAULT, SIZE_MULTIPLIERS } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { groupTurns } from '../utils/turns';
 import { Logo } from './Logo';
 import { BatchCarousel } from './BatchCarousel';
 import { PageLoader } from './PageLoader';
 import { formatDuration, generationSeconds, queueSeconds } from '../utils/timings';
+import { ReferenceStrip } from './ReferenceStrip';
 import {
   Heart,
   Dices,
@@ -23,10 +24,11 @@ import {
   Loader2,
   Trash2,
   Grid2x2,
+  ImagePlus,
 } from 'lucide-react';
 
 /** Enhancer token limit, for progress from workers that do not report `max_new_tokens`. */
-const DEFAULT_ENHANCE_TOKEN_LIMIT = 2048;
+const DEFAULT_ENHANCE_TOKEN_LIMIT = ENHANCE_TOKENS_DEFAULT;
 /** Most enhancer runs finish around this share of the token limit: the bar's finish line. */
 const ENHANCE_EXPECTED_SHARE = 0.85;
 // Prompts longer than this (e.g. an enhanced prompt sent back from the composer) are clamped.
@@ -79,6 +81,8 @@ interface TimelineProps {
   onSelectPrompt: (prompt: string, aspect?: AspectRatio) => void;
   onDelete?: (id: string) => void;
   onDeleteTurn?: (batchId: string) => void;
+  /** Attach an image as a reference in the composer (absent: no room or not supported). */
+  onUseAsReference?: (generation: Generation) => void;
   /** Studio's first job list has not arrived yet: show a loader, not the starter. */
   loading?: boolean;
 }
@@ -94,6 +98,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSelectPrompt,
   onDelete,
   onDeleteTurn,
+  onUseAsReference,
   loading = false,
 }) => {
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
@@ -357,6 +362,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     >
                       {selectedGen.prompt}
                     </p>
+                    {selectedGen.references && <ReferenceStrip references={selectedGen.references} className="mt-2" />}
                     {isLongPrompt && (
                       <button
                         onClick={() => setExpandedPrompt((prev) => ({ ...prev, [selectedGen.id]: !prev[selectedGen.id] }))}
@@ -496,7 +502,9 @@ export const Timeline: React.FC<TimelineProps> = ({
               </div>
 
               {/* Bottom Actions Row for Quick Interactions */}
-              <div className="flex items-center justify-between pt-2 border-t border-[#e5e2db]/40 dark:border-[#2e2e2a]/40 text-xs text-[#8c7169] dark:text-[#a09088]">
+              {/* The label of "Use as reference" shows only when this row has room for it: its
+                  width depends on how many tiles the turn's carousel takes, not on the window */}
+              <div className="@container flex items-center justify-between gap-2 pt-2 border-t border-[#e5e2db]/40 dark:border-[#2e2e2a]/40 text-xs text-[#8c7169] dark:text-[#a09088]">
                 <div className="flex items-center gap-2">
                   {selectedGen.status === 'done' && (
                     <>
@@ -506,7 +514,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                         title="Vary: fill the composer from this image with a new seed"
                       >
                         <Dices className="w-3.5 h-3.5" />
-                        <span>Vary</span>
+                        <span className="whitespace-nowrap">Vary</span>
                       </button>
                       <button
                         onClick={() => onRerun(selectedGen)}
@@ -514,8 +522,19 @@ export const Timeline: React.FC<TimelineProps> = ({
                         title="Rerun: fill the composer from this image, seed locked"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Rerun</span>
+                        <span className="whitespace-nowrap">Rerun</span>
                       </button>
+                      {onUseAsReference && (
+                        <button
+                          onClick={() => onUseAsReference(selectedGen)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#f1eee7] dark:bg-[#232320] hover:bg-[#e5e2db] dark:hover:bg-[#2e2e2a] text-[#1c1c18] dark:text-[#f3f0e9] transition-colors"
+                          title="Use as reference: attach this image to the next prompt"
+                          aria-label="Use as reference"
+                        >
+                          <ImagePlus className="w-3.5 h-3.5" />
+                          <span className="hidden @md:inline whitespace-nowrap">Use as reference</span>
+                        </button>
+                      )}
                     </>
                   )}
                 </div>

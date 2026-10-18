@@ -1,5 +1,6 @@
 """Configuration and capability declaration builder for aries_agent (Architecture V3 §5.1, §10.2)."""
 import json
+import logging
 import os
 import sys
 from collections import Counter
@@ -9,6 +10,8 @@ from typing import List, Optional
 
 from aries_agent import __version__
 from aries_agent.hardware import get_device_mem_total_bytes, get_host_ram_total_bytes, scan_xe_pci_addresses
+
+logger = logging.getLogger("aries_agent.config")
 
 
 # Largest UI preset: 4:3 at 2400 x 1792 (4.30 MP). Every preset ran untiled on v0.2.
@@ -94,10 +97,30 @@ class AgentConfig:
     worker_python: str = field(default_factory=lambda: sys.executable)
     worker_module: str = "aries_worker"
     models: List[ModelConfig] = field(default_factory=list)
+    # The image-aware enhancer's model id (docs/ENHANCER_I2I.md); None: not installed.
+    enhancer_i2i_model_id: Optional[str] = None
     executors: List[ExecutorConfig] = field(default_factory=list)
     decode_above_px: int = 3500000  # full size only; ½ size peaks under 8 GiB
+    # Untiled decodes above this run as an exact split (HARDWARE.md §1.3): no spill, so
+    # they keep the RAM floor but not the memory-heavy slot. 0: plain untiled, with both.
+    decode_split_above_px: int = 3500000
     decode_host_ram_floor_bytes: int = 6442450944  # 6 GiB
     decode_max_concurrent_per_agent: int = 1
+    # Reference images (docs/REFERENCE_IMAGES.md §5): each adds ~2.6 GiB to denoise; above
+    # `denoise_refs_limit_above` the job spills into host RAM (the driver held ~7 GB for one
+    # 4-reference denoise at full size), so it needs the decode floor and shares the
+    # one-at-a-time slot with full-size decodes on this agent.
+    max_reference_images: int = 4
+    denoise_refs_limit_above: int = 2
+    # Host-RAM guard: kill the hungriest worker when MemAvailable stays below the floor
+    # (HARDWARE.md F9). 0 turns it off. Sampled fast: a model load and a spilling denoise
+    # took ~10 GB within seconds.
+    ram_guard_floor_bytes: int = 4294967296  # 4 GiB
+    ram_guard_interval_s: float = 0.25
+    ram_guard_samples: int = 2
+    # Workers' oom_score_adj: if the kernel has to kill, it kills a worker (a retried task),
+    # never the desktop session (whose processes run at 100-200).
+    worker_oom_score_adj: int = 1000
     upload_retry_delays: List[float] = field(default_factory=lambda: [1.0, 3.0])
     reconnect_min_s: float = 1.0
     reconnect_max_s: float = 30.0
@@ -156,6 +179,22 @@ class AgentConfig:
                 path=enhancer_path,
             ),
         ]
+        enhancer_i2i_model_id: Optional[str] = None
+        i2i_path = os.environ.get("ARIES_ENHANCER_I2I_MODEL_PATH")
+        if i2i_path and not (Path(i2i_path) / "config.json").is_file():
+            # The compose file mounts it whether or not it was downloaded.
+            logger.warning("ARIES_ENHANCER_I2I_MODEL_PATH=%s has no config.json; Enhance stays off with references", i2i_path)
+            i2i_path = ""
+        if i2i_path:
+            enhancer_i2i_model_id = os.environ.get("ENHANCER_I2I_MODEL_ID", "Qwen/Qwen-Image-2.1-PE-I2I")
+            models.append(
+                ModelConfig(
+                    id=enhancer_i2i_model_id,
+                    rev=_read_model_rev(i2i_path, "ENHANCER_I2I_MODEL_REV"),
+                    dtype=os.environ.get("ARIES_ENHANCER_I2I_MODEL_DTYPE") or _detect_quant_dtype(i2i_path) or dtype,
+                    path=i2i_path,
+                )
+            )
 
         executors: List[ExecutorConfig] = []
         executors_json = os.environ.get("ARIES_EXECUTORS_JSON")
@@ -207,10 +246,17 @@ class AgentConfig:
             worker_python=worker_python,
             worker_module=worker_module,
             models=models,
+            enhancer_i2i_model_id=enhancer_i2i_model_id,
             executors=executors,
             decode_above_px=int(os.environ.get("ARIES_DECODE_ABOVE_PX", "3500000")),
+            decode_split_above_px=int(os.environ.get("ARIES_DECODE_SPLIT_ABOVE_PX", "3500000")),
             decode_host_ram_floor_bytes=int(os.environ.get("ARIES_DECODE_RAM_FLOOR_BYTES", "6442450944")),
             decode_max_concurrent_per_agent=int(os.environ.get("ARIES_DECODE_MAX_CONCURRENT", "1")),
+            max_reference_images=int(os.environ.get("ARIES_MAX_REFERENCE_IMAGES", "4")),
+            denoise_refs_limit_above=int(os.environ.get("ARIES_DENOISE_REFS_LIMIT_ABOVE", "2")),
+            ram_guard_floor_bytes=int(os.environ.get("ARIES_RAM_GUARD_FLOOR_BYTES", "4294967296")),
+            ram_guard_interval_s=float(os.environ.get("ARIES_RAM_GUARD_INTERVAL_S", "0.25")),
+            worker_oom_score_adj=int(os.environ.get("ARIES_WORKER_OOM_SCORE_ADJ", "1000")),
             enable_sleep_inhibitor=os.environ.get("ARIES_SLEEP_INHIBITOR", "1") != "0",
         )
 

@@ -49,6 +49,7 @@ Chat-shaped, newest at the bottom, composer docked below it.
 
 Each **turn** = one submission:
 - Prompt text, and the enhanced prompt (with the enhancer's reasoning, collapsed) when Enhance was on
+- The reference images, numbered as the prompt names them
 - Param chips: `16:9 · seed 48213 · 40 steps · 2m 31s`
 - 1–4 image tiles (one per job in the batch), sized to the aspect ratio
 - Pending tile: aspect-correct placeholder showing the job's phase (§7.1) — queued
@@ -65,7 +66,13 @@ Each **turn** = one submission:
   - **Seed**: Random (default) or Locked with a value; batches use seed, seed+1, …
   - **Quality**: Draft (12 steps) · Standard (20) · High (40); under Advanced: custom
     steps (1–100), fixed seed, VAE tiling, and rows of different settings sent together
-  - **Enhance** toggle: rewrite the prompt with the prompt enhancer before generating
+  - **Enhance** toggle: rewrite the prompt with the prompt enhancer before generating.
+    With reference images attached it uses the image-aware enhancer (Qwen-Image-2.1-PE-I2I),
+    which reads them; without one installed, Enhance is off while references are attached
+    (ENHANCER_I2I.md)
+- **Reference images**: up to 4 (the agent's limit) attached from files (picker, drop
+  anywhere, paste) or from earlier results ("Use as reference"), in order: the prompt
+  calls them "image 1", "image 2", … (REFERENCE_IMAGES.md)
 - Last-used settings (and the theme) are saved in Studio (`/api/preferences`), the same
   in every browser
 
@@ -85,7 +92,7 @@ Each **turn** = one submission:
     doubles as a reproducibility check. Original or enhanced prompt is chosen there
   - **Vary** — the same with a random seed. Neither submits by itself
   - **Favorite**, **Delete** (with confirm; removes files too)
-  - *Later:* **Use as reference** → edit mode (see §8)
+  - **Use as reference** — attaches the image to the composer as the next reference
 
 ### 2.5 Generator status pill (top bar)
 `Ready` · `Busy (n queued)` · `Error` · `Offline`. Click for the status panel: each
@@ -241,8 +248,8 @@ harness needed.
 
 ## 8. Later
 
-- **Edit / remix.** "Use as reference" puts up to 10 images into the composer;
-  submission goes to the same pipeline with `image=[...]`. Lineage via `parent_id`.
+- **More references.** Up to 10 (the model's limit) at a smaller reference resolution,
+  after a quality check (REFERENCE_IMAGES.md §8). Lineage via `parent_id`.
 - **Fast mode.** Turbo DiT/LoRA as a Quality preset, if a diffusers-format variant
   is available.
 - **Wake on submit.** If the GPU box is asleep, Studio asks aries-modeld to wake it.

@@ -55,6 +55,9 @@ export function sendSeeds(prefs: UserPreferences, random: () => number = Math.ra
  * for like: image k of every row gets seeds[k].
  */
 export function buildJobs(prefs: UserPreferences, seeds: number[]): JobParams[] {
+  // Advanced: a token limit for the rewriter, sent only for Enhance rows and when set (0: the
+  // worker's default, which grows with the reference images).
+  const tokens = prefs.advancedOpen ? prefs.enhanceMaxTokens || 0 : 0;
   return sendRows(prefs).flatMap((row) => {
     const { width, height } = calculateDimensions(row.aspect, row.sizeMultiplier);
     return seeds.map((seed) => ({
@@ -66,6 +69,7 @@ export function buildJobs(prefs: UserPreferences, seeds: number[]): JobParams[] 
       seed,
       quality: qualityForSteps(row.steps),
       enhance: row.enhance,
+      ...(row.enhance && tokens > 0 ? { enhanceMaxTokens: tokens } : {}),
       tiling: row.tiling,
     }));
   });
