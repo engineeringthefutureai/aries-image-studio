@@ -155,12 +155,15 @@ export interface JobParams {
   enhance?: boolean;
   /** The prompt rewriter's token limit (advanced; unset: the worker's default, 4096 + 2048 per reference image). */
   enhanceMaxTokens?: number;
+  /** The cloud enhancer that rewrites the prompt: its model id (`claude-sonnet-5-5`); unset: the built-in one. */
+  enhancer?: string;
   /** VAE tiling at decode (advanced; off by default). */
   tiling?: boolean;
 }
 
-/** Sub-stage of a running enhance job, as reported by the enhance worker. */
-export type EnhanceSubStage = 'prefill' | 'thinking' | 'rewriting';
+/** Sub-stage of a running enhance job, as reported by the enhance worker (or Studio, for a
+ * cloud enhancer: `waiting` for the provider's rate limit, then `rewriting`). */
+export type EnhanceSubStage = 'prefill' | 'thinking' | 'rewriting' | 'waiting';
 
 export interface EnhanceStats {
   prompt_tokens?: number;
@@ -223,7 +226,10 @@ export interface Generation {
   batchIndex?: number;
   prompt: string;
   enhancedPrompt?: string;
+  /** The enhancer's reasoning: only on a job fetched alone (lists leave it out, see hasThinking). */
   thinking?: string;
+  /** The job has enhancer reasoning (fetched on demand: utils/thinking.ts). */
+  hasThinking?: boolean;
   params: JobParams;
   status: JobStatus;
   phase?: JobPhase;
@@ -327,6 +333,17 @@ export interface StageCapability {
   reason?: string | null;
 }
 
+export interface CloudEnhancerInfo {
+  /** The model id; what a job names in `enhancer`. */
+  id: string;
+  /** `anthropic` | `google`. */
+  provider: string;
+  /** For people, e.g. "Claude Sonnet 5.5". */
+  label: string;
+  model: string;
+  max_references: number;
+}
+
 export interface CapabilitiesInfo {
   max_px_now: number;
   max_px_ever: number;
@@ -338,6 +355,8 @@ export interface CapabilitiesInfo {
   /** Most reference images Enhance reads (an image-aware enhancer); 0 or missing: Enhance is off with references. */
   enhance_max_references_now?: number;
   enhance_max_references_ever?: number;
+  /** Cloud prompt enhancers jobs may name (docs/CLOUD_ENHANCERS.md); empty unless Studio switched them on. */
+  cloud_enhancers?: CloudEnhancerInfo[];
   sizes: SizeCapability[];
   stages: StageCapability[];
 }
@@ -378,7 +397,9 @@ export interface V3JobRecord {
   status: string;
   prompt: string;
   enhanced_prompt?: string | null;
+  /** Left out of job lists (`has_thinking` says whether there is some). */
   thinking?: string | null;
+  has_thinking?: boolean;
   negative_prompt: string;
   /** UI metadata the SPA stored with the job (see services/api.ts JobMeta). */
   meta?: Record<string, unknown>;
@@ -390,6 +411,8 @@ export interface V3JobRecord {
   true_cfg_scale: number;
   enhance: boolean;
   enhance_max_tokens?: number | null;
+  /** The cloud enhancer that rewrites the prompt; unset: the built-in one. */
+  enhancer?: string | null;
   tiling?: boolean;
   wh_ratio?: string | null;
   /** The image enhancer's aspect answer: `<imageN>` keeps that reference's aspect (not used yet). */
@@ -435,6 +458,8 @@ export interface UserPreferences {
   tiling: boolean;
   /** Advanced: the prompt rewriter's token limit for Enhance rows. */
   enhanceMaxTokens: number;
+  /** Who rewrites the prompt: `builtin`, or a cloud enhancer's id when Studio offers it. */
+  enhancer: string;
   /** Rows after the first (the first row is the main settings above). */
   extraRows: ComposerRow[];
 }

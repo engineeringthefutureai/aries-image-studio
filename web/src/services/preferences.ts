@@ -14,5 +14,6 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   advancedOpen: false,
   tiling: false,
   enhanceMaxTokens: 0, // 0: the default for the send
+  enhancer: 'builtin',
   extraRows: [],
 };

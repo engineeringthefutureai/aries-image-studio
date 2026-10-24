@@ -1,6 +1,6 @@
 # Image-aware prompt enhancer (PE-I2I) — design and build plan
 
-Status: **implemented** for 0.4 (§4 is the build plan it followed), measured on the
+Status: **shipped in 0.4.0** (§4 is the build plan it followed), measured on the
 hardware (§2). Builds on
 [REFERENCE_IMAGES.md](REFERENCE_IMAGES.md) (references, `ref<i>.image` inputs) and the
 enhance stage of [ARCHITECTURE_V3.md](ARCHITECTURE_V3.md) §3.1.

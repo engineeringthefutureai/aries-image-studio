@@ -5,6 +5,8 @@ import { groupTurns } from '../utils/turns';
 import { Logo } from './Logo';
 import { BatchCarousel } from './BatchCarousel';
 import { PageLoader } from './PageLoader';
+import { ReasoningText } from './ReasoningText';
+import { LoadMore } from './LoadMore';
 import { formatDuration, generationSeconds, queueSeconds } from '../utils/timings';
 import { ReferenceStrip } from './ReferenceStrip';
 import {
@@ -74,7 +76,8 @@ interface TimelineProps {
   /** Fill the composer from an image with a new (random) seed. */
   onVary: (generation: Generation) => void;
   /** Retry a failed or cancelled job in place. */
-  onRetry: (generation: Generation) => void;
+  /** `enhancer`: retry with another one (`builtin` after a cloud enhancer failed). */
+  onRetry: (generation: Generation, enhancer?: string) => void;
   /** Fill the composer from an image with its seed locked. */
   onRerun: (generation: Generation) => void;
   onCancel: (id: string) => void;
@@ -85,7 +88,13 @@ interface TimelineProps {
   onUseAsReference?: (generation: Generation) => void;
   /** Studio's first job list has not arrived yet: show a loader, not the starter. */
   loading?: boolean;
+  /** Older turns to load as the list scrolls (infinite scroll). */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
+
+const noop = () => {};
 
 export const Timeline: React.FC<TimelineProps> = ({
   generations,
@@ -100,6 +109,9 @@ export const Timeline: React.FC<TimelineProps> = ({
   onDeleteTurn,
   onUseAsReference,
   loading = false,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore = noop,
 }) => {
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [expandedPrompt, setExpandedPrompt] = useState<Record<string, boolean>>({});
@@ -287,7 +299,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     onOpenLightbox={() => onOpenLightbox(gen)}
                     onToggleFavorite={() => onToggleFavorite(gen.id)}
                     onVary={() => onVary(gen)}
-                    onRetry={() => onRetry(gen)}
+                    onRetry={(enhancer) => onRetry(gen, enhancer)}
                     onCancel={() => onCancel(gen.id)}
                     onDelete={onDelete ? () => onDelete(gen.id) : undefined}
                   />
@@ -437,7 +449,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                             <Copy className="w-3 h-3" />
                           )}
                         </button>
-                        {selectedGen.thinking && (
+                        {selectedGen.hasThinking && (
                           <button
                             onClick={() =>
                               setExpandedThinking((prev) => ({
@@ -468,7 +480,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     </p>
 
                     {/* Thinking Block */}
-                    {isThinkingOpen && selectedGen.thinking && (
+                    {isThinkingOpen && selectedGen.hasThinking && (
                       <div className="mt-2 p-3 rounded-lg bg-[#f1eee7] dark:bg-[#232320] text-xs font-mono text-[#58423a] dark:text-[#a09088] space-y-1.5 border border-[#e5e2db]/50 dark:border-[#2e2e2a] max-h-40 overflow-y-auto">
                         <div className="flex items-center justify-between text-[11px] font-sans font-semibold text-[#8c7169] uppercase tracking-wider">
                           <span>Internal Reasoning Plan:</span>
@@ -479,7 +491,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="whitespace-pre-wrap leading-relaxed">{selectedGen.thinking}</div>
+                        <ReasoningText generation={selectedGen} className="whitespace-pre-wrap leading-relaxed" />
                       </div>
                     )}
                   </div>
@@ -555,7 +567,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     <button
                       onClick={() => onOpenLightbox(selectedGen)}
                       className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169] transition-colors"
-                      title="Inspect in Lightbox"
+                      title="Open in the viewer"
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
@@ -574,6 +586,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           </article>
         );
       })}
+      <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} />
     </div>
   );
 };
@@ -585,7 +598,7 @@ interface TileCardProps {
   onOpenLightbox: () => void;
   onToggleFavorite: () => void;
   onVary: () => void;
-  onRetry: () => void;
+  onRetry: (enhancer?: string) => void;
   onCancel: () => void;
   onDelete?: () => void;
 }
@@ -714,7 +727,7 @@ const TileCard: React.FC<TileCardProps> = ({
                   onOpenLightbox();
                 }}
                 className="w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110"
-                title="Inspect in lightbox"
+                title="Open in the viewer"
               >
                 <Maximize2 className="w-4 h-4" />
               </button>
@@ -741,12 +754,19 @@ const TileCard: React.FC<TileCardProps> = ({
     // it the bar turns indeterminate ("almost done") until the run ends, at the limit
     // at the latest.
     const enhanceLabel =
-      gen.subStage === 'rewriting' ? 'rewriting prompt' : gen.subStage === 'thinking' ? 'thinking' : 'reading prompt';
+      gen.subStage === 'waiting'
+        ? 'waiting for the enhancer'
+        : gen.subStage === 'rewriting'
+          ? 'rewriting prompt'
+          : gen.subStage === 'thinking'
+            ? 'thinking'
+            : 'reading prompt';
     const enhanceTokens = gen.enhanceStats?.generated_tokens || 0;
     const enhanceLimit = gen.enhanceStats?.max_new_tokens || DEFAULT_ENHANCE_TOKEN_LIMIT;
     const enhanceTps = gen.enhanceStats?.generation_tps || 0;
     const enhanceExpected = enhanceLimit * ENHANCE_EXPECTED_SHARE;
-    const enhanceAlmostDone = enhanceTokens >= enhanceExpected;
+    // A cloud enhancer reports no tokens while it writes: an indeterminate bar.
+    const enhanceAlmostDone = !!gen.params.enhancer || enhanceTokens >= enhanceExpected;
     const enhancePct = Math.min(99, Math.round((enhanceTokens / enhanceExpected) * 100));
     const enhanceEta = enhanceTps > 0 && !enhanceAlmostDone ? (enhanceExpected - enhanceTokens) / enhanceTps : null;
 
@@ -1004,6 +1024,19 @@ const TileCard: React.FC<TileCardProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Retry</span>
             </button>
+            {/* A cloud enhancer failed (or is gone): the built-in one may do. */}
+            {gen.params.enhancer && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetry('builtin');
+                }}
+                className="inline-flex items-center whitespace-nowrap gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#f1eee7] dark:bg-[#2c2c28] hover:bg-[#e5e2db] dark:hover:bg-[#363632] text-[#1c1c18] dark:text-[#f3f0e9] transition-colors"
+                title="Retry with the built-in enhancer instead of the cloud one"
+              >
+                <span>Built-in</span>
+              </button>
+            )}
             {onDelete && (
               <button
                 onClick={(e) => {

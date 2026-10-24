@@ -523,7 +523,7 @@ class EnhanceStageRunner:
         if streamer.generated_tokens >= limit:
             logger.info("Enhancer output for %s hit max_new_tokens=%d; keeping it as is", job_id, limit)
 
-        generated_ids = [out_ids[len(in_ids):] for in_ids, out_ids in zip(input_ids, outputs)]
+        generated_ids = [out_ids[len(in_ids):] for in_ids, out_ids in zip(input_ids, outputs, strict=False)]
         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
         parsed = _parse_enhanced_json(response, prompt)
         enhanced = {

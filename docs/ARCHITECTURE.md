@@ -1,6 +1,11 @@
 # Aries Image Studio — Architecture: asynchronous, staged execution
 
-How the backend runs the pipeline. This is the source of truth for the manager, the
+> **Superseded.** Since 0.3.0 the manager is gone: Studio (Rust) schedules and thin agents
+> run the stage workers, as described in [ARCHITECTURE_V3.md](ARCHITECTURE_V3.md). This
+> document is kept as the record of the 0.2 design; the stage workers and the hardware
+> reasoning behind them still apply.
+
+How the 0.2 backend ran the pipeline. It was the source of truth for the manager, the
 stage workers, their protocol, queue and failure semantics, and telemetry. SPEC.md
 covers the product and the browser-facing API; HARDWARE.md covers the measurements
 behind the decisions here.

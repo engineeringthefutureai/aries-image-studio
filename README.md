@@ -6,10 +6,10 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) on a home server with
 two Intel Arc Pro B60 GPUs. Single user, LAN only.
 
-**Version 0.4.0.** A Rust Studio server owns jobs, history and images, and a thin
+**Version 0.5.0.** A Rust Studio server owns jobs, history and images, and a thin
 agent on the GPU host runs the pipeline. It works end to end on the hardware it was
 built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+Release notes: [0.5.0](docs/releases/v0.5.0.md) · [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
 [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
@@ -23,16 +23,19 @@ Release notes: [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.
 - **Composer**: folds to a one-line pill until opened. 7 aspect ratios at ~2K, ½ and ¼
   size presets, 1–4 images, Draft / Standard / High, optional **prompt enhancement**
   with the official Qwen-Image-2.1-PE-T2I rewriter (its reasoning is kept and viewable;
-  bf16 or a torchao int4 copy). **Advanced**: custom steps, fixed seed, VAE tiling, and
+  bf16 or a torchao int4 copy), or optionally a cloud model (Claude Sonnet 5.5, Gemini
+  3.5 Flash-Lite) when Studio has an API key: seconds instead of minutes, no card used.
+  **Advanced**: custom steps, fixed seed, VAE tiling, and
   rows of different settings sent together for side-by-side comparison.
 - **Reference images**: attach up to 4 images (pick, drop, paste, or "Use as reference" on
   any result) and refer to them as "image 1", "image 2" in the prompt to edit or combine
   them. Each reference is VAE-encoded once and stored, so later generations reuse it.
   Enhance works with references too when the image-aware Qwen-Image-2.1-PE-I2I enhancer is
   installed: it reads the images and writes a precise edit prompt.
-- **Gallery and viewer**: favorites, search, zoom to actual pixels with pan and a
-  navigator, Rerun / Vary into the composer, download.
-- **Status panel**: each GPU's state, current stage and VRAM; queue depth per stage;
+- **Gallery and viewer**: favorites, search and filters over the whole history, zoom to
+  actual pixels with pan and a navigator, Rerun / Vary into the composer, download. Every
+  page has its own URL, and long lists load as they scroll.
+- **Status page**: each GPU's state, current stage and VRAM; queue depth per stage;
   host RAM.
 - **Crash-tolerant backend**: each pipeline stage runs in its own process on one card,
   with intermediate results on disk. A GPU fault costs one stage, which is retried
@@ -138,14 +141,20 @@ reference/       Batch scripts that validated the pipeline on the hardware
 | [docs/SPEC.md](docs/SPEC.md) | Product, UX, data model |
 | [docs/SPEC_UI.md](docs/SPEC_UI.md) | UI behavior: states, interactions, keyboard, accessibility |
 | [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | Studio, agents, protocol, scheduling, failures, API |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The 0.2 manager design |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The 0.2 manager design (superseded) |
 | [docs/HARDWARE.md](docs/HARDWARE.md) | Measurements, setup and failure modes on Intel Arc |
+| [docs/OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md) | Memory and performance work, with measurements |
+| [docs/REFERENCE_IMAGES.md](docs/REFERENCE_IMAGES.md) | Reference images: design and measurements |
+| [docs/ENHANCER_I2I.md](docs/ENHANCER_I2I.md) | The image-aware prompt enhancer (PE-I2I) |
+| [CHANGELOG.md](CHANGELOG.md) | Every change, by release |
 | [docs/releases/](docs/releases/) | Release notes |
 
 ## Limitations
 
 - **No user authentication.** Anyone who can reach Studio's port can use it; keep it on
   a trusted network. Agents authenticate with a shared token.
+- **Cloud enhancers send data out.** Off by default; switched on, the prompt and any
+  reference images of a job that picks one go to that provider, under its terms.
 - Built and tested only on Intel Arc (XPU). Other accelerators would need changes in
   the stage workers.
 
@@ -153,7 +162,7 @@ reference/       Batch scripts that validated the pipeline on the hardware
 
 - Prometheus alert rules and a Grafana dashboard.
 - Wake-on-submit and lending cards to other GPU workloads.
-- Edit with reference images, fast mode, live preview (docs/SPEC.md §8).
+- Fast mode and live preview (docs/SPEC.md §8).
 
 ## License
 

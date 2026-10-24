@@ -5,7 +5,10 @@ building, deploying and configuring in **docs/BUILD_AND_RUN.md**;
 Architecture V3 (one Rust backend, thin GPU agents, protobuf contract, capability matching,
 live resource scraping, provenance) lives in **docs/ARCHITECTURE_V3.md** (earlier v0.2
 design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HARDWARE.md**
-(memory and performance work so far summarized in **docs/OPTIMIZATIONS.md**).
+(memory and performance work so far summarized in **docs/OPTIMIZATIONS.md**); reference
+images in **docs/REFERENCE_IMAGES.md**, the image-aware enhancer in **docs/ENHANCER_I2I.md**,
+cloud prompt enhancers (Studio calls Anthropic / Gemini itself) in **docs/CLOUD_ENHANCERS.md**;
+changes by release in **CHANGELOG.md**.
 Treat them as the source of truth and flag disagreements instead of silently
 diverging. When behavior changes, update the doc in the same change.
 
@@ -13,7 +16,7 @@ diverging. When behavior changes, update the doc in the same change.
 
 ```
 proto/aries/agent/v1/    Single source of truth for the AgentGateway gRPC protocol
-                         (agent.proto, buf.yaml, buf.gen.yaml).
+                         (agent.proto; artifacts.json names the stage artifacts).
 studio/                  Rust backend (axum, tonic, tokio, sqlx/SQLite WAL): SPA + public
                          /api/* + artifact HTTP + AgentGateway gRPC server + capability
                          matcher + scheduler + live /metrics scraper + blob store + JPEG
@@ -31,10 +34,10 @@ deploy/aries/            Systemd unit for aries-agent + Docker Compose / Makefil
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.4.0 — Architecture V3)
+## Current state (v0.5.0 — Architecture V3)
 
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
-  `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/uploads` (reference images),
+  `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/gallery/facets`, `/api/uploads` (reference images),
   `/api/system`, `/api/capabilities`,
   `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`), runs the gRPC
   `AgentGateway` server, scrapes each online agent's `/metrics` every 1 s, and owns
@@ -56,7 +59,8 @@ docs/  mockups/  reference/
   `ppa:kobuk-team/intel-graphics` (`libze1 libze-intel-gpu1 intel-opencl-icd`),
   `/dev/dri` passed through, host `render`/`video` GIDs via `group_add`.
 - **web:** React + TypeScript + Tailwind; no browser storage: jobs, images, favorites and
-  preferences come from Studio. Polls `/api/jobs?changed_since=`,
+  preferences come from Studio. One URL per page (`web/src/utils/router.ts`; pages never
+  stack as overlays), lists paged from `/api/jobs?limit=&before=`. Polls `/api/jobs?changed_since=`,
   `/api/system`, and `/api/capabilities`.
 
 ## Hard-won facts about this hardware (do not rediscover)
@@ -109,6 +113,6 @@ Full detail in docs/HARDWARE.md.
   backend's validation, and the contract tests on both sides.
 - No default secrets: `ARIES_AGENT_TOKEN` is required on both sides; `.env` is git-ignored.
 - Checks before committing:
-  - `cd studio && cargo test`
-  - `cd backend && pytest`
+  - `cd studio && cargo fmt --check && cargo clippy --all-targets && cargo test`
+  - `cd backend && ruff check && pytest`
   - `cd web && npm run build && npm run lint`

@@ -191,16 +191,27 @@ impl BackendMetricsRegistry {
 
         out.push_str("# HELP aries_jobs_total Total jobs by status\n");
         out.push_str("# TYPE aries_jobs_total gauge\n");
-        for status in ["submitted", "running", "done", "failed", "cancelled", "rejected"] {
+        for status in [
+            "submitted",
+            "running",
+            "done",
+            "failed",
+            "cancelled",
+            "rejected",
+        ] {
             let count = snap.jobs_by_status.get(status).copied().unwrap_or(0);
-            out.push_str(&format!("aries_jobs_total{{status=\"{status}\"}} {count}\n"));
+            out.push_str(&format!(
+                "aries_jobs_total{{status=\"{status}\"}} {count}\n"
+            ));
         }
 
         out.push_str("# HELP aries_tasks_queued Number of queued tasks per stage\n");
         out.push_str("# TYPE aries_tasks_queued gauge\n");
         for stage in ["enhance", "encode", "denoise", "decode"] {
             let count = snap.tasks_queued_by_stage.get(stage).copied().unwrap_or(0);
-            out.push_str(&format!("aries_tasks_queued{{stage=\"{stage}\"}} {count}\n"));
+            out.push_str(&format!(
+                "aries_tasks_queued{{stage=\"{stage}\"}} {count}\n"
+            ));
         }
 
         out.push_str("# HELP aries_tasks_blocked Number of blocked tasks by stage and reason\n");
@@ -216,10 +227,14 @@ impl BackendMetricsRegistry {
         out.push_str("# TYPE aries_agent_connected gauge\n");
         for (agent, connected) in &snap.agents_connected {
             let val = if *connected { 1 } else { 0 };
-            out.push_str(&format!("aries_agent_connected{{agent=\"{agent}\"}} {val}\n"));
+            out.push_str(&format!(
+                "aries_agent_connected{{agent=\"{agent}\"}} {val}\n"
+            ));
         }
 
-        out.push_str("# HELP aries_agent_scrape_age_seconds Seconds since last successful /metrics scrape\n");
+        out.push_str(
+            "# HELP aries_agent_scrape_age_seconds Seconds since last successful /metrics scrape\n",
+        );
         out.push_str("# TYPE aries_agent_scrape_age_seconds gauge\n");
         for (agent, age) in &snap.agent_scrape_age {
             out.push_str(&format!(
@@ -318,7 +333,11 @@ pub fn reexport_agent_metrics(scrapes: &[(&str, &str)]) -> String {
             }
             let labelled = match line.find('{') {
                 Some(i) if line[i + 1..].starts_with('}') => {
-                    format!("{}{{agent=\"{agent_label}\"}}{}", &line[..i], &line[i + 2..])
+                    format!(
+                        "{}{{agent=\"{agent_label}\"}}{}",
+                        &line[..i],
+                        &line[i + 2..]
+                    )
                 }
                 Some(i) => format!("{}{{agent=\"{agent_label}\",{}", &line[..i], &line[i + 1..]),
                 None => match line.find(' ') {

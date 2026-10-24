@@ -9,21 +9,20 @@ Own design; don't copy any product's layout or branding.
 
 **Non-goals:** workflow editing, multi-user accounts, LLM conversation, training.
 
-This document covers the product, UX, data model and the browser-facing API.
-How the backend executes jobs — stages, the worker protocol, queue and failure
-semantics, backend telemetry — is in **ARCHITECTURE.md**. UI behavior in detail is in
-**SPEC_UI.md**.
+This document covers the product and UX. How Studio runs jobs — stages, agents, the
+protocol, scheduling, failure handling, telemetry — and the browser-facing API are in
+**ARCHITECTURE_V3.md**. UI behavior in detail is in **SPEC_UI.md**.
 
 ---
 
 ## 1. Architecture
 
 ```
-Browser ──HTTPS──▶ Studio (always on)  ──HTTP──▶  Manager (GPU box, 2× B60)
-                   ├─ static SPA                  ├─ queue + state machine (SQLite)
-                   ├─ REST API (§4)               ├─ card scheduler
-                   ├─ history (SQLite)            └─ spawns one stage worker per card
-                   └─ images + thumbnails
+Browser ──HTTP──▶ Studio (Rust, always on)  ◀──gRPC──  Agent (GPU box, 2× B60)
+                  ├─ web app + /api (§4)               ├─ one stage worker per card
+                  ├─ jobs, queue, scheduler            ├─ /metrics, scraped by Studio
+                  └─ history (SQLite), images,         └─ stores nothing, decides nothing
+                     thumbnails (blob store)
 ```
 
 **History lives in Studio, off the GPU box.** Reasons:
@@ -31,32 +30,31 @@ Browser ──HTTPS──▶ Studio (always on)  ──HTTP──▶  Manager (G
   and metadata must stay browsable while it sleeps.
 - The GPU stack *will* crash (xe GPU faults happen). A crash must cost at most the
   stage in flight, never history.
-- Control plane in the cluster, GPU box as a replaceable agent.
+- Control plane on an always-on host, GPU box as a replaceable agent.
 
-**Status (v0.3.0):** Studio exists as the Rust backend in `studio/` (ARCHITECTURE_V3.md):
-it owns jobs, images and provenance in SQLite, and GPU boxes run a thin agent instead of
-the manager. The SPA talks to its `/api` (ARCHITECTURE_V3.md §8), which is job-oriented
-rather than the generation/gallery API sketched in §4. The SPA keeps nothing in browser
-storage: jobs, images, favorites, turn grouping and preferences all load from Studio, so
-every browser shows the same history.
+**Status (0.5.0):** Studio is the Rust backend in `studio/` (ARCHITECTURE_V3.md): it owns
+jobs, images and provenance in SQLite and a blob store, and each GPU box runs a thin agent.
+The web app keeps nothing in browser storage: jobs, images, favorites, turn grouping and
+preferences all load from Studio, so every browser shows the same history.
 
 ---
 
 ## 2. UX
 
 ### 2.1 Timeline (default view)
-Chat-shaped, newest at the bottom, composer docked below it.
+Chat-shaped, newest turn on top, older ones loading as the page scrolls; the composer is
+docked at the bottom.
 
 Each **turn** = one submission:
 - Prompt text, and the enhanced prompt (with the enhancer's reasoning, collapsed) when Enhance was on
 - The reference images, numbered as the prompt names them
-- Param chips: `16:9 · seed 48213 · 40 steps · 2m 31s`
+- Param chips: `16:9 · seed 48213 · 20 steps · 1m 12s`
 - 1–4 image tiles (one per job in the batch), sized to the aspect ratio
 - Pending tile: aspect-correct placeholder showing the job's phase (§7.1) — queued
   (and for which stage), enhancing, reading prompt, drawing with percent and ETA,
   finishing — and cancel
-- Failed tile: short error, "Retry" (new job, same params)
-- Lineage marker when created via Vary/Reuse: `↳ from #id`
+- Failed or cancelled tile: short error, "Retry" (the same job again, from its last good
+  stage)
 
 ### 2.2 Composer
 - Multiline prompt. Enter = generate, Shift+Enter = newline
@@ -69,7 +67,10 @@ Each **turn** = one submission:
   - **Enhance** toggle: rewrite the prompt with the prompt enhancer before generating.
     With reference images attached it uses the image-aware enhancer (Qwen-Image-2.1-PE-I2I),
     which reads them; without one installed, Enhance is off while references are attached
-    (ENHANCER_I2I.md)
+    (ENHANCER_I2I.md). When Studio offers cloud enhancers (off by default), a picker next
+    to it chooses Built-in (the default, the only one that works offline), Claude Sonnet
+    5.5 or Gemini 3.5 Flash-Lite: seconds instead of minutes, no card used, and the prompt and
+    references go to the provider (CLOUD_ENHANCERS.md)
 - **Reference images**: up to 4 (the agent's limit) attached from files (picker, drop
   anywhere, paste) or from earlier results ("Use as reference"), in order: the prompt
   calls them "image 1", "image 2", … (REFERENCE_IMAGES.md)
@@ -79,12 +80,13 @@ Each **turn** = one submission:
 ### 2.3 Gallery
 - Masonry grid of all finished images, newest first, infinite scroll (thumbnails)
 - Filters: Favorites, aspect, text search over prompts
-- Click → lightbox
+- Click → image viewer
 
-### 2.4 Lightbox (shared by timeline and gallery)
+### 2.4 Image viewer (shared by timeline and gallery; a page at `/images/{id}`)
 - Full-resolution image, fit / 1:1 zoom, ←/→ to move through the current list
-- Metadata panel: prompt, enhanced prompt, seed, size, steps, model, precision,
-  timings (queue wait, total, s/step), device, software versions
+- Metadata panel: prompt, enhanced prompt, seed, size, steps, per-stage timings with
+  the card and model (id and revision) of each, queue & model loading, total, peak
+  memory. Precision and software versions stay in the stored provenance and the PNG
 - Actions:
   - **Download** (PNG with embedded metadata)
   - **Copy prompt** / **Copy seed**
@@ -95,14 +97,15 @@ Each **turn** = one submission:
   - **Use as reference** — attaches the image to the composer as the next reference
 
 ### 2.5 Generator status pill (top bar)
-`Ready` · `Busy (n queued)` · `Error` · `Offline`. Click for the status panel: each
-card's state and current stage, VRAM per card, queue depth per stage, host RAM, and
-recent worker runs. Jobs submitted while the generator is offline stay queued once
-Studio exists (§1); until then the browser must reach the manager to submit.
+`Ready` · `Busy (…)` · `Error` · `Offline`. Click for the status page (`/status`): each
+card's state and current stage, memory per card, host RAM, the queue per stage with the
+reason anything waits, and lend / return / disable / enable per card. Jobs submitted while
+the GPU box is offline stay queued in Studio and run when its agent connects; a job no
+known card can ever run is rejected at submit.
 
 ### 2.6 Keyboard
-`/` focus composer · `t` timeline · `g` gallery · `←/→` lightbox nav · `f` favorite ·
-`?` shortcuts · `Esc` close.
+`/` focus composer · `t` timeline · `g` gallery · `←/→` viewer nav · `f` favorite ·
+`?` shortcuts · `Esc` leave the viewer or the system view.
 
 ### 2.7 Visual direction
 Images are the content; chrome recedes. Neutral palette with one accent, **light
@@ -112,57 +115,30 @@ progress value exists.
 
 ---
 
-## 3. Data model (Studio, SQLite; planned)
+## 3. Data model
 
-```
-generation
-  id            TEXT PK   (ULID)
-  batch_id      TEXT      (ULID; one per submission/turn)
-  parent_id     TEXT NULL (source generation for Vary/Reuse/Rerun)
-  created_at    INTEGER   (unix ms)
-  status        TEXT      queued | running | done | failed | cancelled
-  prompt        TEXT
-  enhanced_prompt TEXT NULL
-  params        JSON      {width, height, steps, seed, aspect, quality}
-  model         JSON NULL {id, precision}                       -- reported by the manager
-  env           JSON NULL {devices, torch, diffusers}           -- reported by the manager
-  timings       JSON NULL {enhance_s, encode_s, denoise_s, decode_s, total_s,
-                           s_per_step, token stats, peak_vram}  -- §7.4
-  error         TEXT NULL
-  attempts      INTEGER   default 0
-  favorite      INTEGER   default 0
-  image_path    TEXT NULL   -- relative to /data/images
-  thumb_path    TEXT NULL   -- 512px WebP
-```
+Studio's SQLite database (ARCHITECTURE_V3.md §3): a **job** per image, with its prompt,
+enhanced prompt and the enhancer's reasoning, size, steps, seed, options, reference
+images, favorite flag and the UI's own metadata (turn id, aspect label, size and quality
+preset); a **task** per stage; an **attempt** per try, with its provenance (agent, card,
+model, revision, precision, software versions, timings, peak memory) and, for a failure,
+its crash class. Files live in a content-addressed blob store; each finished image has
+JPEG thumbnails at 512, 768 and 1024 px.
 
 Seed is **always stored as a concrete number**, even when the user chose Random.
 
-Every PNG carries a `tEXt` chunk `aries-image-studio` with the full JSON record, so files
-are self-describing outside the app (written by Studio).
-
-The SPA stores no records itself: each job carries its UI metadata (turn id, aspect
-label, size and quality preset) and favorite flag in Studio.
+Every PNG carries a `tEXt` chunk `aries-image-studio` with the job's JSON record, so files
+are self-describing outside the app (written by Studio). `tEXt` is Latin-1, so the JSON is
+plain ASCII: other characters (a Chinese prompt, emoji) are `\uXXXX` escapes.
 
 ---
 
-## 4. Studio API (browser-facing, `/api`; planned)
+## 4. Studio API (browser-facing)
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/generations` | Submit `{prompt, aspect, count, seed?, steps, enhance}` → `{batch_id, ids[]}` |
-| GET | `/api/generations?before=<id>&limit=50` | Timeline page (grouped client-side by `batch_id`) |
-| GET | `/api/generations/{id}` | One record |
-| PATCH | `/api/generations/{id}` | `{favorite}` |
-| DELETE | `/api/generations/{id}` | Delete record + files |
-| POST | `/api/generations/{id}/cancel` | Cancel queued or running |
-| GET | `/api/gallery?cursor=&favorites=&aspect=&q=` | Done images only |
-| GET | `/api/jobs` | Active and pending jobs with stage, progress and ETA; polled by the browser (ARCHITECTURE.md §7) |
-| GET | `/api/status` | Generator status snapshot for the status panel |
-| GET | `/metrics` | Prometheus (§7.2) |
-| GET | `/images/{id}.png`, `/thumbs/{id}.webp` | Files (long cache headers) |
-
-The API the SPA uses today is the job API in ARCHITECTURE_V3.md §8; the table above is the
-fuller history API still planned on top of it.
+The job API in ARCHITECTURE_V3.md §8: submit and page jobs (`/api/jobs`, filters for the
+gallery), poll changes (`?changed_since=`), images and thumbnails, reference uploads,
+preferences, system state and capabilities, operator controls, and `/metrics`. A batch of
+N images is N jobs sharing a turn id in their `meta`.
 
 ---
 
@@ -175,7 +151,7 @@ fuller history API still planned on top of it.
 | 3:2 / 2:3 | 2528 × 1696 / 1696 × 2528 |
 | 16:9 / 9:16 | 2752 × 1536 / 1536 × 2752 |
 
-Default steps 40. The composer also offers ½ and ¼ size presets (each side scaled and
+Default steps 20 (Standard). The composer also offers ½ and ¼ size presets (each side scaled and
 rounded to a multiple of 32, which Qwen-Image-2.1 requires; Studio rejects other sizes at
 submit). No free-form sizes.
 
@@ -183,10 +159,10 @@ submit). No free-form sizes.
 
 ## 6. Queue & failure semantics
 
-See ARCHITECTURE.md §3 (state machine) and §8 (failure handling). In short: a batch
+See ARCHITECTURE_V3.md §4 (state machine) and §7.3 (disconnects). In short: a batch
 of N is N jobs; each stage that fails is retried once, then the job fails with the
 stage and crash class recorded, so a poison prompt cannot crash-loop the GPU box.
-Cancel takes effect immediately for queued jobs and at the next step for running ones.
+Cancel takes effect immediately for queued jobs; a running stage's worker is stopped.
 
 ---
 
@@ -198,9 +174,9 @@ Two consumers, one source of truth:
 - **Prometheus/Grafana** needs history and alerts: is step time drifting, how often
   do workers die, how long do model loads take, where does VRAM go.
 
-The **manager measures** (ARCHITECTURE.md §9). **Hardware** (temperature, fan, card
-power, wall watts) stays with host exporters; the manager only reports each card's
-PCI address so dashboards can join the two.
+The **agent measures** and Studio collects (ARCHITECTURE_V3.md §9). **Hardware**
+(temperature, fan, card power, wall watts) stays with host exporters; the agent only
+reports each card's PCI address so dashboards can join the two.
 
 ### 7.1 Job phases
 
@@ -208,12 +184,12 @@ PCI address so dashboards can join the two.
 queued → [enhancing] → encoding → denoising (step n/N) → decoding → done | failed | cancelled
 ```
 
-- Each phase is a stage of ARCHITECTURE.md §2; between stages a job is queued for the
-  next one.
+- Each phase is a stage (ARCHITECTURE_V3.md §3.1); between stages a job is queued for
+  the next one.
 - `enhancing` (when the prompt enhancer is on) reports sub-stages: reading the prompt
   (prefill), thinking, rewriting.
 - `decoding` is the VAE, ~5 s at 2K. The UI shows **"Finishing"** there instead of
-  sitting at 40/40.
+  sitting at the last step.
 - The phase a failure happened in is the single most useful diagnostic: every GPU
   failure seen during bring-up was in decode (HARDWARE.md §2).
 
@@ -231,16 +207,14 @@ reporting it down, so rules over agent metrics simply stop matching.
 
 - An executor disabled for > 5 min (needs the executor-state gauge above).
 - `aries_worker_exits_total{class!="clean"}` increased — with stage and crash class.
-- Denoise s/step p50 > 1.5× its 7-day median, sustained 15 min (throttling, fan
-  problem, driver regression).
 - `aries_tasks_queued` > 0 while `aries_agent_connected` is 0 for > 30 min — work is
   stranded.
 - `aries_host_ram_available_bytes` < 4 GiB (swap is off; the OOM killer is next).
 
 ### 7.4 Per-generation record
 
-Each generation keeps its own telemetry (§3 `timings`, `model`, `env`): per-stage
-times, total, s/step, enhancer token stats, peak VRAM, decode mode. This is what the viewer's details panel shows, and what
+Each job keeps its own telemetry (its attempts' provenance, §3): per-stage times,
+total, s/step, enhancer token stats, peak memory, decode mode. This is what the viewer's details panel shows, and what
 quantization or decode-mode comparisons are read from — no separate benchmark
 harness needed.
 
@@ -248,10 +222,15 @@ harness needed.
 
 ## 8. Later
 
-- **More references.** Up to 10 (the model's limit) at a smaller reference resolution,
-  after a quality check (REFERENCE_IMAGES.md §8). Lineage via `parent_id`.
+- **Lineage.** Which image a Rerun or Vary came from: "↳ variation of …" on the turn,
+  linking back to the source (SPEC_UI §4.1).
 - **Fast mode.** Turbo DiT/LoRA as a Quality preset, if a diffusers-format variant
   is available.
-- **Wake on submit.** If the GPU box is asleep, Studio asks aries-modeld to wake it.
+- **Wake on submit.** If the GPU box is asleep, Studio wakes it (Wake-on-LAN or a small
+  helper on the box).
 - **Live preview.** Cheap latent→RGB approximation per step instead of a progress
-  ring (full VAE decode per step is far too expensive at 2048²).
+  ring (full VAE decode per step is far too expensive at 2048²). It need not slow
+  generation: the denoised estimate and a fixed 64→3 colour projection on the 1/16-size
+  latent take milliseconds against seconds per step. It needs that projection fitted
+  for this VAE and a way to send a small frame every few steps through the agent to the
+  browser.

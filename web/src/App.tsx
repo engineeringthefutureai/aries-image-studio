@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import type {
   Generation,
   JobParams,
@@ -15,15 +15,30 @@ import {
   fetchWorkerHealth,
   fetchCapabilitiesApi,
   submitBatchJobsApi,
-  fetchJobsApi,
+  fetchJobChangesApi,
+  fetchJobApi,
+  fetchGalleryFacetsApi,
   cancelJobApi,
   retryJobApi,
   deleteJobApi,
   setFavoriteApi,
   fetchPreferencesApi,
   savePreferencesApi,
+  type GalleryFacets,
+  type JobQuery,
   type JobSubmission,
 } from './services/api';
+import { usePagedJobs } from './hooks/usePagedJobs';
+import {
+  useRoute,
+  navigate,
+  leavePage,
+  restoreScroll,
+  viewerFrom,
+  galleryHref,
+  imageHref,
+  type GalleryFilters,
+} from './utils/router';
 import { sanitizeEnhancedPrompt } from './utils/prompt';
 import { fromGeneration, fromJobReference, referencePayload, releasePreview } from './utils/references';
 import { generateUlid } from './utils/ulid';
@@ -33,28 +48,63 @@ import { groupTurns } from './utils/turns';
 import { Composer } from './components/Composer';
 import { Timeline } from './components/Timeline';
 import { Gallery } from './components/Gallery';
-import { Lightbox } from './components/Lightbox';
-import { StatusModal } from './components/StatusModal';
+import { Viewer } from './components/Viewer';
+import { StatusPage } from './components/StatusPage';
+import { PageLoader } from './components/PageLoader';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { ConfirmDialog, type ConfirmRequest } from './components/ConfirmDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-const newestFirst = (a: Generation, b: Generation) => b.createdAt - a.createdAt;
+/** The timeline lists every job. */
+const TIMELINE_QUERY: JobQuery = {};
+const NO_FILTERS: GalleryFilters = { favorites: false, aspect: '', q: '' };
+
+/** The gallery's Studio query: an aspect label stands for its preset's exact size ratio. */
+function galleryQuery(f: GalleryFilters): JobQuery {
+  const preset = ASPECT_RATIOS[f.aspect as AspectRatio];
+  const ratio = preset ? `${preset.width}:${preset.height}` : f.aspect || undefined;
+  return { doneOnly: true, favorites: f.favorites || undefined, q: f.q.trim() || undefined, ratio };
+}
+
+/** Studio's system view and capabilities, polled together. */
+const fetchStatus = () => Promise.all([fetchWorkerHealth(), fetchCapabilitiesApi()]);
+
+const sameFilters = (a: GalleryFilters, b: GalleryFilters) =>
+  a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q;
 
 export function App() {
   // Everything shown comes from Studio: jobs (with images, favorites and UI metadata) and
   // preferences. Nothing is kept in browser storage.
-  const [generations, setGenerations] = useState<Generation[]>([]);
-  // False until Studio's first job list arrives (the views show a loader, not the starter).
-  const [jobsLoaded, setJobsLoaded] = useState(false);
+  const route = useRoute();
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<'timeline' | 'gallery'>('timeline');
 
-  // Latest generations for the poll loop, without re-subscribing the effect
-  const generationsRef = useRef<Generation[]>(generations);
+  // Each page is its own URL (utils/router.ts). The gallery keeps the filters it was left
+  // with, so the viewer's ←/→ and Back return to the same list.
+  const [galleryFilters, setGalleryFilters] = useState<GalleryFilters | null>(null);
+  if (route.name === 'gallery' && (!galleryFilters || !sameFilters(galleryFilters, route.filters))) {
+    setGalleryFilters(route.filters);
+  }
+  const galleryJobQuery = useMemo(() => (galleryFilters ? galleryQuery(galleryFilters) : null), [galleryFilters]);
+  const galleryLink = galleryHref(galleryFilters || NO_FILTERS);
+
+  // Job lists, a page at a time (infinite scroll). The timeline's first page also gives
+  // Studio's version, where polling for changes starts.
+  const versionRef = useRef<number | undefined>(undefined);
+  const timeline = usePagedJobs(TIMELINE_QUERY, (version) => {
+    versionRef.current ??= version;
+  });
+  const gallery = usePagedJobs(galleryJobQuery);
+  const [facets, setFacets] = useState<GalleryFacets | null>(null);
+
+  // Latest timeline for the poll loop, without re-subscribing the effect
+  const timelineItemsRef = useRef<Generation[]>(timeline.items);
   useEffect(() => {
-    generationsRef.current = generations;
-  }, [generations]);
+    timelineItemsRef.current = timeline.items;
+  }, [timeline.items]);
+
+  // A job opened by its link that is in neither list (yet): fetched on its own.
+  const [linkedJob, setLinkedJob] = useState<{ id: string; gen: Generation | null } | null>(null);
 
   // Ref to trigger job poll immediately on submission
   const pollJobsRef = useRef<(() => Promise<void>) | null>(null);
@@ -66,10 +116,12 @@ export function App() {
   // Active generation tracking
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Modals & Overlays
-  const [lightboxGenId, setLightboxGenId] = useState<string | null>(null);
-  const [isStatusOpen, setIsStatusOpen] = useState(false);
+  // The shortcuts sheet is the one dialog; the viewer and the system view are pages.
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  // A delete waiting for the user's yes (SPEC_UI §4.5): what to ask, and what to run then.
+  const [pendingDelete, setPendingDelete] = useState<(ConfirmRequest & { run: () => void }) | null>(null);
+  // Stable, so the open dialog keeps its focus while the lists refresh underneath.
+  const closeConfirm = useCallback(() => setPendingDelete(null), []);
 
   // Composer prefill trigger
   const [prefilledPrompt, setPrefilledPrompt] = useState<string | null>(null);
@@ -107,67 +159,105 @@ export function App() {
   }, [preferences, preferencesLoaded]);
 
   // Periodic Health & Capabilities Polling
-  const checkHealth = useCallback(async () => {
-    const [health, caps] = await Promise.all([
-      fetchWorkerHealth(),
-      fetchCapabilitiesApi(),
-    ]);
+  const applyStatus = useCallback(([health, caps]: Awaited<ReturnType<typeof fetchStatus>>) => {
     setWorkerHealth(health);
     if (caps) setCapabilities(caps);
   }, []);
-
+  const refreshStatus = useCallback(() => fetchStatus().then(applyStatus), [applyStatus]);
   useEffect(() => {
-    checkHealth();
-    const interval = setInterval(checkHealth, 4000);
-    return () => clearInterval(interval);
-  }, [checkHealth]);
+    let alive = true;
+    const poll = () => fetchStatus().then((status) => alive && applyStatus(status));
+    poll();
+    const interval = setInterval(poll, 4000);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, [applyStatus]);
 
-  // Update specific generation helper
-  const updateGeneration = useCallback((id: string, updates: Partial<Generation>) => {
-    setGenerations((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, ...updates } : g))
-    );
+  // A change to one job, in every list that has it.
+  const { patch: patchTimeline, remove: removeTimeline, apply: applyTimeline } = timeline;
+  const { patch: patchGallery, remove: removeGallery, apply: applyGallery } = gallery;
+  const updateGeneration = useCallback(
+    (id: string, updates: Partial<Generation>) => {
+      patchTimeline(id, updates);
+      patchGallery(id, updates);
+      setLinkedJob((j) => (j?.gen?.id === id ? { ...j, gen: { ...j.gen, ...updates } } : j));
+    },
+    [patchTimeline, patchGallery],
+  );
+  const removeGenerations = useCallback(
+    (ids: Set<string>) => {
+      removeTimeline(ids);
+      removeGallery(ids);
+    },
+    [removeTimeline, removeGallery],
+  );
+
+  // The gallery's counts: when it opens, and after changes to finished images.
+  const galleryVisited = galleryFilters !== null;
+  const refreshFacets = useCallback(async () => {
+    const f = await fetchGalleryFacetsApi();
+    if (f) setFacets(f);
   }, []);
+  useEffect(() => {
+    if (!galleryVisited) return;
+    let cancelled = false;
+    fetchGalleryFacetsApi().then((f) => {
+      if (f && !cancelled) setFacets(f);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [galleryVisited]);
+  const galleryVisitedRef = useRef(galleryVisited);
+  useEffect(() => {
+    galleryVisitedRef.current = galleryVisited;
+  }, [galleryVisited]);
 
-  // Job sync (ARCHITECTURE_V3.md §8): a full load first, then only what changed since the
-  // last version (plus deletions); every 1 s while anything is active, every 10 s when
-  // idle, and on tab focus.
+  // Job sync (ARCHITECTURE_V3.md §8): the lists load page by page; this polls what changed
+  // since Studio's version (plus deletions) and patches every list. Every 1 s while
+  // anything is active, every 10 s when idle, and on tab focus.
   useEffect(() => {
     let isCancelled = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
     let isPolling = false;
-    let version: number | undefined;
 
     const pollJobs = async () => {
       if (isPolling || isCancelled) return;
       isPolling = true;
+      let waitForFirstPage = false;
 
       try {
-        const page = await fetchJobsApi(version);
+        const version = versionRef.current;
+        if (version === undefined) {
+          waitForFirstPage = true;
+          return;
+        }
+        const page = await fetchJobChangesApi(version);
         if (isCancelled) return;
-        const full = version === undefined;
-        version = page.version;
-        const changed = new Map(page.jobs.map((g) => [g.id, g]));
+        versionRef.current = page.version;
         const deleted = new Set(page.deleted);
-        setGenerations((prev) => {
-          // A full load replaces everything except jobs just submitted from this tab that
-          // Studio has not listed yet; an incremental one patches changed jobs in.
-          const kept = prev.filter((g) => {
-            if (deleted.has(g.id) || changed.has(g.id)) return false;
-            return full ? g.status === 'queued' && !g.completedAt && Date.now() - g.createdAt < 30_000 : true;
+        if (page.jobs.length || deleted.size) {
+          applyTimeline(page.jobs, deleted);
+          applyGallery(page.jobs, deleted);
+          setLinkedJob((j) => {
+            const fresh = j && page.jobs.find((g) => g.id === j.id);
+            return fresh ? { id: fresh.id, gen: fresh } : j;
           });
-          return [...kept, ...changed.values()].sort(newestFirst);
-        });
-        setJobsLoaded(true);
+          if (galleryVisitedRef.current && (deleted.size || page.jobs.some((g) => g.status === 'done'))) {
+            refreshFacets();
+          }
+        }
       } catch {
         // Studio offline or network hiccup; retry next interval
       } finally {
         isPolling = false;
         if (!isCancelled) {
-          const hasActive = generationsRef.current.some(
+          const hasActive = timelineItemsRef.current.some(
             (g) => g.status === 'queued' || g.status === 'running'
           );
-          const intervalMs = hasActive ? 1000 : 10000;
+          const intervalMs = waitForFirstPage || hasActive ? 1000 : 10000;
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(pollJobs, intervalMs);
         }
@@ -189,7 +279,7 @@ export function App() {
       if (timerId) clearTimeout(timerId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [applyTimeline, applyGallery, refreshFacets]);
 
   // Submit one turn: `count` jobs with consecutive seeds, sent as one batch
   /** Submits one turn: every job the composer built (rows × count, see utils/composer.ts). */
@@ -230,6 +320,7 @@ export function App() {
         enhance: params.enhance || false,
         tiling: params.tiling || false,
         ...(params.enhanceMaxTokens ? { enhance_max_tokens: params.enhanceMaxTokens } : {}),
+        ...(params.enhance && params.enhancer ? { enhancer: params.enhancer } : {}),
         ...(refs.length ? { references: referencePayload(refs) } : {}),
         meta: {
           batch_id: batchId,
@@ -241,9 +332,9 @@ export function App() {
       });
     }
 
-    setGenerations((prev) => [...newGenerations, ...prev]);
-    setActiveView('timeline');
+    timeline.prepend(newGenerations);
     // The new turn is at the top of the timeline: show it.
+    if (route.name !== 'timeline') navigate('/');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     pollJobsRef.current?.();
 
@@ -274,14 +365,19 @@ export function App() {
   };
 
   const handleCancelJob = async (jobId: string) => {
-    await cancelJobApi(jobId);
-    updateGeneration(jobId, { status: 'cancelled' });
+    // Studio's answer, not 'cancelled' on trust: a job that just finished stays done, and
+    // the poll would not send it again.
+    const job = await cancelJobApi(jobId);
+    if (job) updateGeneration(jobId, job);
     pollJobsRef.current?.();
   };
 
+  const findGeneration = (id: string) =>
+    [...timeline.items, ...gallery.items, ...(linkedJob?.gen ? [linkedJob.gen] : [])].find((g) => g.id === id);
+
   // Toggle Favorite
   const handleToggleFavorite = async (id: string) => {
-    const gen = generationsRef.current.find((g) => g.id === id);
+    const gen = findGeneration(id);
     if (!gen) return;
     const favorite = !gen.favorite;
     updateGeneration(id, { favorite });
@@ -321,6 +417,8 @@ export function App() {
       quality,
       steps: gen.params.steps,
       enhance: !!gen.params.enhance,
+      // The same rewriter as the image, when it had one.
+      ...(gen.params.enhance ? { enhancer: gen.params.enhancer || 'builtin' } : {}),
       tiling,
       enhanceMaxTokens,
       isSeedLocked: !newSeed,
@@ -331,7 +429,7 @@ export function App() {
         prev.advancedOpen || !newSeed || quality === 'custom' || tiling || enhanceMaxTokens > 0,
       extraRows: [],
     }));
-    setLightboxGenId(null);
+    if (route.name === 'image') leavePage();
   };
   const handleRerun = (gen: Generation) => handleToComposer(gen, { newSeed: false });
   const handleVary = (gen: Generation) => handleToComposer(gen, { newSeed: true });
@@ -341,13 +439,13 @@ export function App() {
     setReferences((prev) =>
       prev.length >= maxReferences || prev.some((r) => r.image === gen.id) ? prev : [...prev, fromGeneration(gen)],
     );
-    setLightboxGenId(null);
+    if (route.name === 'image') leavePage();
   };
   const canUseAsReference = maxReferences > 0 && references.length < maxReferences;
 
   // Retry Failed Job (V3: re-queues failed task in place if intermediate artifacts still exist, else re-submits)
-  const handleRetry = async (gen: Generation) => {
-    const result = await retryJobApi(gen.id);
+  const handleRetry = async (gen: Generation, enhancer?: string) => {
+    const result = await retryJobApi(gen.id, enhancer);
     if (result === 'retried') {
       updateGeneration(gen.id, { status: 'queued', phase: 'queued', error: undefined });
       pollJobsRef.current?.();
@@ -360,26 +458,46 @@ export function App() {
     }
   };
 
-  // Delete a single generation card
-  const handleDeleteGeneration = async (id: string) => {
-    if (!(await deleteJobApi(id))) return;
-    setGenerations((prev) => prev.filter((g) => g.id !== id));
-    if (lightboxGenId === id) {
-      setLightboxGenId(null);
+  const deleteGenerations = async (ids: string[]) => {
+    const deleted = new Set<string>();
+    for (const id of ids) {
+      if (await deleteJobApi(id)) deleted.add(id);
     }
+    removeGenerations(deleted);
+  };
+
+  // Deleting a finished image is permanent, so it asks first; a failed or cancelled card has
+  // no image to lose and goes at once. `after` runs once the delete is under way.
+  const requestDelete = (gens: Generation[], what: 'image' | 'turn', after?: () => void) => {
+    const run = () => {
+      void deleteGenerations(gens.map((g) => g.id));
+      after?.();
+    };
+    const images = gens.filter((g) => g.status === 'done' && g.imageUrl).length;
+    if (images === 0) {
+      run();
+      return;
+    }
+    setPendingDelete({
+      title: what === 'turn' ? 'Delete this turn?' : 'Delete this image?',
+      message:
+        images > 1
+          ? `Its ${images} images are removed for good, with their settings.`
+          : 'The image is removed for good, with its settings.',
+      confirmLabel: 'Delete',
+      run,
+    });
+  };
+
+  // Delete a single generation card
+  const handleDeleteGeneration = (id: string, after?: () => void) => {
+    const gen = findGeneration(id);
+    if (gen) requestDelete([gen], 'image', after);
   };
 
   // Delete an entire turn / batch
-  const handleDeleteTurn = async (batchId: string) => {
-    const toDelete = generations.filter((g) => g.batchId === batchId);
-    const deleted = new Set<string>();
-    for (const g of toDelete) {
-      if (await deleteJobApi(g.id)) deleted.add(g.id);
-    }
-    setGenerations((prev) => prev.filter((g) => !deleted.has(g.id)));
-    if (lightboxGenId && deleted.has(lightboxGenId)) {
-      setLightboxGenId(null);
-    }
+  const handleDeleteTurn = (batchId: string) => {
+    requestDelete(timeline.items.filter((g) => g.batchId === batchId), 'turn');
   };
 
   // Select Sample Prompt
@@ -388,6 +506,11 @@ export function App() {
     setPrefilledPrompt(prompt);
     if (aspect) setPrefilledAspect(aspect);
   };
+
+  const galleryLinkRef = useRef(galleryLink);
+  useEffect(() => {
+    galleryLinkRef.current = galleryLink;
+  }, [galleryLink]);
 
   // Global Keyboard Shortcuts
   useEffect(() => {
@@ -398,10 +521,11 @@ export function App() {
         return;
       }
 
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 't' || e.key === 'T') {
-        setActiveView('timeline');
+        if (window.location.pathname !== '/') navigate('/');
       } else if (e.key === 'g' || e.key === 'G') {
-        setActiveView('gallery');
+        if (window.location.pathname !== '/gallery') navigate(galleryLinkRef.current);
       } else if (e.key === '/') {
         e.preventDefault();
         const composerTextarea = document.querySelector('textarea') as HTMLTextAreaElement | null;
@@ -415,35 +539,166 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Lightbox navigation helpers
-  // ←/→ follow the open view: the timeline's order (turns newest first, each left to right),
-  // or the gallery's (newest first).
-  const completedList = (activeView === 'timeline' ? groupTurns(generations).flat() : generations).filter(
-    (g) => g.status === 'done' && g.imageUrl,
+  // The viewer (`/images/{id}`): ←/→ follow the list it was opened from, the timeline's order
+  // (turns newest first, each left to right) or the gallery's; a shared link steps through
+  // the timeline when the image is in it.
+  const viewerId = route.name === 'image' ? route.id : null;
+  const from = viewerId ? viewerFrom() : undefined;
+  const timelineImages = useMemo(
+    () => groupTurns(timeline.items).flat().filter((g) => g.status === 'done' && g.imageUrl),
+    [timeline.items],
   );
-  const currentLightboxIndex = completedList.findIndex((g) => g.id === lightboxGenId);
-  const lightboxGen = currentLightboxIndex !== -1 ? completedList[currentLightboxIndex] : null;
+  const viewerList = from === 'gallery' ? gallery : timeline;
+  const viewerImages = from === 'gallery' ? gallery.items : timelineImages;
+  const viewerIndex = viewerId ? viewerImages.findIndex((g) => g.id === viewerId) : -1;
+  const viewerGen: Generation | null = viewerId
+    ? viewerImages[viewerIndex] ??
+      timeline.items.find((g) => g.id === viewerId) ??
+      gallery.items.find((g) => g.id === viewerId) ??
+      (linkedJob?.id === viewerId ? linkedJob.gen : null)
+    : null;
+  const viewerMissing = viewerId !== null && linkedJob?.id === viewerId && linkedJob.gen === null && !viewerGen;
 
-  const handlePrevLightbox = () => {
-    if (currentLightboxIndex > 0) {
-      setLightboxGenId(completedList[currentLightboxIndex - 1].id);
-    }
+  // An image outside the loaded lists (a shared link, an old image): fetch it alone.
+  const viewerKnown = !!viewerGen;
+  useEffect(() => {
+    if (!viewerId || viewerKnown) return;
+    let cancelled = false;
+    fetchJobApi(viewerId)
+      .then((gen) => !cancelled && setLinkedJob({ id: viewerId, gen }))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerId, viewerKnown]);
+
+  // Near the end of the loaded images, the next page comes in, so → keeps going.
+  const { hasMore: viewerHasMore, loadMore: viewerLoadMore } = viewerList;
+  useEffect(() => {
+    if (viewerIndex >= 0 && viewerIndex >= viewerImages.length - 3 && viewerHasMore) viewerLoadMore();
+  }, [viewerIndex, viewerImages.length, viewerHasMore, viewerLoadMore]);
+
+  const stepViewer = (delta: number) => {
+    const next = viewerImages[viewerIndex + delta];
+    if (next) navigate(imageHref(next.id), { replace: true, from });
   };
 
-  const handleNextLightbox = () => {
-    if (currentLightboxIndex < completedList.length - 1) {
-      setLightboxGenId(completedList[currentLightboxIndex + 1].id);
-    }
-  };
+  // Back/Forward: the list comes back where it was left, once its content is there.
+  const listReady =
+    route.name === 'timeline' ? timeline.loaded : route.name === 'gallery' ? gallery.loaded : true;
+  useLayoutEffect(() => {
+    if (listReady) restoreScroll();
+  }, [route, listReady]);
+
+  // The tab's title names the page (and the image, for shared links).
+  useEffect(() => {
+    const base = 'Aries Image Studio';
+    const title =
+      route.name === 'gallery'
+        ? `Gallery · ${base}`
+        : route.name === 'status'
+        ? `System · ${base}`
+        : route.name === 'image' && viewerGen
+        ? `${viewerGen.prompt.slice(0, 60)}${viewerGen.prompt.length > 60 ? '…' : ''} · ${base}`
+        : base;
+    document.title = title;
+  }, [route, viewerGen]);
+
+  const openViewer = useCallback((gen: Generation) => navigate(imageHref(gen.id), { from: 'timeline' }), []);
+  const onGalleryFilters = useCallback(
+    (f: GalleryFilters, replace?: boolean) => navigate(galleryHref(f), { replace }),
+    [],
+  );
+
+  // Keyed: the viewer's layout puts it at another position under the root div, and without
+  // the key React would remount it on the way back, losing what Rerun/Vary filled in.
+  const composer = (
+    <Composer
+      key="composer"
+      preferences={preferences}
+      onUpdatePreferences={(newPrefs) => setPreferences((p) => ({ ...p, ...newPrefs }))}
+      onSubmit={handleSubmitTurn}
+      isSubmitting={isSubmitting}
+      workerState={workerHealth.state}
+      capabilities={capabilities}
+      prefilledPrompt={prefilledPrompt}
+      prefilledAspect={prefilledAspect}
+      source={composerSource}
+      onSourceChange={setComposerSource}
+      references={references}
+      onReferencesChange={setReferences}
+      maxReferences={maxReferences}
+      onClearPrefill={() => {
+        setPrefilledPrompt(null);
+        setPrefilledAspect(null);
+      }}
+      hidden={route.name === 'image' || route.name === 'status'}
+    />
+  );
+
+  const shortcuts = (
+    <>
+      <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <ConfirmDialog
+        request={pendingDelete}
+        onConfirm={() => {
+          pendingDelete?.run();
+          setPendingDelete(null);
+        }}
+        onCancel={closeConfirm}
+      />
+    </>
+  );
+
+  // The viewer fills the window on its own: no header, no list underneath.
+  if (route.name === 'image') {
+    return (
+      <div className="min-h-dvh bg-[#0b0b0a] text-white font-['Inter'] antialiased">
+        {viewerGen?.imageUrl ? (
+          <Viewer
+            generation={viewerGen}
+            onClose={() => leavePage()}
+            onPrev={() => stepViewer(-1)}
+            onNext={() => stepViewer(1)}
+            hasPrev={viewerIndex > 0}
+            hasNext={viewerIndex >= 0 && viewerIndex < viewerImages.length - 1}
+            onToggleFavorite={handleToggleFavorite}
+            onVary={handleVary}
+            onRerun={handleRerun}
+            onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
+            // After the delete the viewer has nothing left to show: back to the list.
+            onDelete={(id) => handleDeleteGeneration(id, () => leavePage())}
+          />
+        ) : viewerMissing || (viewerGen && !viewerGen.imageUrl) ? (
+          <div className="min-h-dvh flex flex-col items-center justify-center gap-4 p-8 text-center">
+            <p className="text-sm text-white/80">
+              {viewerGen ? 'This image is not finished yet.' : 'This image does not exist (any more).'}
+            </p>
+            <button
+              onClick={() => leavePage()}
+              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[#a53705] text-white hover:opacity-90"
+            >
+              Back to the timeline
+            </button>
+          </div>
+        ) : (
+          <div className="min-h-dvh flex">
+            <PageLoader />
+          </div>
+        )}
+        {composer}
+        {shortcuts}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#fcf9f2] dark:bg-[#121210] text-[#1c1c18] dark:text-[#f3f0e9] font-['Inter'] antialiased transition-colors duration-200">
       {/* Top Navigation Header */}
       <Header
-        activeView={activeView}
-        onViewChange={setActiveView}
+        activeView={route.name === 'timeline' || route.name === 'gallery' ? route.name : null}
+        galleryHref={galleryLink}
         workerHealth={workerHealth}
-        onOpenStatus={() => setIsStatusOpen(true)}
         theme={preferences.theme}
         onToggleTheme={() =>
           setPreferences((p) => ({ ...p, theme: p.theme === 'light' ? 'dark' : 'light' }))
@@ -452,12 +707,14 @@ export function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col pb-24">
-        <ErrorBoundary fallbackTitle="Timeline rendering error">
-          {activeView === 'timeline' ? (
+      <main className={`flex-1 flex flex-col ${route.name === 'status' ? 'pb-8' : 'pb-24'}`}>
+        <ErrorBoundary fallbackTitle="Page rendering error">
+          {route.name === 'status' ? (
+            <StatusPage onClose={() => leavePage()} health={workerHealth} onRefresh={refreshStatus} />
+          ) : route.name === 'timeline' ? (
             <Timeline
-              generations={generations}
-              onOpenLightbox={(gen) => setLightboxGenId(gen.id)}
+              generations={timeline.items}
+              onOpenLightbox={openViewer}
               onToggleFavorite={handleToggleFavorite}
               onVary={handleVary}
               onRetry={handleRetry}
@@ -467,72 +724,31 @@ export function App() {
               onDelete={handleDeleteGeneration}
               onDeleteTurn={handleDeleteTurn}
               onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
-              loading={!jobsLoaded}
+              loading={!timeline.loaded}
+              hasMore={timeline.hasMore}
+              loadingMore={timeline.loadingMore}
+              onLoadMore={timeline.loadMore}
             />
           ) : (
             <Gallery
-              generations={generations}
-              onOpenLightbox={(gen) => setLightboxGenId(gen.id)}
+              generations={gallery.items}
+              filters={route.filters}
+              onFiltersChange={onGalleryFilters}
+              facets={facets}
               onToggleFavorite={handleToggleFavorite}
               onVary={handleVary}
               onDelete={handleDeleteGeneration}
-              loading={!jobsLoaded}
+              loading={!gallery.loaded}
+              hasMore={gallery.hasMore}
+              loadingMore={gallery.loadingMore}
+              onLoadMore={gallery.loadMore}
             />
           )}
         </ErrorBoundary>
       </main>
 
-      {/* Docked Composer Bar */}
-      <Composer
-        preferences={preferences}
-        onUpdatePreferences={(newPrefs) => setPreferences((p) => ({ ...p, ...newPrefs }))}
-        onSubmit={handleSubmitTurn}
-        isSubmitting={isSubmitting}
-        workerState={workerHealth.state}
-        capabilities={capabilities}
-        prefilledPrompt={prefilledPrompt}
-        prefilledAspect={prefilledAspect}
-        source={composerSource}
-        onSourceChange={setComposerSource}
-        references={references}
-        onReferencesChange={setReferences}
-        maxReferences={maxReferences}
-        onClearPrefill={() => {
-          setPrefilledPrompt(null);
-          setPrefilledAspect(null);
-        }}
-      />
-
-      {/* Telemetry Status Panel Modal */}
-      <StatusModal
-        isOpen={isStatusOpen}
-        onClose={() => setIsStatusOpen(false)}
-        health={workerHealth}
-        onRefresh={checkHealth}
-      />
-
-      {/* Keyboard Shortcuts Cheat-sheet Modal */}
-      <ShortcutsModal
-        isOpen={isShortcutsOpen}
-        onClose={() => setIsShortcutsOpen(false)}
-      />
-
-      {/* Lightbox Artwork Inspector */}
-      {lightboxGen && (
-        <Lightbox
-          generation={lightboxGen}
-          onClose={() => setLightboxGenId(null)}
-          onPrev={handlePrevLightbox}
-          onNext={handleNextLightbox}
-          hasPrev={currentLightboxIndex > 0}
-          hasNext={currentLightboxIndex < completedList.length - 1}
-          onToggleFavorite={handleToggleFavorite}
-          onVary={handleVary}
-          onRerun={handleRerun}
-          onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
-          onDelete={handleDeleteGeneration}
-        />
-      )}
+      {composer}
+      {shortcuts}
     </div>
   );
 }

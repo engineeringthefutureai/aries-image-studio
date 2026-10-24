@@ -1,11 +1,13 @@
+use crate::cloud::normalize_enhancer;
 use crate::config::bearer_matches;
 use crate::db::{
-    is_valid_client_job_id, now_s, JobSubmitInput, ReferenceInput, ReferenceLatents, UploadRecord,
+    is_valid_client_job_id, now_s, JobPageQuery, JobStatus, JobSubmitInput, ReferenceInput,
+    ReferenceLatents, UploadRecord,
 };
 use crate::metrics::{ExecutorLiveMetrics, MetricsSnapshot};
 use crate::proto;
 use crate::scheduler::{
-    check_submit_feasibility, compute_capabilities, encode_cache_key, run_scheduler_tick, AppState,
+    check_submit_feasibility, compute_capabilities, encode_cache_key, tick, AppState,
 };
 use crate::storage::{
     is_sha256_hex, probe_upload_image, upload_thumb_key, validate_embeds_safetensors,
@@ -17,22 +19,27 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use serde_json::Value;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn build_http_router(state: Arc<AppState>) -> Router {
     let api_router = Router::new()
         .route("/api/jobs", post(submit_job).get(list_jobs))
-        .route("/api/jobs/:id", get(get_job).delete(delete_job).patch(patch_job))
+        .route(
+            "/api/jobs/:id",
+            get(get_job).delete(delete_job).patch(patch_job),
+        )
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
+        .route("/api/gallery/facets", get(get_gallery_facets))
         .route("/api/images/:id", get(get_image))
         .route("/api/images/:id/thumb", get(get_image_thumb))
         .route("/api/uploads", post(upload_image))
@@ -40,7 +47,10 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/uploads/:sha/thumb", get(get_upload_thumb))
         .route("/api/system", get(get_system))
         .route("/api/capabilities", get(get_capabilities))
-        .route("/api/preferences", get(get_preferences).put(put_preferences))
+        .route(
+            "/api/preferences",
+            get(get_preferences).put(put_preferences),
+        )
         .route("/api/executors/:id/lend", post(lend_executor))
         .route("/api/executors/:id/return", post(return_executor))
         .route("/api/executors/:id/disable", post(disable_executor))
@@ -57,10 +67,24 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
 
     let static_dir = &state.config.static_dir;
     if static_dir.exists() {
-        let index_file = static_dir.join("index.html");
-        api_router.fallback_service(
-            ServeDir::new(static_dir).not_found_service(ServeFile::new(index_file)),
-        )
+        // The web app's own paths (`/gallery`, `/images/{id}`, ...) get index.html with 200, so
+        // shared links open; unknown API paths stay 404.
+        let serve =
+            ServeDir::new(static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
+        api_router.fallback(move |req: axum::extract::Request| {
+            let serve = serve.clone();
+            async move {
+                let path = req.uri().path();
+                if path.starts_with("/api/") || path.starts_with("/agent/") {
+                    return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })))
+                        .into_response();
+                }
+                match serve.oneshot(req).await {
+                    Ok(res) => res.into_response(),
+                    Err(never) => match never {},
+                }
+            }
+        })
     } else {
         api_router
     }
@@ -69,6 +93,25 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
 #[derive(Debug, Deserialize)]
 pub struct ListJobsQuery {
     pub changed_since: Option<i64>,
+    /// Paged: at most this many jobs, newest first (with `before`, `status`, `favorite`,
+    /// `q`, `aspect`). Without it and `changed_since`: every job.
+    pub limit: Option<u32>,
+    /// The `next` cursor of the previous page.
+    pub before: Option<String>,
+    /// `done`: finished images only.
+    pub status: Option<String>,
+    pub favorite: Option<bool>,
+    /// Substring of the prompt, the enhanced prompt or the seed.
+    pub q: Option<String>,
+    /// `w:h`: images of this aspect ratio.
+    pub aspect: Option<String>,
+}
+
+/// `POST /api/jobs/{id}/retry`, optional: retry with another enhancer (`builtin`, or a
+/// cloud enhancer's id), e.g. after a cloud enhancer failed.
+#[derive(Debug, Deserialize)]
+pub struct RetryJobBody {
+    pub enhancer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,7 +144,7 @@ pub struct SystemStageQueue {
 
 async fn submit_job(
     State(state): State<Arc<AppState>>,
-    Json(input): Json<JobSubmitInput>,
+    Json(mut input): Json<JobSubmitInput>,
 ) -> Response {
     if let Some(id) = &input.id {
         if !is_valid_client_job_id(id) {
@@ -125,6 +168,16 @@ async fn submit_job(
                 .into_response();
         }
     }
+    input.enhancer = match normalize_enhancer(&state.cloud, input.enhancer.as_deref()) {
+        Ok(e) => e.filter(|_| input.enhance),
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "rejected": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
     if let Err(reason) = check_submit_feasibility(&state.db, &input).await {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -151,8 +204,14 @@ async fn submit_job(
 
     match state.db.create_job(&input, seed, &references).await {
         Ok(job) => {
-            let _ = run_scheduler_tick(&state).await;
-            let refreshed = state.db.get_job(&job.id).await.ok().flatten().unwrap_or(job);
+            tick(&state).await;
+            let refreshed = state
+                .db
+                .get_job(&job.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(job);
             (StatusCode::CREATED, Json(refreshed)).into_response()
         }
         Err(e) => (
@@ -180,7 +239,9 @@ async fn resolve_references(
             (None, Some(job_id)) => {
                 let art = match state.db.get_job_artifact_by_name(job_id, "image.png").await {
                     Ok(Some(a)) => a,
-                    Ok(None) => return Err(format!("reference {}: job {job_id} has no image", i + 1)),
+                    Ok(None) => {
+                        return Err(format!("reference {}: job {job_id} has no image", i + 1))
+                    }
                     Err(e) => return Err(e.to_string()),
                 };
                 let Ok(Some(job)) = state.db.get_job(job_id).await else {
@@ -199,7 +260,12 @@ async fn resolve_references(
                     Err(e) => return Err(e.to_string()),
                 }
             }
-            _ => return Err(format!("reference {} needs exactly one of upload or image", i + 1)),
+            _ => {
+                return Err(format!(
+                    "reference {} needs exactly one of upload or image",
+                    i + 1
+                ))
+            }
         }
     }
     Ok(out)
@@ -214,7 +280,9 @@ async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
     if body.len() > UPLOAD_MAX_BYTES {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({ "error": format!("images up to {} MB", UPLOAD_MAX_BYTES / (1024 * 1024)) })),
+            Json(
+                json!({ "error": format!("images up to {} MB", UPLOAD_MAX_BYTES / (1024 * 1024)) }),
+            ),
         )
             .into_response();
     }
@@ -229,7 +297,7 @@ async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         }
     };
     let _writing = state.blobs.writing().await;
-    let (sha256, bytes) = match state.blobs.put_blob(&body) {
+    let (sha256, bytes) = match state.blobs.store_blob(body).await {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -269,9 +337,13 @@ async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
 
 async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>) -> Response {
     let Ok(Some(up)) = state.db.get_upload(&sha).await else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "upload not found" })),
+        )
+            .into_response();
     };
-    match state.blobs.get_blob(&up.sha256) {
+    match state.blobs.read_blob(&up.sha256).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
@@ -281,7 +353,11 @@ async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>)
             bytes,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "upload blob missing" }))).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "upload blob missing" })),
+        )
+            .into_response(),
     }
 }
 
@@ -300,12 +376,16 @@ async fn get_upload_thumb(
             .into_response();
     }
     let Ok(Some(up)) = state.db.get_upload(&sha).await else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "upload not found" })),
+        )
+            .into_response();
     };
     let key = upload_thumb_key(&up.sha256);
-    let found = match std::fs::read(state.blobs.thumb_path(&key, size)) {
-        Ok(bytes) => Some(bytes),
-        Err(_) => {
+    let found = match state.blobs.read_thumb(&key, size).await {
+        Some(bytes) => Some(bytes),
+        None => {
             let blobs = state.blobs.clone();
             tokio::task::spawn_blocking(move || {
                 let image = blobs.get_blob(&up.sha256).ok()?;
@@ -320,34 +400,77 @@ async fn get_upload_thumb(
     match found {
         Some(bytes) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, IMMUTABLE)],
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, IMMUTABLE),
+            ],
             bytes,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "thumbnail not found" }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "thumbnail not found" })),
+        )
+            .into_response(),
     }
 }
 
-async fn list_jobs(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<ListJobsQuery>,
-) -> Response {
+async fn list_jobs(State(state): State<Arc<AppState>>, Query(q): Query<ListJobsQuery>) -> Response {
     let version = state.db.current_version().await.unwrap_or(1);
     // Deletions since the client's version, so every client drops them too.
     let deleted = match q.changed_since {
         Some(since) => state.db.list_deleted_since(since).await.unwrap_or_default(),
         None => Vec::new(),
     };
-    match state.db.list_jobs(q.changed_since).await {
-        Ok(jobs) => (
-            StatusCode::OK,
-            Json(json!({
-                "version": version,
-                "jobs": jobs,
-                "deleted": deleted,
-            })),
+    let result = match (q.changed_since, q.limit) {
+        (None, Some(limit)) => {
+            let ratio = q.aspect.as_deref().and_then(|a| {
+                let (w, h) = a.split_once(':')?;
+                let (w, h) = (w.trim().parse::<f64>().ok()?, h.trim().parse::<f64>().ok()?);
+                (w > 0.0 && h > 0.0).then_some(w / h)
+            });
+            let page = JobPageQuery {
+                limit,
+                before: q.before.clone(),
+                done_only: q.status.as_deref() == Some("done"),
+                favorites_only: q.favorite == Some(true),
+                search: q.q.clone(),
+                ratio,
+            };
+            state.db.list_jobs_page(&page).await
+        }
+        (since, _) => state.db.list_jobs(since).await.map(|jobs| (jobs, None)),
+    };
+    match result {
+        Ok((mut jobs, next)) => {
+            // The enhancer's reasoning is most of a job's size: lists say whether there is
+            // some (`has_thinking`), and `GET /api/jobs/{id}` has it.
+            for job in &mut jobs {
+                job.thinking = None;
+            }
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "version": version,
+                    "jobs": jobs,
+                    "deleted": deleted,
+                    "next": next,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+/// Counts for the gallery's filters, over all finished images.
+async fn get_gallery_facets(State(state): State<Arc<AppState>>) -> Response {
+    match state.db.gallery_facets().await {
+        Ok(f) => (StatusCode::OK, Json(f)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -380,12 +503,20 @@ async fn patch_job(
     let Some(favorite) = body.favorite else {
         return match state.db.get_job(&id).await {
             Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
-            _ => (StatusCode::NOT_FOUND, Json(json!({ "error": "job not found" }))).into_response(),
+            _ => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "job not found" })),
+            )
+                .into_response(),
         };
     };
     match state.db.set_job_favorite(&id, favorite).await {
         Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "job not found" }))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "job not found" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -474,7 +605,7 @@ async fn cancel_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
                     },
                 );
             }
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
             (StatusCode::OK, Json(job)).into_response()
         }
         Ok(None) => (
@@ -490,11 +621,15 @@ async fn cancel_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
     }
 }
 
-async fn retry_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn retry_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<RetryJobBody>>,
+) -> Response {
     // Only a failed or cancelled job can be retried; anything else would be a silent no-op
     // that a client could mistake for "queued again" (a finished image vanished that way).
     if let Ok(Some(job)) = state.db.get_job(&id).await {
-        if !matches!(job.status.as_str(), "failed" | "cancelled") {
+        if !matches!(job.status, JobStatus::Failed | JobStatus::Cancelled) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({ "error": format!("only failed or cancelled jobs can be retried (job is {})", job.status) })),
@@ -502,10 +637,38 @@ async fn retry_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
                 .into_response();
         }
     }
+    if let Some(Json(RetryJobBody {
+        enhancer: Some(enhancer),
+    })) = body
+    {
+        let enhancer = match normalize_enhancer(&state.cloud, Some(&enhancer)) {
+            Ok(e) => e,
+            Err(e) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "rejected": e.to_string() })),
+                )
+                    .into_response()
+            }
+        };
+        if let Err(e) = state.db.set_job_enhancer(&id, enhancer.as_deref()).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    }
     match state.db.retry_job(&id).await {
         Ok(Some(job)) => {
-            let _ = run_scheduler_tick(&state).await;
-            let refreshed = state.db.get_job(&job.id).await.ok().flatten().unwrap_or(job);
+            tick(&state).await;
+            let refreshed = state
+                .db
+                .get_job(&job.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(job);
             (StatusCode::OK, Json(refreshed)).into_response()
         }
         Ok(None) => (
@@ -526,15 +689,22 @@ async fn retry_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    let Ok(Some(art)) = state.db.get_job_artifact_by_name(&id, "image.png").await else {
+    // The job turns `done` just before the PNG with its provenance chunk replaces the
+    // decoder's: a request in between can find the plain PNG, or a blob deleted under it.
+    for _ in 0..2 {
+        let Ok(Some(art)) = state.db.get_job_artifact_by_name(&id, "image.png").await else {
+            break;
+        };
+        let Ok(bytes) = state.blobs.read_blob(&art.sha256).await else {
+            continue;
+        };
+        // Only the final PNG is cached for good.
+        let cache = if art.metadata_json.is_some() {
+            IMMUTABLE
+        } else {
+            "no-store"
+        };
         return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "image not found" })),
-        )
-            .into_response();
-    };
-    match state.blobs.get_blob(&art.sha256) {
-        Ok(bytes) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "image/png".to_string()),
@@ -542,18 +712,18 @@ async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
                     header::CONTENT_DISPOSITION,
                     format!("inline; filename=\"{id}.png\""),
                 ),
-                (header::CACHE_CONTROL, IMMUTABLE.to_string()),
+                (header::CACHE_CONTROL, cache.to_string()),
                 (header::ETAG, format!("\"{}\"", art.sha256)),
             ],
             bytes,
         )
-            .into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "image blob missing" })),
-        )
-            .into_response(),
+            .into_response();
     }
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "image not found" })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -568,6 +738,14 @@ async fn get_image_thumb(
     Path(id): Path<String>,
     Query(query): Query<ThumbQuery>,
 ) -> Response {
+    // The id becomes part of a file path below: anything but a job id (`..%2F`) is not found.
+    if !is_valid_client_job_id(&id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "image not found" })),
+        )
+            .into_response();
+    }
     let size = query.size.unwrap_or(1024);
     if !THUMB_SIZES.contains(&size) {
         return (
@@ -576,10 +754,9 @@ async fn get_image_thumb(
         )
             .into_response();
     }
-    let thumb_path = state.blobs.thumb_path(&id, size);
-    let found = match std::fs::read(&thumb_path) {
-        Ok(bytes) => Some(bytes),
-        Err(_) => match state.db.get_job_artifact_by_name(&id, "image.png").await {
+    let found = match state.blobs.read_thumb(&id, size).await {
+        Some(bytes) => Some(bytes),
+        None => match state.db.get_job_artifact_by_name(&id, "image.png").await {
             Ok(Some(art)) => {
                 let blobs = state.blobs.clone();
                 let id = id.clone();
@@ -615,7 +792,10 @@ async fn get_image_thumb(
 
 async fn get_capabilities(State(state): State<Arc<AppState>>) -> Response {
     match compute_capabilities(&state.db).await {
-        Ok(caps) => (StatusCode::OK, Json(caps)).into_response(),
+        Ok(mut caps) => {
+            caps.cloud_enhancers = state.cloud.infos();
+            (StatusCode::OK, Json(caps)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -746,7 +926,7 @@ async fn lend_executor(State(state): State<Arc<AppState>>, Path(id): Path<String
                     },
                 );
             }
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
             let ex = state.db.find_executor(&id).await.ok().flatten();
             (StatusCode::OK, Json(ex)).into_response()
         }
@@ -766,7 +946,7 @@ async fn lend_executor(State(state): State<Arc<AppState>>, Path(id): Path<String
 async fn return_executor(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match state.db.return_executor(&id).await {
         Ok(Some(ex)) => {
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
             (StatusCode::OK, Json(ex)).into_response()
         }
         Ok(None) => (
@@ -802,7 +982,7 @@ async fn disable_executor(
                     },
                 );
             }
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
             let ex = state.db.find_executor(&id).await.ok().flatten();
             (StatusCode::OK, Json(ex)).into_response()
         }
@@ -822,7 +1002,7 @@ async fn disable_executor(
 async fn enable_executor(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match state.db.enable_executor(&id).await {
         Ok(Some(ex)) => {
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
             (StatusCode::OK, Json(ex)).into_response()
         }
         Ok(None) => (
@@ -871,7 +1051,7 @@ async fn download_artifact(
         )
             .into_response();
     };
-    match state.blobs.get_blob(&art.sha256) {
+    match state.blobs.read_blob(&art.sha256).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
@@ -899,12 +1079,20 @@ async fn download_blob(
     Path(sha): Path<String>,
 ) -> Response {
     if !check_agent_http_auth(&headers, &state.config.agent_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     if !is_sha256_hex(&sha) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "not a sha256" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "not a sha256" })),
+        )
+            .into_response();
     }
-    match state.blobs.get_blob(&sha) {
+    match state.blobs.read_blob(&sha).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
@@ -914,7 +1102,11 @@ async fn download_blob(
             bytes,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "blob not found" }))).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "blob not found" })),
+        )
+            .into_response(),
     }
 }
 
@@ -936,7 +1128,10 @@ async fn upload_artifact(
     let mut hasher = Sha256::new();
     hasher.update(&body);
     let computed_sha = hex::encode(hasher.finalize());
-    if let Some(expected_hdr) = headers.get("x-content-sha256").and_then(|v| v.to_str().ok()) {
+    if let Some(expected_hdr) = headers
+        .get("x-content-sha256")
+        .and_then(|v| v.to_str().ok())
+    {
         if !expected_hdr.is_empty() && expected_hdr != computed_sha {
             return (
                 StatusCode::BAD_REQUEST,
@@ -955,9 +1150,7 @@ async fn upload_artifact(
         )
             .into_response();
     };
-    if task.current_attempt != attempt
-        || !matches!(task.status.as_str(), "assigned" | "running" | "uploading")
-    {
+    if task.current_attempt != attempt || !task.status.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(json!({
@@ -987,10 +1180,12 @@ async fn upload_artifact(
     let validation_res: anyhow::Result<()> = match name.as_str() {
         "enhanced.json" => validate_enhanced_json(&body).map(|_| ()),
         "embeds.safetensors" => {
-            validate_embeds_safetensors(&body, job.true_cfg_scale > 1.0, job.references.len()).map(|hdr| {
-                meta_json = serde_json::to_string(&hdr.metadata).ok();
-                cache_key = Some(encode_cache_key(&job, state.config.reference_res));
-            })
+            validate_embeds_safetensors(&body, job.true_cfg_scale > 1.0, job.references.len()).map(
+                |hdr| {
+                    meta_json = serde_json::to_string(&hdr.metadata).ok();
+                    cache_key = Some(encode_cache_key(&job, state.config.reference_res));
+                },
+            )
         }
         n if n.starts_with("ref") && n.ends_with(".safetensors") => {
             // ref<i>.safetensors: latents of the job's i-th reference, stored for any later job.
@@ -1000,8 +1195,8 @@ async fn upload_artifact(
                 .and_then(|i| job.references.get(i))
             {
                 None => Err(anyhow::anyhow!("job has no reference for '{n}'")),
-                Some(r) => validate_reference_latents(&body, &r.sha256, state.config.reference_res).map(
-                    |(hdr, width, height)| {
+                Some(r) => validate_reference_latents(&body, &r.sha256, state.config.reference_res)
+                    .map(|(hdr, width, height)| {
                         let meta = |k: &str| hdr.metadata.get(k).cloned().unwrap_or_default();
                         reference_latents = Some((
                             ReferenceLatents {
@@ -1017,8 +1212,7 @@ async fn upload_artifact(
                             meta("dtype"),
                         ));
                         meta_json = serde_json::to_string(&hdr.metadata).ok();
-                    },
-                ),
+                    }),
             }
         }
         "latent.safetensors" => {
@@ -1026,7 +1220,9 @@ async fn upload_artifact(
                 meta_json = serde_json::to_string(&hdr.metadata).ok();
             })
         }
-        "image.png" => validate_png_dimensions(&body, Some(job.width), Some(job.height)).map(|_| ()),
+        "image.png" => {
+            validate_png_dimensions(&body, Some(job.width), Some(job.height)).map(|_| ())
+        }
         _ => Err(anyhow::anyhow!("unexpected artifact name '{name}'")),
     };
 
@@ -1039,7 +1235,7 @@ async fn upload_artifact(
     }
 
     let _writing = state.blobs.writing().await;
-    let (sha256, bytes_len) = match state.blobs.put_blob(&body) {
+    let (sha256, bytes_len) = match state.blobs.store_blob(body).await {
         Ok(res) => res,
         Err(e) => {
             return (
@@ -1066,7 +1262,9 @@ async fn upload_artifact(
             kind,
             meta_json.as_deref(),
             cache_key.as_deref(),
-            reference_latents.as_ref().map(|(lat, dtype)| (lat, dtype.as_str())),
+            reference_latents
+                .as_ref()
+                .map(|(lat, dtype)| (lat, dtype.as_str())),
         )
         .await
     {
@@ -1098,7 +1296,6 @@ async fn get_metrics(State(state): State<Arc<AppState>>) -> Response {
         .read()
         .map(|g| g.clone())
         .unwrap_or_default();
-
 
     let mut tasks_queued_by_stage = HashMap::new();
     let mut tasks_blocked = HashMap::new();

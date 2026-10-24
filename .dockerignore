@@ -1,5 +1,5 @@
 # Build context for studio/Dockerfile (repo root). It needs Cargo.toml, Cargo.lock,
-# proto/, studio/ and web/; dependencies and build output are rebuilt inside.
+# proto/, studio/, web/ and backend/aries_worker/stages/system_prompt.txt; dependencies and build output are rebuilt inside.
 .git
 **/node_modules
 **/target

@@ -12,6 +12,13 @@ services:
       - ARIES_AGENT_TOKEN=${ARIES_AGENT_TOKEN:?set ARIES_AGENT_TOKEN in .env}
       - ARIES_ARTIFACT_BASE_URL=${ARIES_ARTIFACT_BASE_URL:?set ARIES_ARTIFACT_BASE_URL in .env}
       - RUST_LOG=${RUST_LOG:-info}
+      # Cloud prompt enhancers (docs/CLOUD_ENHANCERS.md): off unless switched on in .env.
+      - ARIES_CLOUD_ENHANCERS=${ARIES_CLOUD_ENHANCERS:-off}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ARIES_ANTHROPIC_MODEL=${ARIES_ANTHROPIC_MODEL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ARIES_GEMINI_MODELS=${ARIES_GEMINI_MODELS:-}
+      - ARIES_GEMINI_THINKING=${ARIES_GEMINI_THINKING:-}
     volumes:
       # SQLite database, images and thumbnails. The container runs as uid 1000.
       - ${STUDIO_DATA_DIR:-/var/lib/aries-image-studio}:/app/data

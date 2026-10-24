@@ -23,12 +23,25 @@ async fn main() -> Result<()> {
 
     let config = BackendConfig::from_env();
     if config.agent_token.is_empty() {
-        anyhow::bail!("ARIES_AGENT_TOKEN must be set: agents and artifact transfers authenticate with it");
+        anyhow::bail!(
+            "ARIES_AGENT_TOKEN must be set: agents and artifact transfers authenticate with it"
+        );
     }
     let db_path = config.data_dir.join("studio.db");
     let db = Database::connect(&db_path).await?;
     let blobs = BlobStore::new(&config.data_dir)?;
     let state = AppState::new(config.clone(), db, blobs);
+    // Cloud enhances run inside Studio: any left in flight ended with the last process.
+    let reclaimed = state.db.reclaim_cloud_tasks().await?;
+    if !reclaimed.is_empty() {
+        info!(
+            jobs = reclaimed.len(),
+            "Requeued cloud enhances left from the last run"
+        );
+    }
+    for p in state.cloud.infos() {
+        info!(enhancer = %p.id, model = %p.model, "Cloud enhancer on");
+    }
 
     spawn_scraper_and_gc_loop(state.clone());
 
@@ -44,9 +57,7 @@ async fn main() -> Result<()> {
         .max_encoding_message_size(16 * 1024 * 1024);
     info!(%grpc_addr, "Aries Image Studio AgentGateway gRPC server listening");
 
-    let http_task = tokio::spawn(async move {
-        axum::serve(http_listener, http_router).await
-    });
+    let http_task = tokio::spawn(async move { axum::serve(http_listener, http_router).await });
 
     let grpc_task = tokio::spawn(async move {
         GrpcServer::builder()

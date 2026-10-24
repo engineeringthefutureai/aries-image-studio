@@ -135,8 +135,13 @@ export const BatchCarousel: React.FC<BatchCarouselProps> = ({ children, selected
         </button>
       )}
 
-      {(canPrev || canNext) && (
-        <div className="flex justify-center items-center gap-1.5 pt-1">
+      {/* The dots' row always takes its space (hidden while every image fits): it appearing
+          after the first measurement shifted the page, and Back restored the wrong position. */}
+      {count > 1 && (
+        <div
+          className={`flex justify-center items-center gap-1.5 pt-1 ${canPrev || canNext ? '' : 'invisible'}`}
+          aria-hidden={!(canPrev || canNext)}
+        >
           {children.map((child, i) => (
             <button
               key={child.key ?? i}

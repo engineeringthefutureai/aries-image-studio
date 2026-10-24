@@ -78,6 +78,54 @@ impl TaskShape {
     }
 }
 
+/// A page of `GET /api/jobs`: newest first, `limit` jobs after the `before` cursor.
+#[derive(Debug, Clone, Default)]
+pub struct JobPageQuery {
+    pub limit: u32,
+    pub before: Option<String>,
+    /// Finished images only (the gallery).
+    pub done_only: bool,
+    pub favorites_only: bool,
+    /// Substring of the prompt, the enhanced prompt or the seed.
+    pub search: Option<String>,
+    /// Width / height, within 0.01.
+    pub ratio: Option<f64>,
+}
+
+/// The opaque cursor of the page after `job`.
+pub fn job_cursor(job: &JobRecord) -> String {
+    format!("{}_{}", job.created_at, job.id)
+}
+
+/// The intermediate artifact a stage takes from the stage before it (the dispatcher's
+/// inputs in `scheduler.rs`).
+fn stage_input_artifact(stage: &str) -> Option<&'static str> {
+    match stage {
+        "denoise" => Some("embeds.safetensors"),
+        "decode" => Some("latent.safetensors"),
+        _ => None,
+    }
+}
+
+fn parse_job_cursor(cursor: &str) -> Option<(f64, String)> {
+    let (created_at, id) = cursor.split_once('_')?;
+    Some((created_at.parse().ok()?, id.to_string()))
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GalleryFacets {
+    pub total: u64,
+    pub favorites: u64,
+    pub sizes: Vec<SizeCount>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SizeCount {
+    pub width: u32,
+    pub height: u32,
+    pub count: u64,
+}
+
 /// What [`Database::load_jobs`] binds to its condition's `?`.
 enum JobFilter {
     Version(i64),
@@ -152,6 +200,10 @@ pub struct JobSubmitInput {
     /// The prompt rewriter's token limit (reasoning and reply); unset: the worker's 2048.
     #[serde(default)]
     pub enhance_max_tokens: Option<u32>,
+    /// Who rewrites the prompt: a cloud enhancer's id, its model (`claude-sonnet-5-5`;
+    /// docs/CLOUD_ENHANCERS.md), or unset / `builtin` for the agents' enhancer.
+    #[serde(default)]
+    pub enhancer: Option<String>,
 }
 
 /// One reference of a submitted job: an upload (`POST /api/uploads`) or a job's image.
@@ -208,16 +260,136 @@ fn default_cfg() -> f32 {
 pub fn is_valid_client_job_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A status stored as TEXT: the same string in SQLite, in the API's JSON and here.
+macro_rules! text_enum {
+    ($(#[$meta:meta])* $name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+        pub enum $name {
+            $(#[serde(rename = $text)] #[sqlx(rename = $text)] $variant),+
+        }
+
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $text),+
+                }
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = anyhow::Error;
+            fn from_str(s: &str) -> Result<Self> {
+                match s {
+                    $($text => Ok(Self::$variant),)+
+                    other => Err(anyhow::anyhow!("unknown {} {other:?}", stringify!($name))),
+                }
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    };
+}
+
+text_enum! {
+    /// ARCHITECTURE_V3.md §4.
+    JobStatus {
+        Submitted = "submitted",
+        Running = "running",
+        Done = "done",
+        Failed = "failed",
+        Cancelled = "cancelled",
+        Rejected = "rejected",
+    }
+}
+
+impl JobStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Done | Self::Failed | Self::Cancelled | Self::Rejected
+        )
+    }
+}
+
+text_enum! {
+    /// ARCHITECTURE_V3.md §4; `blocked` is `queued` with a reason.
+    TaskStatus {
+        Waiting = "waiting",
+        Queued = "queued",
+        Assigned = "assigned",
+        Running = "running",
+        Uploading = "uploading",
+        Done = "done",
+        Failed = "failed",
+        Cancelled = "cancelled",
+    }
+}
+
+impl TaskStatus {
+    /// On an executor: assigned, running or uploading.
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Assigned | Self::Running | Self::Uploading)
+    }
+}
+
+text_enum! {
+    /// ARCHITECTURE_V3.md §6.1.
+    ExecutorState {
+        Offline = "offline",
+        Idle = "idle",
+        Starting = "starting",
+        Ready = "ready",
+        Busy = "busy",
+        Stopping = "stopping",
+        Lent = "lent",
+        Disabled = "disabled",
+    }
+}
+
+/// Why an attempt failed: the agent's `Failed` report, or a failure Studio decided itself.
+#[derive(Debug, Clone, Copy)]
+pub struct AttemptFailure<'a> {
+    pub class: &'a str,
+    pub detail: &'a str,
+    pub exit_code: i32,
+    pub signal: i32,
+    pub kernel_log_tail: &'a str,
+}
+
+impl<'a> AttemptFailure<'a> {
+    /// A failure Studio decided (no worker exit to report).
+    pub fn studio(class: &'a str, detail: &'a str) -> Self {
+        Self {
+            class,
+            detail,
+            exit_code: -1,
+            signal: 0,
+            kernel_log_tail: "",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub id: String,
-    pub status: String,
+    pub status: JobStatus,
     pub prompt: String,
     pub enhanced_prompt: Option<String>,
     pub thinking: Option<String>,
+    /// Whether the job has enhancer reasoning; job lists leave `thinking` out (it is large)
+    /// and the viewer fetches it from `GET /api/jobs/{id}`.
+    #[serde(default)]
+    pub has_thinking: bool,
     pub negative_prompt: String,
     pub width: u32,
     pub height: u32,
@@ -227,6 +399,10 @@ pub struct JobRecord {
     pub enhance: bool,
     /// The prompt rewriter's token limit; unset: the worker's default.
     pub enhance_max_tokens: Option<u32>,
+    /// The cloud enhancer that rewrites the prompt (docs/CLOUD_ENHANCERS.md); unset: the
+    /// agents' built-in enhancer.
+    #[serde(default)]
+    pub enhancer: Option<String>,
     /// Decode with VAE tiling (off by default).
     pub tiling: bool,
     pub wh_ratio: Option<String>,
@@ -259,7 +435,7 @@ pub struct TaskRecord {
     pub job_id: String,
     pub seq: i32,
     pub stage: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub attempts: u32,
     pub current_attempt: u32,
     pub assigned_agent: Option<String>,
@@ -316,7 +492,7 @@ pub struct ExecutorRecord {
     pub device: String,
     pub mem_total_bytes: u64,
     pub stages: Vec<StageCapDecl>,
-    pub state: String,
+    pub state: ExecutorState,
     pub current_stage: Option<String>,
     pub current_model_id: Option<String>,
     pub current_model_rev: Option<String>,
@@ -542,11 +718,16 @@ impl Database {
         }
         // Columns added after the first V3 schema.
         self.ensure_column("jobs", "thinking", "TEXT").await?;
-        self.ensure_column("jobs", "meta", "TEXT NOT NULL DEFAULT '{}'").await?;
-        self.ensure_column("jobs", "favorite", "INTEGER NOT NULL DEFAULT 0").await?;
-        self.ensure_column("jobs", "tiling", "INTEGER NOT NULL DEFAULT 0").await?;
-        self.ensure_column("jobs", "enhance_max_tokens", "INTEGER").await?;
+        self.ensure_column("jobs", "meta", "TEXT NOT NULL DEFAULT '{}'")
+            .await?;
+        self.ensure_column("jobs", "favorite", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        self.ensure_column("jobs", "tiling", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        self.ensure_column("jobs", "enhance_max_tokens", "INTEGER")
+            .await?;
         self.ensure_column("jobs", "ratio_follow", "TEXT").await?;
+        self.ensure_column("jobs", "enhancer", "TEXT").await?;
         self.ensure_column("tasks", "sub_stage", "TEXT").await?;
         self.ensure_column("tasks", "stats_json", "TEXT").await?;
         // Encode inputs, so jobs of one send share one encode (scheduler.rs `encode_cache_key`).
@@ -569,9 +750,7 @@ impl Database {
         Ok(())
     }
 
-    async fn next_version_tx(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    ) -> Result<i64> {
+    async fn next_version_tx(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<i64> {
         sqlx::query("UPDATE global_state SET version = version + 1 WHERE id = 1")
             .execute(&mut **tx)
             .await?;
@@ -640,22 +819,27 @@ impl Database {
             .await?;
 
             let (init_state, disabled_reason, lent, pending_lend) = if let Some(row) = existing {
-                let prev_state: String = row.get("state");
+                let prev_state: ExecutorState = row.get("state");
                 let prev_reason: Option<String> = row.get("disabled_reason");
                 let prev_lent: i64 = row.get("lent");
                 let prev_pending_lend: i64 = row.get("pending_lend");
-                if prev_state == "disabled" || prev_reason.is_some() {
-                    ("disabled".to_string(), prev_reason, prev_lent != 0, false)
-                } else if prev_lent != 0 || prev_state == "lent" {
-                    ("lent".to_string(), None, true, false)
+                if prev_state == ExecutorState::Disabled || prev_reason.is_some() {
+                    (ExecutorState::Disabled, prev_reason, prev_lent != 0, false)
+                } else if prev_lent != 0 || prev_state == ExecutorState::Lent {
+                    (ExecutorState::Lent, None, true, false)
                 } else {
-                    (ex.state.clone(), None, false, prev_pending_lend != 0)
+                    (ex.state, None, false, prev_pending_lend != 0)
                 }
             } else {
-                (ex.state.clone(), ex.disabled_reason.clone(), ex.lent, ex.pending_lend)
+                (
+                    ex.state,
+                    ex.disabled_reason.clone(),
+                    ex.lent,
+                    ex.pending_lend,
+                )
             };
 
-            let idle_since = if init_state == "idle" || init_state == "ready" {
+            let idle_since = if matches!(init_state, ExecutorState::Idle | ExecutorState::Ready) {
                 Some(now)
             } else {
                 None
@@ -691,7 +875,7 @@ impl Database {
             .bind(&ex.device)
             .bind(ex.mem_total_bytes as i64)
             .bind(&stages_json)
-            .bind(&init_state)
+            .bind(init_state)
             .bind(&disabled_reason)
             .bind(if lent { 1i64 } else { 0i64 })
             .bind(if pending_lend { 1i64 } else { 0i64 })
@@ -739,9 +923,15 @@ impl Database {
         Ok(true)
     }
 
-    /// Reclaims in-flight tasks for an agent that stayed offline past `reconnect_grace` (§7.3).
-    pub async fn expire_disconnected_agent_tasks(&self, agent_id: &str) -> Result<Vec<String>> {
-        self.reclaim_agent_tasks(agent_id, &[], true).await
+    /// Reclaims in-flight tasks for an agent that stayed offline past `reconnect_grace` (§7.3)
+    /// since `session` ended. A timer from an earlier session does nothing: the agent came
+    /// back since, and a later disconnect has its own timer.
+    pub async fn expire_disconnected_agent_tasks(
+        &self,
+        agent_id: &str,
+        session: &str,
+    ) -> Result<Vec<String>> {
+        self.reclaim_agent_tasks(agent_id, &[], Some(session)).await
     }
 
     /// On (re)registration: reclaims tasks the backend has on this agent that the agent no
@@ -753,7 +943,7 @@ impl Database {
         running: &[(String, u32, String)],
     ) -> Result<Vec<String>> {
         let keep: Vec<(String, u32)> = running.iter().map(|(t, a, _)| (t.clone(), *a)).collect();
-        let affected = self.reclaim_agent_tasks(agent_id, &keep, false).await?;
+        let affected = self.reclaim_agent_tasks(agent_id, &keep, None).await?;
         let now = now_s();
         for (task_id, attempt, executor_id) in running {
             sqlx::query(
@@ -783,16 +973,17 @@ impl Database {
         &self,
         agent_id: &str,
         keep: &[(String, u32)],
-        require_offline: bool,
+        offline_session: Option<&str>,
     ) -> Result<Vec<String>> {
         let mut tx = self.pool.begin().await?;
-        if require_offline {
-            let row = sqlx::query("SELECT online FROM agents WHERE id = ?")
+        if let Some(session) = offline_session {
+            let row = sqlx::query("SELECT online, session FROM agents WHERE id = ?")
                 .bind(agent_id)
                 .fetch_optional(&mut *tx)
                 .await?;
             if let Some(r) = row {
-                if r.get::<i64, _>("online") != 0 {
+                let current: Option<String> = r.get("session");
+                if r.get::<i64, _>("online") != 0 || current.as_deref() != Some(session) {
                     tx.commit().await?;
                     return Ok(Vec::new());
                 }
@@ -814,7 +1005,10 @@ impl Database {
             let job_id: String = tr.get("job_id");
             let attempt: i64 = tr.get("current_attempt");
             let attempts: i64 = tr.get("attempts");
-            if keep.iter().any(|(t, a)| *t == task_id && *a as i64 == attempt) {
+            if keep
+                .iter()
+                .any(|(t, a)| *t == task_id && *a as i64 == attempt)
+            {
                 continue;
             }
 
@@ -874,7 +1068,7 @@ impl Database {
             affected_jobs.push(job_id);
         }
 
-        if require_offline {
+        if offline_session.is_some() {
             sqlx::query(
                 "UPDATE executors
                  SET current_task_id = NULL, current_stage = NULL, current_model_id = NULL,
@@ -984,8 +1178,9 @@ impl Database {
         sqlx::query(
             "INSERT INTO jobs (
                 id, status, prompt, negative_prompt, width, height, steps, seed,
-                true_cfg_scale, enhance, meta, tiling, version, created_at, enhance_max_tokens
-            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                true_cfg_scale, enhance, meta, tiling, version, created_at, enhance_max_tokens,
+                enhancer
+            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job_id)
         .bind(&input.prompt)
@@ -1006,7 +1201,13 @@ impl Database {
         .bind(input.tiling as i64)
         .bind(ver)
         .bind(now)
-        .bind(input.enhance_max_tokens.filter(|_| input.enhance).map(|t| t as i64))
+        .bind(
+            input
+                .enhance_max_tokens
+                .filter(|_| input.enhance)
+                .map(|t| t as i64),
+        )
+        .bind(input.enhancer.as_deref().filter(|_| input.enhance))
         .execute(&mut *tx)
         .await?;
 
@@ -1070,8 +1271,11 @@ impl Database {
 
     /// Jobs (all, or changed since a version) with their tasks and provenance.
     pub async fn list_jobs(&self, changed_since: Option<i64>) -> Result<Vec<JobRecord>> {
-        self.load_jobs("j.version > ?", JobFilter::Version(changed_since.unwrap_or(i64::MIN)))
-            .await
+        self.load_jobs(
+            "j.version > ?",
+            JobFilter::Version(changed_since.unwrap_or(i64::MIN)),
+        )
+        .await
     }
 
     /// The jobs with these ids that exist, in one batch (the scheduler tick's jobs).
@@ -1080,14 +1284,21 @@ impl Database {
             return Ok(Vec::new());
         }
         let ids = serde_json::to_string(ids)?;
-        self.load_jobs("j.id IN (SELECT value FROM json_each(?))", JobFilter::Ids(ids)).await
+        self.load_jobs(
+            "j.id IN (SELECT value FROM json_each(?))",
+            JobFilter::Ids(ids),
+        )
+        .await
     }
 
     /// Jobs matching `cond` (on `jobs j`, with one `?` for `filter`) with their tasks,
     /// provenance and references, in four queries rather than four per job.
     async fn load_jobs(&self, cond: &str, filter: JobFilter) -> Result<Vec<JobRecord>> {
         let jobs_sql = format!("SELECT j.* FROM jobs j WHERE {cond} ORDER BY j.created_at DESC");
-        let rows = filter.bind(sqlx::query(&jobs_sql)).fetch_all(&self.pool).await?;
+        let rows = filter
+            .bind(sqlx::query(&jobs_sql))
+            .fetch_all(&self.pool)
+            .await?;
         if rows.is_empty() {
             return Ok(Vec::new());
         }
@@ -1095,12 +1306,18 @@ impl Database {
             "SELECT t.* FROM tasks t JOIN jobs j ON t.job_id = j.id
              WHERE {cond} ORDER BY t.job_id, t.seq ASC"
         );
-        let task_rows = filter.bind(sqlx::query(&tasks_sql)).fetch_all(&self.pool).await?;
+        let task_rows = filter
+            .bind(sqlx::query(&tasks_sql))
+            .fetch_all(&self.pool)
+            .await?;
         let attempts_sql = format!(
             "SELECT a.* FROM task_attempts a JOIN jobs j ON a.job_id = j.id
              WHERE {cond} AND a.status = 'done' ORDER BY a.attempt ASC"
         );
-        let attempt_rows = filter.bind(sqlx::query(&attempts_sql)).fetch_all(&self.pool).await?;
+        let attempt_rows = filter
+            .bind(sqlx::query(&attempts_sql))
+            .fetch_all(&self.pool)
+            .await?;
 
         let mut tasks: HashMap<String, Vec<TaskRecord>> = HashMap::new();
         for r in &task_rows {
@@ -1112,7 +1329,10 @@ impl Database {
              JOIN jobs j ON r.job_id = j.id JOIN uploads u ON r.sha256 = u.sha256
              WHERE {cond} ORDER BY r.job_id, r.idx"
         );
-        let reference_rows = filter.bind(sqlx::query(&references_sql)).fetch_all(&self.pool).await?;
+        let reference_rows = filter
+            .bind(sqlx::query(&references_sql))
+            .fetch_all(&self.pool)
+            .await?;
         let mut references: HashMap<String, Vec<JobReference>> = HashMap::new();
         for r in &reference_rows {
             references
@@ -1140,6 +1360,98 @@ impl Database {
                 job
             })
             .collect())
+    }
+
+    /// One page of jobs, newest first, after `q.before` and matching its filters. Returns the
+    /// page and the cursor of the next one (`None`: this was the last).
+    pub async fn list_jobs_page(
+        &self,
+        q: &JobPageQuery,
+    ) -> Result<(Vec<JobRecord>, Option<String>)> {
+        let mut sql = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM jobs WHERE 1 = 1");
+        if q.done_only {
+            sql.push(" AND status = 'done'");
+        }
+        if q.favorites_only {
+            sql.push(" AND favorite = 1");
+        }
+        if let Some(text) = q.search.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            let like = format!(
+                "%{}%",
+                text.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            );
+            sql.push(" AND (prompt LIKE ")
+                .push_bind(like.clone())
+                .push(" ESCAPE '\\'");
+            sql.push(" OR enhanced_prompt LIKE ")
+                .push_bind(like.clone())
+                .push(" ESCAPE '\\'");
+            sql.push(" OR CAST(seed AS TEXT) LIKE ")
+                .push_bind(like)
+                .push(" ESCAPE '\\')");
+        }
+        if let Some(ratio) = q.ratio {
+            sql.push(" AND abs(CAST(width AS REAL) / height - ")
+                .push_bind(ratio)
+                .push(") < 0.01");
+        }
+        if let Some((created_at, id)) = q.before.as_deref().and_then(parse_job_cursor) {
+            sql.push(" AND (created_at < ")
+                .push_bind(created_at)
+                .push(" OR (created_at = ")
+                .push_bind(created_at)
+                .push(" AND id < ")
+                .push_bind(id)
+                .push("))");
+        }
+        let limit = q.limit.clamp(1, 200);
+        sql.push(" ORDER BY created_at DESC, id DESC LIMIT ")
+            .push_bind(limit as i64 + 1);
+        let mut ids: Vec<String> = sql
+            .build()
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|r| r.get("id"))
+            .collect();
+        let more = ids.len() > limit as usize;
+        ids.truncate(limit as usize);
+        let mut jobs = self.get_jobs(&ids).await?;
+        jobs.sort_by(|a, b| {
+            b.created_at
+                .total_cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        let next = if more {
+            jobs.last().map(job_cursor)
+        } else {
+            None
+        };
+        Ok((jobs, next))
+    }
+
+    /// Counts for the gallery's filters: finished images in all, favorites, and per size.
+    pub async fn gallery_facets(&self) -> Result<GalleryFacets> {
+        let rows = sqlx::query(
+            "SELECT width, height, COUNT(*) AS n, SUM(favorite) AS favorites
+             FROM jobs WHERE status = 'done' GROUP BY width, height",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut facets = GalleryFacets::default();
+        for r in rows {
+            let count = r.get::<i64, _>("n") as u64;
+            facets.total += count;
+            facets.favorites += r.get::<Option<i64>, _>("favorites").unwrap_or(0) as u64;
+            facets.sizes.push(SizeCount {
+                width: r.get::<i64, _>("width") as u32,
+                height: r.get::<i64, _>("height") as u32,
+                count,
+            });
+        }
+        Ok(facets)
     }
 
     pub async fn list_job_references(&self, job_id: &str) -> Result<Vec<JobReference>> {
@@ -1265,7 +1577,10 @@ impl Database {
     }
 
     /// Whether any record still points at blob `sha256`.
-    async fn blob_in_use_tx(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sha256: &str) -> Result<bool> {
+    async fn blob_in_use_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sha256: &str,
+    ) -> Result<bool> {
         let row = sqlx::query(
             "SELECT 1 FROM artifacts WHERE sha256 = ?1
              UNION ALL SELECT 1 FROM uploads WHERE sha256 = ?1
@@ -1293,10 +1608,11 @@ impl Database {
         let mut candidates = Vec::new();
         for r in rows {
             let sha: String = r.get("sha256");
-            let latents = sqlx::query("SELECT blob_sha256 FROM reference_latents WHERE source_sha256 = ?")
-                .bind(&sha)
-                .fetch_all(&mut *tx)
-                .await?;
+            let latents =
+                sqlx::query("SELECT blob_sha256 FROM reference_latents WHERE source_sha256 = ?")
+                    .bind(&sha)
+                    .fetch_all(&mut *tx)
+                    .await?;
             candidates.extend(latents.iter().map(|l| l.get::<String, _>("blob_sha256")));
             sqlx::query("DELETE FROM reference_latents WHERE source_sha256 = ?")
                 .bind(&sha)
@@ -1327,7 +1643,11 @@ impl Database {
         Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
     }
 
-    pub async fn set_job_favorite(&self, job_id: &str, favorite: bool) -> Result<Option<JobRecord>> {
+    pub async fn set_job_favorite(
+        &self,
+        job_id: &str,
+        favorite: bool,
+    ) -> Result<Option<JobRecord>> {
         let mut tx = self.pool.begin().await?;
         let ver = Self::next_version_tx(&mut tx).await?;
         let res = sqlx::query("UPDATE jobs SET favorite = ?, version = ? WHERE id = ?")
@@ -1367,7 +1687,12 @@ impl Database {
             .await?;
         Ok(rows
             .iter()
-            .map(|r| (r.get::<String, _>("status"), r.get::<i64, _>("n").max(0) as u64))
+            .map(|r| {
+                (
+                    r.get::<String, _>("status"),
+                    r.get::<i64, _>("n").max(0) as u64,
+                )
+            })
             .collect())
     }
 
@@ -1450,9 +1775,7 @@ impl Database {
                     .get::<Option<String>, _>("worker_version")
                     .unwrap_or_default(),
                 timings,
-                peak_mem_bytes: r
-                    .get::<Option<i64>, _>("peak_mem_bytes")
-                    .unwrap_or(0) as u64,
+                peak_mem_bytes: r.get::<Option<i64>, _>("peak_mem_bytes").unwrap_or(0) as u64,
             }
         }
     }
@@ -1464,6 +1787,9 @@ impl Database {
             prompt: r.get("prompt"),
             enhanced_prompt: r.get("enhanced_prompt"),
             thinking: r.get("thinking"),
+            has_thinking: r
+                .get::<Option<String>, _>("thinking")
+                .is_some_and(|t| !t.is_empty()),
             negative_prompt: r.get("negative_prompt"),
             width: r.get::<i64, _>("width") as u32,
             height: r.get::<i64, _>("height") as u32,
@@ -1474,6 +1800,7 @@ impl Database {
             enhance_max_tokens: r
                 .get::<Option<i64>, _>("enhance_max_tokens")
                 .map(|t| t as u32),
+            enhancer: r.get("enhancer"),
             tiling: r.get::<Option<i64>, _>("tiling").unwrap_or(0) != 0,
             wh_ratio: r.get("wh_ratio"),
             ratio_follow: r.get("ratio_follow"),
@@ -1593,7 +1920,7 @@ impl Database {
         &self,
         agent_id: &str,
         executor_id: &str,
-        new_state: &str,
+        new_state: ExecutorState,
         stage: Option<&str>,
         pid: Option<u32>,
         load_s: Option<f64>,
@@ -1612,12 +1939,15 @@ impl Database {
             tx.commit().await?;
             return Ok(());
         };
-        let prev_state: String = row.get("state");
+        let prev_state: ExecutorState = row.get("state");
         let current_task: Option<String> = row.get("current_task_id");
         // The agent reports READY right after Done. By then the backend may already have
         // assigned the next task (state busy, current_task_id set); that READY is stale and
         // must not reopen the executor for a second assignment.
-        if new_state == "ready" && prev_state == "busy" && current_task.is_some() {
+        if new_state == ExecutorState::Ready
+            && prev_state == ExecutorState::Busy
+            && current_task.is_some()
+        {
             tx.commit().await?;
             return Ok(());
         }
@@ -1625,29 +1955,34 @@ impl Database {
         let lent: i64 = row.get("lent");
         let pending_lend: i64 = row.get("pending_lend");
 
-        if prev_state == "disabled" || disabled_reason.is_some() {
+        if prev_state == ExecutorState::Disabled || disabled_reason.is_some() {
             tx.commit().await?;
             return Ok(());
         }
 
-        let effective_state = if new_state == "idle" && (lent != 0 || pending_lend != 0) {
-            "lent"
+        let effective_state =
+            if new_state == ExecutorState::Idle && (lent != 0 || pending_lend != 0) {
+                ExecutorState::Lent
+            } else {
+                new_state
+            };
+        let effective_lent = if effective_state == ExecutorState::Lent {
+            1i64
         } else {
-            new_state
+            lent
         };
-        let effective_lent = if effective_state == "lent" { 1i64 } else { lent };
-        let effective_pending_lend = if effective_state == "lent" {
+        let effective_pending_lend = if effective_state == ExecutorState::Lent {
             0i64
         } else {
             pending_lend
         };
-        let idle_since = if effective_state == "idle" || effective_state == "ready" {
+        let idle_since = if matches!(effective_state, ExecutorState::Idle | ExecutorState::Ready) {
             Some(now)
         } else {
             None
         };
 
-        if effective_state == "idle" || effective_state == "lent" {
+        if matches!(effective_state, ExecutorState::Idle | ExecutorState::Lent) {
             sqlx::query(
                 "UPDATE executors
                  SET state = ?, current_stage = NULL, current_model_id = NULL, current_model_rev = NULL,
@@ -1717,7 +2052,7 @@ impl Database {
             return Ok(None);
         };
         let job = Self::row_to_job(&jr);
-        if job.status == "cancelled" || job.status == "failed" {
+        if job.status == JobStatus::Cancelled || job.status == JobStatus::Failed {
             tx.commit().await?;
             return Ok(None);
         }
@@ -1784,7 +2119,7 @@ impl Database {
         .await?;
 
         tx.commit().await?;
-        task.status = "assigned".to_string();
+        task.status = TaskStatus::Assigned;
         task.attempts = attempts;
         task.current_attempt = attempt;
         task.assigned_agent = Some(agent_id.to_string());
@@ -1806,21 +2141,17 @@ impl Database {
         stats: Option<&HashMap<String, f64>>,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT job_id, current_attempt, status FROM tasks WHERE id = ?",
-        )
-        .bind(task_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let row = sqlx::query("SELECT job_id, current_attempt, status FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
         let Some(r) = row else {
             tx.commit().await?;
             return Ok(false);
         };
         let current_attempt = r.get::<i64, _>("current_attempt") as u32;
-        let status: String = r.get("status");
-        if current_attempt != attempt
-            || !matches!(status.as_str(), "assigned" | "running" | "uploading")
-        {
+        let status: TaskStatus = r.get("status");
+        if current_attempt != attempt || !status.is_active() {
             tx.commit().await?;
             return Ok(false);
         }
@@ -1845,11 +2176,13 @@ impl Database {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("UPDATE task_attempts SET status = 'running' WHERE task_id = ? AND attempt = ?")
-            .bind(task_id)
-            .bind(attempt as i64)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE task_attempts SET status = 'running' WHERE task_id = ? AND attempt = ?",
+        )
+        .bind(task_id)
+        .bind(attempt as i64)
+        .execute(&mut *tx)
+        .await?;
 
         sqlx::query("UPDATE jobs SET version = ? WHERE id = ?")
             .bind(ver)
@@ -1875,20 +2208,16 @@ impl Database {
         reference_latents: Option<(&ReferenceLatents, &str)>,
     ) -> Result<ArtifactRecord> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT job_id, current_attempt, status FROM tasks WHERE id = ?",
-        )
-        .bind(task_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let row = sqlx::query("SELECT job_id, current_attempt, status FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
         let Some(r) = row else {
             bail!("unknown task {task_id}");
         };
         let current_attempt = r.get::<i64, _>("current_attempt") as u32;
-        let status: String = r.get("status");
-        if current_attempt != attempt
-            || !matches!(status.as_str(), "assigned" | "running" | "uploading")
-        {
+        let status: TaskStatus = r.get("status");
+        if current_attempt != attempt || !status.is_active() {
             bail!("stale or inactive attempt {attempt} for task {task_id} (status={status}, current={current_attempt})");
         }
         let job_id: String = r.get("job_id");
@@ -1952,14 +2281,13 @@ impl Database {
         attempt: u32,
         name: &str,
     ) -> Result<Option<ArtifactRecord>> {
-        let row = sqlx::query(
-            "SELECT * FROM artifacts WHERE task_id = ? AND attempt = ? AND name = ?",
-        )
-        .bind(task_id)
-        .bind(attempt as i64)
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row =
+            sqlx::query("SELECT * FROM artifacts WHERE task_id = ? AND attempt = ? AND name = ?")
+                .bind(task_id)
+                .bind(attempt as i64)
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.map(|r| ArtifactRecord {
             id: r.get("id"),
             job_id: r.get("job_id"),
@@ -2023,9 +2351,7 @@ impl Database {
             return Ok(None);
         };
         let task = Self::row_to_task(&tr);
-        if task.current_attempt != attempt
-            || !matches!(task.status.as_str(), "assigned" | "running" | "uploading")
-        {
+        if task.current_attempt != attempt || !task.status.is_active() {
             tx.commit().await?;
             return Ok(None);
         }
@@ -2120,13 +2446,12 @@ impl Database {
         now: f64,
         ver: i64,
     ) -> Result<bool> {
-        let next_row = sqlx::query(
-            "SELECT id FROM tasks WHERE job_id = ? AND seq = ? AND status = 'waiting'",
-        )
-        .bind(&task.job_id)
-        .bind(task.seq + 1)
-        .fetch_optional(&mut **tx)
-        .await?;
+        let next_row =
+            sqlx::query("SELECT id FROM tasks WHERE job_id = ? AND seq = ? AND status = 'waiting'")
+                .bind(&task.job_id)
+                .bind(task.seq + 1)
+                .fetch_optional(&mut **tx)
+                .await?;
 
         if let Some(nr) = next_row {
             let next_task_id: String = nr.get("id");
@@ -2212,11 +2537,12 @@ impl Database {
             return Ok(false);
         };
         let task = Self::row_to_task(&tr);
-        let Some(src) = sqlx::query("SELECT * FROM task_attempts WHERE task_id = ? AND attempt = ?")
-            .bind(&source.task_id)
-            .bind(source.attempt as i64)
-            .fetch_optional(&mut *tx)
-            .await?
+        let Some(src) =
+            sqlx::query("SELECT * FROM task_attempts WHERE task_id = ? AND attempt = ?")
+                .bind(&source.task_id)
+                .bind(source.attempt as i64)
+                .fetch_optional(&mut *tx)
+                .await?
         else {
             tx.commit().await?;
             return Ok(false);
@@ -2263,7 +2589,10 @@ impl Database {
                 cache_key
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'intermediate', ?, ?, ?)",
         )
-        .bind(format!("art_{}", ulid::Ulid::new().to_string().to_lowercase()))
+        .bind(format!(
+            "art_{}",
+            ulid::Ulid::new().to_string().to_lowercase()
+        ))
         .bind(&task.job_id)
         .bind(task_id)
         .bind(attempt as i64)
@@ -2278,10 +2607,11 @@ impl Database {
 
         sqlx::query(
             "UPDATE tasks
-             SET status = 'done', current_attempt = ?, blocked_reason = NULL, sub_stage = NULL,
-                 started_at = ?, finished_at = ?
+             SET status = 'done', attempts = ?, current_attempt = ?, blocked_reason = NULL,
+                 sub_stage = NULL, started_at = ?, finished_at = ?
              WHERE id = ?",
         )
+        .bind((task.attempts + 1) as i64)
         .bind(attempt as i64)
         .bind(now)
         .bind(now)
@@ -2310,12 +2640,15 @@ impl Database {
         &self,
         task_id: &str,
         attempt: u32,
-        failure_class: &str,
-        detail: &str,
-        exit_code: i32,
-        signal: i32,
-        kernel_log_tail: &str,
+        failure: AttemptFailure<'_>,
     ) -> Result<Option<String>> {
+        let AttemptFailure {
+            class: failure_class,
+            detail,
+            exit_code,
+            signal,
+            kernel_log_tail,
+        } = failure;
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -2326,9 +2659,7 @@ impl Database {
             return Ok(None);
         };
         let task = Self::row_to_task(&tr);
-        if task.current_attempt != attempt
-            || !matches!(task.status.as_str(), "assigned" | "running" | "uploading")
-        {
+        if task.current_attempt != attempt || !task.status.is_active() {
             tx.commit().await?;
             return Ok(None);
         }
@@ -2356,10 +2687,7 @@ impl Database {
         if let (Some(agent_id), Some(executor_id)) = (&task.assigned_agent, &task.assigned_executor)
         {
             let key = format!("{agent_id}:{executor_id}");
-            if matches!(
-                failure_class,
-                "wedged" | "gpu_fault" | "device_mismatch"
-            ) {
+            if matches!(failure_class, "wedged" | "gpu_fault" | "device_mismatch") {
                 let reason = format!("{failure_class}: {detail}");
                 sqlx::query(
                     "UPDATE executors
@@ -2386,13 +2714,28 @@ impl Database {
         }
 
         if failure_class == "cancelled" {
+            // A user cancel has already ended the task (and never gets here), so this is a
+            // cancel from the agent's side: end the whole job, as `cancel_job` does, rather
+            // than leave it running with nothing left to run.
             sqlx::query(
                 "UPDATE tasks
-                 SET status = 'cancelled', assigned_agent = NULL, assigned_executor = NULL, finished_at = ?
-                 WHERE id = ?",
+                 SET status = 'cancelled', assigned_agent = NULL, assigned_executor = NULL,
+                     blocked_reason = NULL, finished_at = COALESCE(finished_at, ?)
+                 WHERE job_id = ? AND status NOT IN ('done', 'failed', 'cancelled')",
             )
             .bind(now)
-            .bind(task_id)
+            .bind(&task.job_id)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                "UPDATE jobs
+                 SET status = 'cancelled', blocked_reason = NULL, finished_at = ?, version = ?
+                 WHERE id = ? AND status NOT IN ('done', 'failed', 'cancelled')",
+            )
+            .bind(now)
+            .bind(ver)
+            .bind(&task.job_id)
             .execute(&mut *tx)
             .await?;
         } else if task.attempts >= 2 {
@@ -2466,9 +2809,7 @@ impl Database {
         let task = Self::row_to_task(&tr);
         // A rejection for an attempt that is no longer current (or a task that already
         // moved on) is stale: requeueing it would rewind a finished task.
-        if task.current_attempt != attempt
-            || !matches!(task.status.as_str(), "assigned" | "running" | "uploading")
-        {
+        if task.current_attempt != attempt || !task.status.is_active() {
             tx.commit().await?;
             return Ok(());
         }
@@ -2527,7 +2868,10 @@ impl Database {
     }
 
     /// Cancels a job and any active/queued tasks. Returns `(agent_id, task_id, attempt)` if an in-flight task needs `Cancel`.
-    pub async fn cancel_job(&self, job_id: &str) -> Result<Option<(Option<(String, String, u32)>, JobRecord)>> {
+    pub async fn cancel_job(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(Option<(String, String, u32)>, JobRecord)>> {
         let mut tx = self.pool.begin().await?;
         let j_row = sqlx::query("SELECT * FROM jobs WHERE id = ?")
             .bind(job_id)
@@ -2538,10 +2882,12 @@ impl Database {
             return Ok(None);
         };
         let job = Self::row_to_job(&jr);
-        if matches!(job.status.as_str(), "done" | "failed" | "cancelled") {
+        if matches!(
+            job.status,
+            JobStatus::Done | JobStatus::Failed | JobStatus::Cancelled
+        ) {
             tx.commit().await?;
-            let full = self.get_job(job_id).await?.unwrap();
-            return Ok(Some((None, full)));
+            return Ok(self.get_job(job_id).await?.map(|full| (None, full)));
         }
 
         let now = now_s();
@@ -2597,8 +2943,36 @@ impl Database {
         .await?;
 
         tx.commit().await?;
-        let full = self.get_job(job_id).await?.unwrap();
+        // Deleted since the commit: still return the signal, the agent has to stop the task.
+        let full = match self.get_job(job_id).await? {
+            Some(full) => full,
+            None => JobRecord {
+                status: JobStatus::Cancelled,
+                finished_at: Some(now),
+                ..job
+            },
+        };
         Ok(Some((cancel_signal, full)))
+    }
+
+    /// Changes who rewrites an Enhance job's prompt (`None`: the built-in enhancer), for a
+    /// retry with another enhancer. Only a failed or cancelled job changes.
+    pub async fn set_job_enhancer(&self, job_id: &str, enhancer: Option<&str>) -> Result<bool> {
+        let done = sqlx::query(
+            "UPDATE jobs SET enhancer = ? WHERE id = ? AND enhance = 1 AND status IN ('failed', 'cancelled')",
+        )
+        .bind(enhancer)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    /// Requeues the in-flight tasks of cloud enhancers (docs/CLOUD_ENHANCERS.md): they ran in
+    /// a Studio process that has ended. Called at startup.
+    pub async fn reclaim_cloud_tasks(&self) -> Result<Vec<String>> {
+        self.reclaim_agent_tasks(crate::cloud::CLOUD_AGENT, &[], None)
+            .await
     }
 
     /// Retries a failed or cancelled job from its first incomplete task (preserving completed stage artifacts!).
@@ -2613,7 +2987,7 @@ impl Database {
             return Ok(None);
         };
         let job = Self::row_to_job(&jr);
-        if !matches!(job.status.as_str(), "failed" | "cancelled") {
+        if !matches!(job.status, JobStatus::Failed | JobStatus::Cancelled) {
             tx.commit().await?;
             return self.get_job(job_id).await;
         }
@@ -2625,19 +2999,30 @@ impl Database {
             .fetch_all(&mut *tx)
             .await?;
 
-        let mut queued_one = false;
-        for r in task_rows {
-            let t = Self::row_to_task(&r);
-            if t.status == "done" {
-                continue;
-            }
-            let new_status = if !queued_one {
-                queued_one = true;
-                "queued"
-            } else {
-                "waiting"
+        let tasks: Vec<TaskRecord> = task_rows.iter().map(Self::row_to_task).collect();
+        // The first task to run: the first unfinished one, moved back past finished stages
+        // whose output it needs and the intermediate cleanup has since deleted.
+        let mut start = tasks
+            .iter()
+            .position(|t| t.status != TaskStatus::Done)
+            .unwrap_or(tasks.len());
+        while start > 0 && start < tasks.len() {
+            let Some(input) = stage_input_artifact(&tasks[start].stage) else {
+                break;
             };
-            let queued_at = if new_status == "queued" {
+            if Self::job_artifact_present_tx(&mut tx, job_id, input).await? {
+                break;
+            }
+            start -= 1;
+        }
+
+        for (i, t) in tasks.iter().enumerate().skip(start) {
+            let new_status = if i == start {
+                TaskStatus::Queued
+            } else {
+                TaskStatus::Waiting
+            };
+            let queued_at = if new_status == TaskStatus::Queued {
                 Some(now)
             } else {
                 None
@@ -2671,8 +3056,28 @@ impl Database {
         self.get_job(job_id).await
     }
 
+    /// Whether the job still has `name` from a finished task's current attempt (what the
+    /// dispatcher would send the next stage).
+    async fn job_artifact_present_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        job_id: &str,
+        name: &str,
+    ) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT 1 FROM artifacts a
+             JOIN tasks t ON a.task_id = t.id AND a.attempt = t.current_attempt
+             WHERE a.job_id = ? AND a.name = ? AND t.status = 'done'
+             LIMIT 1",
+        )
+        .bind(job_id)
+        .bind(name)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.is_some())
+    }
+
     /// Deletes a job and returns the SHA-256 hashes of blobs that are no longer referenced by any remaining artifact.
-    pub async fn delete_job(&self, job_id: &str) -> Result< Option<Vec<String>> > {
+    pub async fn delete_job(&self, job_id: &str) -> Result<Option<Vec<String>>> {
         let mut tx = self.pool.begin().await?;
         let exists = sqlx::query("SELECT id FROM jobs WHERE id = ?")
             .bind(job_id)
@@ -2719,18 +3124,16 @@ impl Database {
             return Ok(None);
         };
         let now = now_s();
-        if ex.state == "busy" {
+        if ex.state == ExecutorState::Busy {
             // Set pending_lend; scheduler will not assign further work, and when task finishes it releases
-            sqlx::query(
-                "UPDATE executors SET pending_lend = 1, last_seen_at = ? WHERE key = ?",
-            )
-            .bind(now)
-            .bind(&ex.key)
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("UPDATE executors SET pending_lend = 1, last_seen_at = ? WHERE key = ?")
+                .bind(now)
+                .bind(&ex.key)
+                .execute(&self.pool)
+                .await?;
             Ok(Some((ex.agent_id, ex.id, false)))
         } else {
-            let should_release = matches!(ex.state.as_str(), "ready" | "starting");
+            let should_release = matches!(ex.state, ExecutorState::Ready | ExecutorState::Starting);
             sqlx::query(
                 "UPDATE executors
                  SET state = 'lent', lent = 1, pending_lend = 0, current_stage = NULL,
@@ -2774,7 +3177,10 @@ impl Database {
             return Ok(None);
         };
         let now = now_s();
-        let should_release = matches!(ex.state.as_str(), "ready" | "starting" | "busy");
+        let should_release = matches!(
+            ex.state,
+            ExecutorState::Ready | ExecutorState::Starting | ExecutorState::Busy
+        );
         sqlx::query(
             "UPDATE executors
              SET state = 'disabled', disabled_reason = ?, current_stage = NULL,
@@ -2810,11 +3216,13 @@ impl Database {
 
     /// Garbage-collects intermediate artifacts for completed jobs, or failed/cancelled jobs older than `failed_retention_s`,
     /// or all non-active intermediate artifacts when `emergency_disk_pressure` is true.
+    /// `only_job` limits it to one job (its own intermediates once it is done).
     /// Returns SHA-256 hashes of blobs that are no longer referenced in `artifacts`.
     pub async fn gc_intermediate_artifacts(
         &self,
         failed_retention_s: f64,
         emergency_disk_pressure: bool,
+        only_job: Option<&str>,
     ) -> Result<Vec<String>> {
         let mut tx = self.pool.begin().await?;
         let cutoff = now_s() - failed_retention_s;
@@ -2822,8 +3230,10 @@ impl Database {
             sqlx::query(
                 "SELECT a.id, a.sha256 FROM artifacts a
                  JOIN jobs j ON a.job_id = j.id
-                 WHERE a.kind = 'intermediate' AND j.status IN ('done', 'failed', 'cancelled')",
+                 WHERE a.kind = 'intermediate' AND j.status IN ('done', 'failed', 'cancelled')
+                   AND (?1 IS NULL OR j.id = ?1)",
             )
+            .bind(only_job)
             .fetch_all(&mut *tx)
             .await?
         } else {
@@ -2831,9 +3241,11 @@ impl Database {
                 "SELECT a.id, a.sha256 FROM artifacts a
                  JOIN jobs j ON a.job_id = j.id
                  WHERE a.kind = 'intermediate'
-                   AND (j.status = 'done' OR (j.status IN ('failed', 'cancelled') AND j.finished_at < ?))",
+                   AND (j.status = 'done' OR (j.status IN ('failed', 'cancelled') AND j.finished_at < ?1))
+                   AND (?2 IS NULL OR j.id = ?2)",
             )
             .bind(cutoff)
+            .bind(only_job)
             .fetch_all(&mut *tx)
             .await?
         };

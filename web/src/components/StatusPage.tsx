@@ -14,15 +14,15 @@ import { controlExecutorApi } from '../services/api';
 
 const SPILL_WARN_BYTES = 1024 ** 3;
 
-interface StatusModalProps {
-  isOpen: boolean;
+interface StatusPageProps {
+  /** Leave the page (Esc, the close button): back to where it was opened from. */
   onClose: () => void;
   health: WorkerHealth;
   onRefresh: () => void;
 }
 
-export const StatusModal: React.FC<StatusModalProps> = ({
-  isOpen,
+/** The system view at `/status`: a page of its own, not a layer over the timeline. */
+export const StatusPage: React.FC<StatusPageProps> = ({
   onClose,
   health,
   onRefresh,
@@ -30,15 +30,12 @@ export const StatusModal: React.FC<StatusModalProps> = ({
   const [busyExecutorId, setBusyExecutorId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
+  }, [onClose]);
 
   const formatBytes = (bytes: number) => {
     const gb = bytes / (1024 * 1024 * 1024);
@@ -93,14 +90,8 @@ export const StatusModal: React.FC<StatusModalProps> = ({
   const queues = health.queues || [];
 
   return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl rounded-2xl bg-[#fcf9f2] dark:bg-[#1a1a17] text-[#1c1c18] dark:text-[#f3f0e9] border border-[#e5e2db] dark:border-[#2e2e2a] shadow-2xl overflow-hidden flex flex-col"
-      >
+    <div className="flex-1 w-full max-w-3xl mx-auto px-4 py-6">
+      <div className="w-full rounded-2xl bg-[#fcf9f2] dark:bg-[#1a1a17] text-[#1c1c18] dark:text-[#f3f0e9] border border-[#e5e2db] dark:border-[#2e2e2a] shadow-xs overflow-hidden flex flex-col">
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-[#e5e2db] dark:border-[#2e2e2a] flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -120,6 +111,7 @@ export const StatusModal: React.FC<StatusModalProps> = ({
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[#58423a] dark:text-[#a09088] transition-colors cursor-pointer"
+              title="Close (Esc)"
             >
               <X className="w-4 h-4" />
             </button>
@@ -127,7 +119,7 @@ export const StatusModal: React.FC<StatusModalProps> = ({
         </div>
 
         {/* Modal Content */}
-        <div className="p-6 space-y-6 overflow-y-auto max-h-[78vh]">
+        <div className="p-6 space-y-6">
           {/* Queue strip (§11.1): 4 stage boxes with depth, oldest wait, and blocked reasons */}
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -368,15 +360,6 @@ export const StatusModal: React.FC<StatusModalProps> = ({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-[#e5e2db] dark:border-[#2e2e2a] bg-[#f6f3ec] dark:bg-[#232320] flex items-center justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[#a53705] text-white hover:opacity-90 transition-opacity cursor-pointer"
-          >
-            Close
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -180,8 +180,8 @@ sycl-ls     # note which level_zero:N are the B60s; an integrated GPU may be :0
 ```
 
 - Expose only the discrete cards with `ONEAPI_DEVICE_SELECTOR` and set
-  `ZE_ENABLE_PCI_ID_DEVICE_ORDER=1` so device indices follow PCI order. The manager
-  then gives each stage worker exactly one card.
+  `ZE_ENABLE_PCI_ID_DEVICE_ORDER=1` so device indices follow PCI order. The agent
+  then gives each stage worker exactly one card and checks it opened only that one.
 - The cards sit on different root ports: there is no peer-to-peer. Moving whole
   components or files between cards is fine; splitting layers across cards is not.
   `cannot be used for peer-to-peer DMA` at device init is expected and harmless.
@@ -271,12 +271,16 @@ python -c "import torch; assert '+xpu' in torch.__version__, torch.__version__"
 
 ```bash
 sudo dmesg -T | grep -E 'xe 0000|Fault|GuC|engine reset' | tail -30   # GPU faults
-docker compose logs -f                                                # manager + worker output
-curl -s localhost:8000/stage_runs | jq '.[0:5]'                       # recent worker exits and why
+docker compose logs -f                              # agent + worker output (deploy/aries)
+curl -s localhost:9464/healthz | jq                  # agent: connected, executor states
+curl -s http://studio.lan:8080/api/system | jq       # Studio: executors, live memory, queue, blocked reasons
+sqlite3 data/studio.db "SELECT stage, executor, failure_class, exit_code, signal, failure_detail
+  FROM task_attempts WHERE status = 'failed' ORDER BY finished_at DESC LIMIT 5"   # recent failures and why
 ```
 
 - Workers run under `python -X faulthandler`, so a GPU fault that kills one leaves a
-  Python stack in the manager log. The manager classifies the exit (`oom_kill`,
-  `wedged`, `python_error`) and retries the stage once.
+  Python stack in the agent log. The agent classifies the exit (`oom_kill`, `wedged`,
+  `gpu_fault`, `python_error`, …) with the kernel log tail, and Studio stores it on the
+  attempt and retries the task once.
 - A crash right after the last denoise step means decode: check that nothing else held
   VRAM on that card, or that the job used tiled decode.

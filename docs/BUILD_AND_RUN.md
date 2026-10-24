@@ -1,6 +1,6 @@
 # Aries Image Studio — Build and run
 
-How to build Aries Image Studio 0.4.0 (Architecture V3) and run it: with Docker Compose
+How to build Aries Image Studio 0.5.0 (Architecture V3) and run it: with Docker Compose
 (recommended), or from source for development. For the 0.2.1 manager, use the
 `release/v0.2.1` branch and its README.
 
@@ -230,8 +230,8 @@ inside containers, use the host's IP address.
 
 ## 7. Make the first image
 
-In the browser, type a prompt and press Enter. The default is one 2048² image at 40
-steps. For a quick check pick **¼** size and **Draft**. The first job loads each model
+In the browser, type a prompt and press Enter. The default is one 2048² image at 20
+steps (Standard). For a quick check pick **¼** size and **Draft**. The first job loads each model
 from disk, so it takes longer than the next ones.
 
 From the command line:
@@ -283,11 +283,13 @@ connects. Back up the data directory to keep your history (stop Studio first, or
 
 ## 9. Build from source (development)
 
+Studio and the agent need the same `<token>`; make one with `openssl rand -hex 32`.
+
 **Studio** (repo root):
 
 ```bash
 cd web && npm ci && npm run build && cd ..        # Studio serves web/dist
-ARIES_AGENT_TOKEN=dev-token \
+ARIES_AGENT_TOKEN=<token> \
 ARIES_DATA_DIR=./data \
 ARIES_STATIC_DIR=web/dist \
 ARIES_ARTIFACT_BASE_URL=http://<this host>:8080 \
@@ -316,7 +318,7 @@ uv pip install "git+https://github.com/huggingface/diffusers.git@b800f828f3951c4
 uv pip install -e .
 python -c "import torch; assert '+xpu' in torch.__version__"
 
-ARIES_AGENT_TOKEN=dev-token \
+ARIES_AGENT_TOKEN=<token> \
 ARIES_BACKEND_GRPC_URL=studio.lan:50051 \
 ARIES_METRICS_URL=http://<this host>:9464/metrics \
 ARIES_MODEL_PATH=/srv/models/qwen-image-2.1 \
@@ -333,8 +335,8 @@ The user running it needs to be in the `render` and `video` groups.
 **Tests and checks** (run all three before committing):
 
 ```bash
-cd studio && cargo test                                  # API, scheduler, contract tests
-cd backend && pip install -e ".[dev]" && pytest          # mocks torch/diffusers; no GPU needed
+cd studio && cargo fmt --check && cargo clippy --all-targets && cargo test   # API, scheduler, contract tests
+cd backend && pip install -e ".[dev]" && ruff check && pytest              # mocks torch/diffusers; no GPU needed
 cd web && npm run build && npm run lint
 ```
 
@@ -352,7 +354,7 @@ validation and the contract tests on both sides.
 
 ## 10. Configuration reference
 
-**Studio** (environment; the compose file sets the first three)
+**Studio** (environment; the compose file sets the token, `ARIES_ARTIFACT_BASE_URL` and `RUST_LOG`, and mounts the data directory)
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -369,6 +371,13 @@ validation and the contract tests on both sides.
 | `ARIES_RECONNECT_GRACE_S` | `30` | How long a disconnected agent keeps its running tasks |
 | `ARIES_DISK_WATERMARK_PCT` | `80` | Refuse new jobs above this disk usage |
 | `ARIES_REFERENCE_RES` | `1024` | Reference images are resized to about this side squared (~1 MP); multiples of 32 from 256. Changing it re-encodes references once (their stored latents are keyed by it) |
+| `ARIES_CLOUD_ENHANCERS` | `off` | `on` offers cloud prompt enhancers for each key below (CLOUD_ENHANCERS.md). The prompt and any reference images then go to that provider, and its terms apply |
+| `ANTHROPIC_API_KEY` · `ARIES_ANTHROPIC_MODEL` | unset · `claude-sonnet-5-5` | Claude as an enhancer |
+| `GEMINI_API_KEY` | unset | Gemini API models as enhancers |
+| `ARIES_GEMINI_MODELS` | `gemini-3.5-flash-lite:15:250000` | The Gemini models offered, each `model:rpm:tpm`: requests and tokens a minute Studio sends it (the free tiers' limits); requests past them wait. `ARIES_ANTHROPIC_RPM` · `_TPM` do the same for Claude, `0` (no limit) by default |
+| `ARIES_GEMINI_THINKING` | `high` | The Gemini models' thinking level; `minimal` is faster, without reasoning |
+| `ARIES_CLOUD_ENHANCE_CONCURRENCY` | `4` | Cloud requests in flight per enhancer (model) |
+| `ARIES_CLOUD_ENHANCER_PROMPT_FILE` | unset | A rewriting prompt to use instead of the packaged one |
 | `RUST_LOG` | `info` | Log filter, e.g. `info,aries_image_studio=debug` |
 
 **Agent** (environment; `deploy/aries/compose.yaml` sets the paths)
@@ -393,7 +402,7 @@ validation and the contract tests on both sides.
 | `ARIES_DECODE_ABOVE_PX` | `3500000` (3.5 MP: full size only) | Decodes above this need the RAM floor; plain untiled ones (not split) also the memory-heavy slot. ½-size decodes peak under 8 GiB and run freely |
 | `ARIES_DECODE_RAM_FLOOR_BYTES` | `6442450944` (6 GiB) | Free host RAM required for those decodes |
 | `ARIES_DECODE_MAX_CONCURRENT` | `1` | How many memory-heavy tasks (those decodes, and denoise above `ARIES_DENOISE_REFS_LIMIT_ABOVE` references) run at once on this agent (at least 1; one count shared by both); `2` allows one per card |
-| `ARIES_MAX_REFERENCE_IMAGES` | `4` | Most reference images a job may carry on this agent; each adds ~2.6 GiB to denoise (HARDWARE.md §1.1). `0` turns references off |
+| `ARIES_MAX_REFERENCE_IMAGES` | `4` | Most reference images a job may carry on this agent, up to 10 (the model's limit); each adds ~2.6 GiB to denoise (HARDWARE.md §1.1), and 10 at the default `ARIES_REFERENCE_RES` hung the host (HARDWARE.md F9): try a smaller reference resolution before raising it past 4. `0` turns references off |
 | `ARIES_DENOISE_REFS_LIMIT_ABOVE` | `2` | Denoise with more references than this spills into host RAM: it needs the decode RAM floor and takes the memory-heavy slot it shares with full-size decodes |
 | `ARIES_RAM_GUARD_FLOOR_BYTES` | `4294967296` (4 GiB) | Host-RAM guard: when free host RAM stays below this for two samples, the agent kills the worker holding the most host RAM and its task fails as `oom_kill` (retried once). `0` turns it off |
 | `ARIES_RAM_GUARD_INTERVAL_S` | `0.25` | How often the guard samples `MemAvailable` |
@@ -401,6 +410,7 @@ validation and the contract tests on both sides.
 | `ARIES_SCRATCH_DIR` | `/run/aries-agent` (`/tmp/aries-agent` in compose) | Per-task files, deleted after each task |
 | `ARIES_SLEEP_INHIBITOR` | `1` | Hold a systemd sleep inhibitor while workers run (needs `systemd-inhibit`) |
 | `ARIES_CA_CERT` | — | CA bundle for a TLS gRPC endpoint |
+| `ARIES_BACKEND_HTTP_URL` | `http://localhost:8080` | Studio's HTTP base, used only when an artifact URL Studio sends is relative (Studio sends absolute ones built from `ARIES_ARTIFACT_BASE_URL`) |
 
 ## 11. Troubleshooting
 

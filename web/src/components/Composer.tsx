@@ -67,6 +67,8 @@ interface ComposerProps {
   onReferencesChange: React.Dispatch<React.SetStateAction<ComposerReference[]>>;
   /** Most references a job may carry (0: Studio's agents accept none). */
   maxReferences: number;
+  /** On pages without a composer (the viewer): kept mounted, so the prompt stays, but not shown. */
+  hidden?: boolean;
 }
 
 function getAspectIconDims(ratioWidth: number, ratioHeight: number, maxSize = 15) {
@@ -279,6 +281,7 @@ export const Composer: React.FC<ComposerProps> = ({
   references,
   onReferencesChange,
   maxReferences,
+  hidden = false,
 }) => {
   const [prompt, setPrompt] = useState('');
   // A short note about attaching (too many, wrong type); clears itself.
@@ -293,19 +296,26 @@ export const Composer: React.FC<ComposerProps> = ({
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = textareaRef || internalRef;
 
-  // Sync prefill from parent (e.g. from sample prompt or reuse settings)
-  useEffect(() => {
-    if (prefilledPrompt !== undefined && prefilledPrompt !== null) {
-      setPrompt(prefilledPrompt);
-      if (prefilledAspect) {
-        onUpdatePreferences({ aspect: prefilledAspect });
-      }
-      onClearPrefill?.();
-      // Rerun / Vary: open it to show what was filled in (a phone may ignore the focus).
+  // A prefill from the parent (Rerun, Vary, a sample prompt): taken over while rendering, and
+  // opened to show what was filled in. The parent clears it afterwards (the effect below), so
+  // the same prompt can be filled in again.
+  const [takenPrefill, setTakenPrefill] = useState<string | null>(null);
+  const prefill = prefilledPrompt ?? null;
+  if (prefill !== takenPrefill) {
+    setTakenPrefill(prefill);
+    if (prefill !== null) {
+      setPrompt(prefill);
       setExpanded(true);
-      inputRef.current?.focus();
     }
-  }, [prefilledPrompt, prefilledAspect, onClearPrefill, onUpdatePreferences, inputRef]);
+  }
+  useEffect(() => {
+    if (prefill === null) return;
+    if (prefilledAspect) {
+      onUpdatePreferences({ aspect: prefilledAspect });
+    }
+    onClearPrefill?.();
+    inputRef.current?.focus(); // a phone may ignore it
+  }, [prefill, prefilledAspect, onClearPrefill, onUpdatePreferences, inputRef]);
 
   // Auto-resize textarea; one line while folded
   useEffect(() => {
@@ -369,6 +379,7 @@ export const Composer: React.FC<ComposerProps> = ({
 
   // Images dropped anywhere on the page are attached; the composer shows where they go.
   useEffect(() => {
+    if (hidden) return;
     let depth = 0;
     const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
     const onEnter = (e: DragEvent) => {
@@ -402,7 +413,7 @@ export const Composer: React.FC<ComposerProps> = ({
       window.removeEventListener('dragover', onOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, []);
+  }, [hidden]);
 
   const removeReference = (key: string) =>
     onReferencesChange((prev) => {
@@ -440,7 +451,7 @@ export const Composer: React.FC<ComposerProps> = ({
     // Without an image-aware enhancer Enhance is off for a send with references: the text
     // rewriter cannot see them and could rewrite away what the edit asks for.
     const jobs = buildJobs(preferences, sendSeeds(preferences)).map((j) =>
-      enhanceBlocked ? { ...j, enhance: false } : j,
+      enhanceBlocked ? { ...j, enhance: false } : j.enhance && cloudEnhancer ? { ...j, enhancer: cloudEnhancer.id } : j,
     );
     onSubmit(prompt.trim(), jobs, references);
     // Like the prompt, attachments belong to the send; Rerun brings them back.
@@ -491,8 +502,14 @@ export const Composer: React.FC<ComposerProps> = ({
 
   const advanced = preferences.advancedOpen;
   const hasReferences = references.length > 0;
-  // With references, Enhance needs an executor whose enhancer reads that many images.
-  const enhanceMostRefs = capabilities?.enhance_max_references_ever ?? 0;
+  // Who rewrites the prompt: the built-in enhancer, or a cloud one Studio offers
+  // (docs/CLOUD_ENHANCERS.md); a saved choice Studio no longer offers falls back to built-in.
+  const cloudEnhancers = capabilities?.cloud_enhancers ?? [];
+  const cloudEnhancer = cloudEnhancers.find((c) => c.id === preferences.enhancer);
+  const enhancerName = cloudEnhancer ? cloudEnhancer.label : 'Qwen-Image-2.1-PE';
+  // With references, Enhance needs an enhancer that reads that many images: a cloud one, or
+  // an executor's image-aware enhancer.
+  const enhanceMostRefs = cloudEnhancer ? cloudEnhancer.max_references : (capabilities?.enhance_max_references_ever ?? 0);
   const enhanceBlocked = hasReferences && references.length > enhanceMostRefs;
   const anyEnhance = !enhanceBlocked && (preferences.enhance || preferences.extraRows.some((r) => r.enhance));
   // Still uploading, or failed (remove it to send): the job would not have it.
@@ -535,6 +552,7 @@ export const Composer: React.FC<ComposerProps> = ({
           collapse();
         }
       }}
+      hidden={hidden}
       className="fixed bottom-0 left-0 right-0 sm:left-auto z-30 pointer-events-none px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
     >
       <div
@@ -943,9 +961,11 @@ export const Composer: React.FC<ComposerProps> = ({
                 title={
                   enhanceBlocked
                     ? enhanceOffTitle(enhanceMostRefs)
-                    : hasReferences
-                      ? 'Enhance prompt before generating (Qwen-Image-2.1-PE-I2I reads the images and rewrites it on a free GPU)'
-                      : 'Enhance prompt before generating (Qwen-Image-2.1-PE rewrites it on a free GPU)'
+                    : cloudEnhancer
+                      ? `Enhance prompt before generating (${cloudEnhancer.label} rewrites it in the cloud${hasReferences ? ' and reads the images' : ''})`
+                      : hasReferences
+                        ? 'Enhance prompt before generating (Qwen-Image-2.1-PE-I2I reads the images and rewrites it on a free GPU)'
+                        : 'Enhance prompt before generating (Qwen-Image-2.1-PE rewrites it on a free GPU)'
                 }
               >
                 <Sparkles
@@ -958,6 +978,23 @@ export const Composer: React.FC<ComposerProps> = ({
                   <Check className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                 )}
               </button>
+              {/* Which enhancer, when Studio offers cloud ones: built-in stays the default. */}
+              {preferences.enhance && cloudEnhancers.length > 0 && (
+                <select
+                  value={cloudEnhancer ? cloudEnhancer.id : 'builtin'}
+                  onChange={(e) => onUpdatePreferences({ enhancer: e.target.value })}
+                  aria-label="Prompt enhancer"
+                  title="Who rewrites the prompt. Cloud enhancers get the prompt and any reference images; the provider's terms apply."
+                  className={selectCls}
+                >
+                  <option value="builtin">Built-in</option>
+                  {cloudEnhancers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label.replace(/^Claude /, '')}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -1077,7 +1114,7 @@ export const Composer: React.FC<ComposerProps> = ({
                       on={row.enhance && !enhanceBlocked}
                       onClick={() => updateRow(i, { enhance: !row.enhance })}
                       label="Enhance"
-                      title={enhanceBlocked ? enhanceOffTitle(enhanceMostRefs) : 'Rewrite the prompt with Qwen-Image-2.1-PE first'}
+                      title={enhanceBlocked ? enhanceOffTitle(enhanceMostRefs) : `Rewrite the prompt with ${enhancerName} first`}
                       icon={<Sparkles className="w-3 h-3" />}
                       disabled={enhanceBlocked}
                     />

@@ -2,24 +2,25 @@ import React from 'react';
 import type { WorkerHealth } from '../types';
 import { Grid, Clock, Moon, Sun, HelpCircle, AlertTriangle } from 'lucide-react';
 import { Logo } from './Logo';
+import { onLinkClick } from '../utils/router';
 
 interface HeaderProps {
-  activeView: 'timeline' | 'gallery';
-  onViewChange: (view: 'timeline' | 'gallery') => void;
+  /** The page shown (null: one outside the switcher, such as the system view). */
+  activeView: 'timeline' | 'gallery' | null;
+  /** The gallery link, with the filters it was left with. */
+  galleryHref: string;
   workerHealth: WorkerHealth;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
-  onOpenStatus: () => void;
   onOpenShortcuts: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   activeView,
-  onViewChange,
+  galleryHref,
   workerHealth,
   theme,
   onToggleTheme,
-  onOpenStatus,
   onOpenShortcuts,
 }) => {
   const isDark = theme === 'dark';
@@ -95,8 +96,9 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* View Switcher: Timeline / Gallery */}
         <div className="flex items-center bg-[#f1eee7] dark:bg-[#20201d] p-1 rounded-full border border-[#e5e2db]/50 dark:border-[#2d2d2a]">
-          <button
-            onClick={() => onViewChange('timeline')}
+          <a
+            href="/"
+            onClick={(e) => onLinkClick(e, '/')}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
               activeView === 'timeline'
                 ? 'bg-[#a53705] text-white shadow-sm'
@@ -108,9 +110,10 @@ export const Header: React.FC<HeaderProps> = ({
             <kbd className="hidden sm:inline-block font-mono text-[10px] opacity-70 px-1 py-0.2 rounded bg-black/10 dark:bg-white/10">
               T
             </kbd>
-          </button>
-          <button
-            onClick={() => onViewChange('gallery')}
+          </a>
+          <a
+            href={galleryHref}
+            onClick={(e) => onLinkClick(e, galleryHref)}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
               activeView === 'gallery'
                 ? 'bg-[#a53705] text-white shadow-sm'
@@ -122,14 +125,15 @@ export const Header: React.FC<HeaderProps> = ({
             <kbd className="hidden sm:inline-block font-mono text-[10px] opacity-70 px-1 py-0.2 rounded bg-black/10 dark:bg-white/10">
               G
             </kbd>
-          </button>
+          </a>
         </div>
 
         {/* Right Actions: Status Pill, Theme, Shortcuts */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Status Pill */}
-          <button
-            onClick={onOpenStatus}
+          <a
+            href="/status"
+            onClick={(e) => onLinkClick(e, '/status')}
             className={`flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium border transition-colors shadow-2xs hover:opacity-90 ${statusInfo.bgClass}`}
             title={`${statusInfo.label}. Click to view hardware telemetry and queue status`}
           >
@@ -145,7 +149,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="whitespace-nowrap lg:hidden">{statusInfo.short}</span>
             <span className="whitespace-nowrap hidden lg:inline">{statusInfo.label}</span>
             {workerHealth.state === 'offline' && <AlertTriangle className="hidden sm:block w-3.5 h-3.5 ml-0.5" />}
-          </button>
+          </a>
 
           {/* Theme Toggle */}
           <button

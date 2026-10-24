@@ -49,12 +49,20 @@ reproduce any existing product's layout or branding.
 ## 3. Information architecture
 
 ```
-App
+App                                          URL
 ├── Top bar: app name · view switch (Timeline / Gallery) · generator status · theme
-├── Timeline view (default)      — chat-shaped history + composer
-├── Gallery view                 — grid of all images + filters
-└── Image viewer (overlay)       — full image + details + actions, from either view
+├── Timeline view (default)      — chat-shaped history + composer      /
+├── Gallery view                 — grid of all images + filters        /gallery?fav=1&aspect=16:9&q=…
+├── Image viewer (a page)        — full image + details + actions      /images/{id}
+└── System view (a page)         — agents, cards, queues               /status
 ```
+
+Every screen is a page with its own URL, so any of them can be linked, bookmarked or
+opened in a new tab, and Back/Forward move between them. Pages never stack: the viewer
+and the system view replace the list rather than covering it, so scrolling one can never
+scroll another. Back from the viewer or the system view returns to the list where it was
+left (its loaded pages and scroll position). The shortcuts sheet is the one dialog left; the
+page underneath does not scroll while it is open.
 
 ---
 
@@ -62,8 +70,8 @@ App
 
 ### 4.1 Timeline view (default)
 
-Chronological, **newest at the bottom**, like a chat. The composer is docked at the
-bottom; the history scrolls above it and opens scrolled to the latest.
+**Newest turn on top**; older turns load 40 jobs at a time as the page scrolls down. The
+composer is docked at the bottom, and the page opens at the latest turn.
 
 Each entry is a **turn** — one submission:
 
@@ -72,9 +80,9 @@ Each entry is a **turn** — one submission:
 | Prompt | The text as typed. Can be long (up to a paragraph); truncate with expand. |
 | Enhanced prompt | An AI-rewritten, much longer version, with the rewriter's reasoning collapsed. Clearly secondary. To use it, Rerun the image and pick "Enhanced" in the composer (§4.2). |
 | Reference images | Small numbered thumbnails under the prompt, in the order the prompt names them ("image 1", …); each opens the original. |
-| Setting chips | e.g. `16:9 · seed 48213 · 40 steps · 2m 31s`. Compact, quiet. |
+| Setting chips | e.g. `16:9 · seed 48213 · 20 steps · 1m 12s`. Compact, quiet. |
 | Image tiles | The images of one send (rows × count, up to 16), left to right in the order they were sent and are processed. Shown at their true aspect ratio. A batch is a carousel: one row at full tile height that snaps tile by tile, with edge fades and arrows while more is off-screen, and dots below. Swipe, wheel, the arrows, the dots, the batch pills or `←`/`→` (with the row focused) move through it, and an image the user picks is scrolled into view; a new turn starts at its first image and does not move as images finish. |
-| Lineage marker | When made from another image: "↳ variation of …" linking back to the source. |
+| Lineage marker *(planned)* | When made from another image: "↳ variation of …" linking back to the source. |
 
 **Tile states** (each needs a design):
 
@@ -83,7 +91,7 @@ Each entry is a **turn** — one submission:
 | Queued | Aspect-correct placeholder naming the stage it waits for (enhancement, text encoding, drawing, decoding). *(future: "2 ahead · starts in ~4 min")* Cancel. |
 | Generating | Placeholder that names the phase it's in — see below. Cancel. |
 | Done | The image. Hover/tap reveals quick actions (§4.4). |
-| Failed | Calm error ("The generator stopped unexpectedly"), **Retry**. Not alarming. |
+| Failed | Calm error ("The generator stopped unexpectedly"), **Retry**. Not alarming. When a cloud enhancer rewrote the prompt, also **Built-in**: retry with the built-in enhancer. |
 | Cancelled | Muted placeholder, "Cancelled", Retry. |
 
 A turn with several tiles can be in mixed states (one done, one generating, two queued).
@@ -94,7 +102,7 @@ looks stuck:
 | Phase | Typical length | What the tile says |
 |---|---|---|
 | Waking *(future)* | 10–30 s | "Waking generator" |
-| Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's token limit (4096 by default, plus 2048 per reference image; the worker reports a raised limit and the bar follows it); past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest) |
+| Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's token limit (4096 by default, plus 2048 per reference image; the worker reports a raised limit and the bar follows it); past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest). With a cloud enhancer: seconds, "waiting for the enhancer" while a rate limit holds it, then "rewriting prompt", with an indeterminate bar |
 | Reading prompt | a few seconds | "Reading prompt" with an indeterminate bar (the encoder reports no steps) |
 | Drawing | most of the time | "Drawing", percent, live speed and time left ("6.40s/step · ~180s left") |
 | Finishing | 5–15 s | "Finishing" with an indeterminate bar — decoding the full-size image; must not look frozen |
@@ -126,6 +134,7 @@ Docked at the bottom of the Timeline. Should feel like a message box, not a form
 | Quality | **Draft** (12 steps) · **Standard** (20) · **High** (40) | Standard |
 | Size | Full · ½ · ¼ (faster previews) | Full |
 | Enhance prompt | On/off toggle | Off |
+| Enhancer | Shown next to Enhance while it is on, when Studio offers cloud enhancers (CLOUD_ENHANCERS.md): Built-in · Sonnet 5.5 · Gemini 3.5 Flash Lite (one entry per configured model). Its tooltip says the prompt and any reference images go to the provider, whose terms apply. A cloud enhancer reads up to 10 reference images | Built-in |
 
 Every image gets its own random seed; the seed is not shown unless Advanced is open.
 
@@ -163,7 +172,7 @@ Every image gets its own random seed; the seed is not shown unless Advanced is o
   replaces that for a wrong file type or too many images. While references are attached,
   Enhance uses the image-aware enhancer, which reads them; when no agent has one for that
   many images (`/api/capabilities` `enhance_max_references_ever`), Enhance (and each row's)
-  is off and disabled, and its tooltip says why.
+  is off and disabled, and its tooltip says why; a cloud enhancer reads them instead.
   Attachments belong to one send, like the prompt: sending clears the strip.
 - **Generate** button. Disabled when the prompt is empty, and while a reference is still
   uploading or has failed (remove it to send). Sending scrolls the timeline to the top,
@@ -172,7 +181,7 @@ Every image gets its own random seed; the seed is not shown unless Advanced is o
 - Settings are remembered between visits.
 - **Filled from an image.** Rerun and Vary (from a tile, the timeline or the viewer) fill
   the composer and never submit by themselves: prompt, aspect, size, steps and the
-  image's Enhance setting, enhancer token limit and tiling; Rerun locks the image's seed (opening Advanced so it
+  image's Enhance setting and enhancer, enhancer token limit and tiling; Rerun locks the image's seed (opening Advanced so it
   applies), Vary sets the seed to Random. Extra rows are cleared. The image's reference
   images replace any attached ones.
   A bar above the prompt shows "From #seed" with a dismiss button. If the image had an
@@ -182,10 +191,12 @@ Every image gets its own random seed; the seed is not shown unless Advanced is o
 
 ### 4.3 Gallery view
 
-All finished images, newest first, infinite scroll.
+All finished images, newest first, infinite scroll (Studio filters and pages them: the
+browser holds only what was scrolled to). The filters live in the URL.
 
 - **Mixed-aspect grid** (masonry or justified rows — designer's call) using thumbnails.
-- **Filters**: Favorites only · aspect ratio · text search over prompts.
+- **Filters**: Favorites only · aspect ratio · text search over prompts (and seeds). The
+  counts on the pills are over all finished images.
 - Hover/tap shows quick actions (§4.4). Click opens the Image viewer.
 - Must look good with mostly 1:1, and with a mix of 9:16 and 16:9.
 
@@ -198,9 +209,12 @@ All finished images, newest first, infinite scroll.
 - Open
 - Download
 
-### 4.5 Image viewer (overlay)
+### 4.5 Image viewer (`/images/{id}`)
 
-Opens from Timeline or Gallery. Full-screen-ish; image dominant.
+Opens from Timeline or Gallery, or from a shared link. A page of its own that fills the
+window, image dominant; no top bar or composer (the composer keeps its text for when the
+list comes back). A copy-link button copies the page's URL. Esc or close goes back to the
+list it came from; opened from a link, to the timeline.
 
 - **Image**: fit to screen; zoom to 100 % and pan. 100 % is the image's actual size, one
   image pixel per device pixel (Fit shows its own percentage). Wheel or pinch zooms at
@@ -211,11 +225,14 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   part outlined; click or drag it) move around it. Previous/next navigates within the
   list it was opened from (the buttons always; `←`/`→` when the image fits), in that view's
   order: from the timeline, left to right through a turn and then on to the next (older)
-  turn; from the gallery, newest first.
+  turn; from the gallery, newest first. Stepping replaces the URL (Back returns to the list,
+  not through every image), and older images load as the end of the list comes near. A
+  shared link steps through the timeline when the image is in it.
 - **Details panel** (collapsible on desktop; a sheet on phone):
-  - Prompt (copy button), its reference images, and the enhanced prompt
+  - Prompt (copy button), its reference images, and the enhanced prompt (its reasoning is
+    fetched when opened: job lists leave it out)
   - Seed (copy button), size and aspect, steps / quality
-  - Model name and precision (e.g. "Qwen-Image 2.1 · bf16")
+  - For each stage, the card that ran it and its model (id and revision)
   - Total time (submit to done), and a Time breakdown: each stage's time (enhance with
     tokens and tok/s, denoise with steps × s/step, decode with its mode), their sum as
     generation time, then queue & model loading (the rest: waiting for a GPU, starting
@@ -223,7 +240,6 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   - Expandable pipeline details: stages, decode mode, the GPU that decoded it and peak
     memory
   - Created date/time
-  - Technical section, collapsed: device and software versions
 - **Actions**:
 
 | Action | Behavior |
@@ -233,7 +249,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 | Download | PNG with settings embedded. |
 | Copy prompt / Copy seed | |
 | Favorite | |
-| Delete | With confirmation; permanent. |
+| Delete | Asks first, then removes the image and its settings for good (Enter confirms, Esc cancels). The same on a tile and for a whole turn; a failed or cancelled card, with no image to lose, goes at once. |
 | Use as reference | Attaches the image to the composer as the next reference image and closes the viewer. Hidden when the composer is at its limit. |
 
 ### 4.6 Top bar
@@ -260,7 +276,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   - *(future)* queue clear estimate, last image timing, a link to a dashboard
 
   It should read in two seconds, not look like an admin console. Numbers update live.
-- Theme toggle (light / dark / system) — **light by default**, not "follow system"
+- Theme toggle (light / dark) — **light by default**, not "follow system"
 
 ### 4.7 Empty, edge and error states (please design)
 
@@ -294,11 +310,11 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
 1. **Aspect suggestion from the enhancer.** The enhancer already returns a
    suggested aspect ratio (`wh_ratio`, or with references `ratio_follow`: keep image N's
    aspect); the UI does not use it yet.
-2. **More references.** Up to 10 images instead of 4, at a smaller reference
-   resolution (docs/REFERENCE_IMAGES.md §8).
-3. **Fast mode.** A third Quality option producing images in seconds at lower quality.
-4. **Transparent images.** Some results have transparent backgrounds — tiles and the
-   viewer should show transparency (e.g. a checkerboard) rather than black.
+2. **Fast mode.** A third Quality option producing images in seconds at lower quality.
+3. **Transparent images.** Results are RGBA, so a prompt that asks for a transparent
+   background may get one; tiles and the viewer would then show a checkerboard behind
+   it (JPEG thumbnails drop alpha today). None of 40 recent results had transparent
+   areas, only 0.1–6 % slightly translucent pixels, so this waits for a real case.
 
 ---
 
@@ -312,8 +328,7 @@ Opens from Timeline or Gallery. Full-screen-ish; image dominant.
   The header shows the mark without the name and the status pill's one-word state.
 - Keyboard: `/` focuses the prompt · `T` / `G` switch views · `←`/`→` in the viewer ·
   `F` favorites · `+`/`-`/`0`/`1` zoom · `Esc` closes · `?` shows the shortcut sheet.
-- Visible focus states, WCAG AA contrast, all icon buttons labeled, progress
-  announced politely to screen readers.
+- Visible focus states, WCAG AA contrast, all icon buttons labeled.
 
 ---
 

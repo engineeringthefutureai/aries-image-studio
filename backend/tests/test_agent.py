@@ -2,17 +2,17 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
-import grpc
 import httpx
 import pytest
 
-from aries.agent.v1 import agent_pb2, agent_pb2_grpc
+from aries.agent.v1 import agent_pb2
 from aries_agent.agent import ActiveTask, AriesAgent
 from aries_agent.config import AgentConfig, ExecutorConfig, ModelConfig
 from aries_agent.hardware import classify_worker_crash
@@ -214,6 +214,16 @@ def test_config_reads_the_image_enhancer_from_env(tmp_path: Path, monkeypatch):
     assert cfg.enhancer_i2i_model_id == I2I_ID
     i2i = cfg.models[-1]
     assert (i2i.id, i2i.path, i2i.dtype) == (I2I_ID, str(tmp_path), "int4")
+
+
+def test_config_takes_up_to_the_models_reference_limit(monkeypatch):
+    monkeypatch.setenv("ARIES_AGENT_TOKEN", "t")
+    monkeypatch.setenv("ARIES_EXECUTORS_JSON", '[{"id": "xpu0", "device": "0000:04:00.0"}]')
+    monkeypatch.setenv("ARIES_MAX_REFERENCE_IMAGES", "10")
+    assert AgentConfig.from_env().max_reference_images == 10
+    monkeypatch.setenv("ARIES_MAX_REFERENCE_IMAGES", "11")
+    with pytest.raises(ValueError, match="0 to 10 reference images"):
+        AgentConfig.from_env()
 
 
 def test_enhance_references_reach_the_image_enhancer(tmp_path: Path):
@@ -572,6 +582,92 @@ async def test_end_to_end_task_and_upload_retry(tmp_path: Path):
     await rt.stop_socket_server()
 
 
+@pytest.mark.asyncio
+async def test_cancel_during_input_download_never_reaches_the_worker(tmp_path: Path):
+    """A Cancel that arrives while the inputs download is reported as cancelled; the job was
+    otherwise sent to the worker afterwards and ran to the end."""
+    cfg = _make_test_config(tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(200, content=b"latent")
+
+    transport = httpx.MockTransport(mock_handler)
+    agent = AriesAgent(config=cfg, http_client_factory=lambda: httpx.AsyncClient(transport=transport))
+    rt = agent.executors["xpu0"]
+    sent: List[Dict[str, Any]] = []
+
+    async def record(msg: Dict[str, Any]) -> None:
+        sent.append(msg)
+
+    rt._send_worker_json = record  # type: ignore[method-assign]
+    assign = agent_pb2.Assign(
+        task="task-dec-2",
+        attempt=1,
+        executor="xpu0",
+        stage=agent_pb2.STAGE_DECODE,
+        inputs=[agent_pb2.ArtifactRef(name="latent.safetensors", url="/agent/v1/artifacts/in/latent.safetensors")],
+    )
+    run = asyncio.create_task(rt.run_assigned_task(assign))
+    await asyncio.wait_for(started.wait(), timeout=3.0)
+    await rt.cancel_task("task-dec-2", 1)
+    release.set()
+    await asyncio.wait_for(run, timeout=3.0)
+
+    msgs = []
+    while not agent.send_queue.empty():
+        msgs.append(agent.send_queue.get_nowait())
+    failed = [m.failed for m in msgs if m.WhichOneof("msg") == "failed"]
+    assert len(failed) == 1
+    assert failed[0].failure_class == agent_pb2.FAILURE_CANCELLED
+    assert not any(m.get("action") == "job" for m in sent), sent
+    assert rt.active_task is None
+
+
+@pytest.mark.asyncio
+async def test_worker_claim_during_input_download_waits_for_the_inputs(tmp_path: Path):
+    """Seen live with reference images: an idle worker's claim arrived while the embeds were
+    still downloading, got the job without them, and failed with KeyError
+    'embeds_safetensors'."""
+    cfg = _make_test_config(tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(200, content=b"embeds")
+
+    transport = httpx.MockTransport(mock_handler)
+    agent = AriesAgent(config=cfg, http_client_factory=lambda: httpx.AsyncClient(transport=transport))
+    rt = agent.executors["xpu0"]
+    sent: List[Dict[str, Any]] = []
+
+    async def record(msg: Dict[str, Any]) -> None:
+        sent.append(msg)
+
+    rt._send_worker_json = record  # type: ignore[method-assign]
+    assign = agent_pb2.Assign(
+        task="task-den-1",
+        attempt=1,
+        executor="xpu0",
+        stage=agent_pb2.STAGE_DENOISE,
+        inputs=[agent_pb2.ArtifactRef(name="embeds.safetensors", url="/agent/v1/artifacts/e/1/embeds.safetensors")],
+        denoise=agent_pb2.DenoiseParams(width=1024, height=1024, steps=4, seed=1),
+    )
+    run = asyncio.create_task(rt.run_assigned_task(assign))
+    await asyncio.wait_for(started.wait(), timeout=3.0)
+    await rt._on_worker_claim()
+    assert [m["action"] for m in sent] == ["none"]
+
+    release.set()
+    await asyncio.wait_for(run, timeout=3.0)
+    jobs = [m for m in sent if m["action"] == "job"]
+    assert len(jobs) == 1
+    assert Path(jobs[0]["paths"]["embeds_safetensors"]).read_bytes() == b"embeds"
+
+
 def test_crash_classification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """§4, §12: Verify crash classification from exit code, sysfs devcoredump, and kernel log."""
     assert classify_worker_crash(137, 9, "0000:04:00.0", "") == agent_pb2.FAILURE_OOM_KILL
@@ -818,6 +914,24 @@ async def test_ram_guard_kills_hungriest_worker(tmp_path: Path, monkeypatch: pyt
     assert agent.check_host_ram() is None
     assert agent.check_host_ram() is None
     await small.kill_worker(reason="test")
+
+
+@pytest.mark.asyncio
+async def test_worker_output_line_over_limit_keeps_draining(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    """A line over the stream limit is dropped and the pipe stays drained: the worker, which
+    writes far more than a pipe holds afterwards, still runs to its end."""
+    agent = AriesAgent(config=_make_test_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    script = "import sys; print('x' * 8192); [print('line', i) for i in range(20000)]; print('last')"
+    rt.process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script, stdout=asyncio.subprocess.PIPE, limit=1024
+    )
+    proc = rt.process
+    with caplog.at_level(logging.INFO, logger="aries_agent"):
+        await asyncio.wait_for(rt._monitor_process(proc, agent_pb2.STAGE_DENOISE), timeout=20.0)
+    assert proc.returncode == 0
+    assert "dropped" in caplog.text
+    assert "] last" in caplog.text
 
 
 def test_worker_preexec_raises_oom_score_adj(tmp_path: Path, monkeypatch):

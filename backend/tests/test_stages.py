@@ -520,7 +520,7 @@ def test_decode_split_columns_cover_the_image_once():
         strips = split_columns(columns, 16, height, 3_200_000, 32)
         assert len(strips) >= 2
         assert strips[0][2] == 0 and strips[-1][3] == columns
-        for (a, b, ka, kb), nxt in zip(strips, strips[1:] + [None]):
+        for (a, b, ka, kb), nxt in zip(strips, strips[1:] + [None], strict=True):
             assert a == max(0, ka - 32) and b == min(columns, kb + 32)
             if nxt:
                 assert kb == nxt[2]  # contiguous, no gap, no double cover

@@ -1,6 +1,6 @@
 # Reference images (image attachments) — design
 
-Status: **implemented** for 0.4 (unreleased): worker, agent, Studio and web, with tests on
+Status: **shipped in 0.4.0**: worker, agent, Studio and web, with tests on
 each side; the hardware run of §9 step 5 is still to do. The prototype (four stage
 scripts plus a runner) is kept locally, outside the repository. Measurements:
 [HARDWARE.md §1.1](HARDWARE.md#11-reference-images-prototype-2026-10-16).
@@ -96,7 +96,7 @@ Memory per job grows linearly with references (HARDWARE.md §1.1): 4 references 
 
 | Setting | Where | Default | Meaning |
 |---|---|---|---|
-| `ARIES_MAX_REFERENCE_IMAGES` | agent | `4` | Most references a job may carry on this agent; declared to Studio |
+| `ARIES_MAX_REFERENCE_IMAGES` | agent | `4` | Most references a job may carry on this agent, 0–10 (the model's limit; the agent refuses to start above it); declared to Studio |
 | `ARIES_DENOISE_REFS_LIMIT_ABOVE` | agent | `2` | Denoise with more references than this needs the host-RAM floor and shares the one-at-a-time slot with full-size decodes on the agent |
 | `ARIES_REFERENCE_RES` | Studio | `1024` | Side of the area references are resized to (1024 → ~1 MP, ~4,100 tokens each). Part of the latents key, so Studio owns it and sends it with each encode |
 
@@ -180,8 +180,10 @@ ARCHITECTURE_V3.md §3.1, §5, §7.4 and §8, BUILD_AND_RUN.md settings.
 
 - **Output size with references:** keep the aspect/size picker (current plan), or add an
   "Auto" aspect that follows the last reference, as the pipeline does by default.
-- **More than 4 references:** a smaller reference resolution (512 → ~1,000 tokens each)
-  would let 10 cost about what 3 do now; needs a quality check before offering it.
+- **More than 4 references:** both settings exist (`ARIES_MAX_REFERENCE_IMAGES` up to
+  10, `ARIES_REFERENCE_RES`); a smaller reference resolution (512 → ~1,000 tokens each)
+  would let 10 cost about what 3 do now, but needs a quality check before it becomes a
+  default.
 - **The ½-size spill slowdown** (4× per step for a 0.2 GiB spill): understand it, or keep
   the default at 3.
 - **Text-only jobs on the same loop** after a parity check.

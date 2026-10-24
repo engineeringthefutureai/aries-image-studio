@@ -1,6 +1,6 @@
 use crate::db::{now_s, AgentRecord};
 use crate::metrics::parse_agent_prometheus_text;
-use crate::scheduler::{run_scheduler_tick, AppState};
+use crate::scheduler::{tick, AppState};
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +42,7 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
                 }
             }
 
-            let _ = run_scheduler_tick(&state).await;
+            tick(&state).await;
 
             // Every 30 ticks (~30s), run intermediate artifact GC (§7.4)
             if ticks % 30 == 0 {
@@ -52,7 +52,11 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
                     .map(|pct| pct >= state.config.disk_watermark_pct)
                     .unwrap_or(false);
                 let _collecting = state.blobs.collecting().await;
-                if let Ok(orphans) = state.db.gc_intermediate_artifacts(86400.0, emergency).await {
+                if let Ok(orphans) = state
+                    .db
+                    .gc_intermediate_artifacts(86400.0, emergency, None)
+                    .await
+                {
                     for sha in orphans {
                         let _ = state.blobs.delete_blob(&sha);
                     }
@@ -61,7 +65,9 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
                 if let Ok(orphans) = state.db.gc_uploads(86400.0).await {
                     for sha in orphans {
                         let _ = state.blobs.delete_blob(&sha);
-                        state.blobs.delete_thumbnails(&crate::storage::upload_thumb_key(&sha));
+                        state
+                            .blobs
+                            .delete_thumbnails(&crate::storage::upload_thumb_key(&sha));
                     }
                 }
             }

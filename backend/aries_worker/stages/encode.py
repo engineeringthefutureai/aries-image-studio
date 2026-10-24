@@ -157,7 +157,7 @@ class EncodeStageRunner:
                     prompt=prompt,
                     image=[
                         self.pipe.image_processor.resize(img, width=w, height=h)
-                        for img, (w, h) in zip(ref_images, ref_sizes)
+                        for img, (w, h) in zip(ref_images, ref_sizes, strict=True)
                     ] or None,
                     device=get_device(),
                     num_images_per_prompt=1,

@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.5.0
+
+- **Cloud prompt enhancers, off by default** (docs/CLOUD_ENHANCERS.md). With
+  `ARIES_CLOUD_ENHANCERS=on` and an API key in Studio's environment, the composer offers
+  Claude Sonnet 5.5 (`ANTHROPIC_API_KEY`) and Gemini 3.5 Flash-Lite
+  (`GEMINI_API_KEY`), next to Enhance; Built-in stays the default and the only offline one.
+  The prompt and any reference images then go to the provider, whose terms apply.
+  - Studio sends the request itself: no card is used and no agent changes. The same
+    rewriting prompt, plus a section on edits when images are attached; the reply becomes
+    the enhanced prompt as from the built-in enhancer, and provenance names the model.
+  - Studio keeps each model's requests and tokens a minute (Flash-Lite's free tier: 15 and
+    250K; `ARIES_GEMINI_MODELS`) and waits out 429s, except a
+    daily quota used up; any other failure fails the job visibly, and the
+    failed card offers **Built-in** next to Retry (`/retry` takes `{enhancer}`).
+  - `POST /api/jobs` takes `enhancer` (the model id); `/api/capabilities` lists
+    `cloud_enhancers`.
+- **Pages with their own URLs, and lists that load as they scroll.** With 200+ images the
+  app loaded every job at once (2.5 MB, mostly enhancer reasoning) and rendered them all.
+  - Every screen is a page: `/` (timeline), `/gallery` (filters in the query:
+    `?fav=1&aspect=16:9&q=…`), `/images/{id}` (the viewer) and `/status` (the system view).
+    Links can be shared, bookmarked and opened in new tabs; Back/Forward work; Studio
+    answers these paths with the app (200) instead of a 404.
+  - The viewer and the system view are pages, not overlays: scrolling the viewer no longer
+    scrolls the timeline underneath. Back returns to the list where it was left. The viewer
+    has a copy-link button; stepping through images replaces the URL.
+  - The timeline and the gallery load 40 jobs at a time as they scroll. The gallery's
+    filters and search run in Studio, so they cover every image, not just the loaded ones.
+  - Studio: `GET /api/jobs?limit=&before=` pages (with `status=done`, `favorite`, `q`,
+    `aspect`), `GET /api/gallery/facets` for the filter counts, and job lists leave out the
+    enhancer's reasoning (`has_thinking`; the viewer fetches it from `GET /api/jobs/{id}`).
+- **Rerun and Vary from the viewer page fill the composer again.** The composer sat at
+  another place in the viewer's layout, so returning to the timeline remounted it and
+  dropped what had just been filled in.
+- **Deleting an image asks first.** The trash buttons on a tile, a turn and in the viewer
+  deleted the image and its files at once; they now ask (Enter confirms, Esc cancels).
+  A failed or cancelled card, with no image to lose, still goes at once.
+- **`ARIES_MAX_REFERENCE_IMAGES` is checked against the model's limit:** 0–10; the agent
+  refuses to start above it.
+- **Docs: the original plan's leftovers.** Dropped: precision and software versions in
+  the viewer (they stay in the provenance and the PNG), a "system" theme, screen-reader
+  progress announcements and the s/step alert. More references is a setting, not a
+  plan; lineage stays planned; live preview notes why it need not slow generation;
+  transparent images wait for a real case.
+- **The viewer's Inspector header no longer shows a model chip.** It was a fixed
+  "Qwen-Image 2.1" label that overlapped the actions on narrow desktop windows; the
+  image's actual model is listed in its details.
+- **Edits with reference images failed at denoise** (`KeyError: 'embeds_safetensors'`).
+  An idle worker asks for work every second; a claim that arrived while the agent was
+  still downloading a task's inputs got the job without them. Slow downloads (an 11 MB
+  embeds file and the reference latents through an HTTPS ingress) made it common. The
+  agent now hands a task to the worker only once its inputs are on disk.
+- **Fixes from a whole-codebase review.**
+  - Retrying a failed job days later sent the decode (or denoise) without its input: the
+    intermediate cleanup had deleted it, and Retry kept the finished stages. Retry now
+    runs again from the first stage whose input is gone.
+  - After an agent reconnected, Studio no longer knew which enhancer its worker had
+    loaded and could give a text-only enhancer a job with reference images; the agent
+    refused it and the executor was disabled. Such a worker is now restarted instead.
+  - A reconnect racing the old stream's cleanup could drop the new stream's sender, so
+    every message to the agent was lost. A grace timer from an earlier disconnect could
+    reclaim tasks right after a later one, using up retries.
+  - A Cancel during input download was lost and the task ran to the end; it is now
+    reported as cancelled. The agent reads, writes and hashes artifacts off its event loop.
+  - `/api/images/{id}` could serve the decoder's PNG, without the provenance chunk, with
+    a one-year cache header in the moment after the job turned done; that copy is no
+    longer cached, and a request racing the swap no longer gets a 404.
+  - Cancel in the UI marked a job cancelled even when it had just finished; the UI now
+    shows what Studio answers.
+  - The PNG provenance chunk (`tEXt`, Latin-1) held raw UTF-8, garbled in other tools for
+    Chinese prompts or emoji; the JSON is now ASCII with `\uXXXX` escapes.
+  - Each finished job ran the intermediate cleanup over every job; it now cleans only
+    its own, and the 30 s pass covers the rest.
+- **Fixes from an external repository review.**
+  - `GET /api/images/{id}/thumb` built a file path from the id before checking it, so
+    `..%2F…` could read a `.jpg` with a thumbnail's name from outside the thumbnail
+    folder. Ids that are not job ids now get a 404.
+  - The agent stopped reading a worker's output after one line over 64 KiB (a long
+    traceback was enough), and the worker then blocked on its next write. Lines up to
+    1 MiB are logged, longer ones are dropped, and the output is always drained.
+  - A task the agent reports as `cancelled` without a user cancel left its job running
+    with nothing left to run. The job and its remaining tasks are now cancelled.
+  - Scheduler failures after API calls, scrapes and reconnects are logged instead of
+    dropped. Cancelling a job deleted at the same moment no longer panics. An encode
+    served from another job's embeds counts as an attempt, like every other path.
+  - Studio reads and writes images and latents on its blocking pool instead of the
+    threads that serve requests and the agents' streams.
+  - Clean `cargo clippy`, `ruff check` (bug rules, configured in `backend/pyproject.toml`)
+    and `npm run lint`.
+  - Docs: the default is 20 steps, not 40; the `buf` files the docs mentioned never
+    existed (BUILD_AND_RUN §9 has the `grpc_tools` command); HARDWARE §6 describes 0.4's
+    diagnostics instead of the 0.2 manager; ARCHITECTURE.md is marked superseded; the
+    doc indexes list every document; `ARIES_BACKEND_HTTP_URL` is documented; examples
+    no longer use `dev-token`.
+  - SPEC.md describes 0.4 instead of the 0.2 manager (architecture, data model, API,
+    failure handling, telemetry); ARCHITECTURE_V3.md matches the code (tiled decode,
+    Compose deployment, `max_px`, failure classes). SPEC and SPEC_UI said the timeline
+    puts the newest turn at the bottom; it has been on top since 0.2.
+
 ## 0.4.0
 
 - **Fixes from a whole-project review.**

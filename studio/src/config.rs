@@ -1,3 +1,4 @@
+use crate::cloud::CloudConfig;
 use std::env;
 use std::path::PathBuf;
 
@@ -18,6 +19,8 @@ pub struct BackendConfig {
     /// Reference images are resized to about this side squared (1024 → ~1 MP). Part of the
     /// key their stored latents are found by (docs/REFERENCE_IMAGES.md §5).
     pub reference_res: u32,
+    /// Cloud prompt enhancers (docs/CLOUD_ENHANCERS.md): none unless switched on.
+    pub cloud: CloudConfig,
 }
 
 impl Default for BackendConfig {
@@ -36,6 +39,7 @@ impl Default for BackendConfig {
             reconnect_grace_s: 30.0,
             disk_watermark_pct: 80.0,
             reference_res: 1024,
+            cloud: CloudConfig::default(),
         }
     }
 }
@@ -98,6 +102,7 @@ impl BackendConfig {
                 }
             }
         }
+        cfg.cloud = CloudConfig::from_env();
         cfg
     }
 }

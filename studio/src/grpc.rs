@@ -1,14 +1,18 @@
-use crate::db::{
-    now_s, AgentRecord, ExecutorRecord, LimitDecl, ModelDecl, ProvenanceRecord, RequirementDecl,
-    StageCapDecl,
-};
+// tonic::Status is the error type of every gRPC call; boxing it buys nothing here.
+#![allow(clippy::result_large_err)]
+
 use crate::config::bearer_matches;
+use crate::db::{
+    now_s, AgentRecord, AttemptFailure, ExecutorRecord, ExecutorState, LimitDecl, ModelDecl,
+    ProvenanceRecord, RequirementDecl, StageCapDecl,
+};
 use crate::proto;
 use crate::proto::agent_gateway_server::AgentGateway;
-use crate::scheduler::{proto_to_stage, run_scheduler_tick, AppState};
+use crate::scheduler::{proto_to_stage, run_scheduler_tick, tick, AppState};
 use crate::scraper::scrape_single_agent;
-use crate::storage::{inject_png_text_chunk, validate_enhanced_json};
+use crate::storage::{ascii_json, inject_png_text_chunk, validate_enhanced_json};
 use anyhow::Result;
+use axum::body::Bytes;
 use serde_json::json;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -105,9 +109,7 @@ impl AgentGateway for AgentGatewayService {
 
         for rt in &reg.running {
             if let Ok(Some(task)) = state.db.get_task(&rt.task).await {
-                if task.current_attempt != rt.attempt
-                    || !matches!(task.status.as_str(), "assigned" | "running" | "uploading")
-                {
+                if task.current_attempt != rt.attempt || !task.status.is_active() {
                     let _ = tx.send(proto::BackendMessage {
                         msg: Some(proto::backend_message::Msg::Cancel(proto::Cancel {
                             task: rt.task.clone(),
@@ -137,11 +139,12 @@ impl AgentGateway for AgentGatewayService {
         let agent_rec_clone = agent_rec.clone();
         tokio::spawn(async move {
             let _ = scrape_single_agent(&state_init, &agent_rec_clone).await;
-            let _ = run_scheduler_tick(&state_init).await;
+            tick(&state_init).await;
         });
 
         let state_loop = state.clone();
         let session_loop = session.clone();
+        let own_tx = tx.clone();
         tokio::spawn(async move {
             while let Some(item) = inbound.next().await {
                 let msg = match item {
@@ -163,24 +166,34 @@ impl AgentGateway for AgentGatewayService {
                 .await
                 .unwrap_or(false);
 
-            if marked_offline {
-                if let Ok(mut streams) = state_loop.agent_streams.write() {
+            // Only this stream's own sender: the agent may have reconnected meanwhile, and
+            // removing the new stream's sender would drop every message to it.
+            if let Ok(mut streams) = state_loop.agent_streams.write() {
+                if streams
+                    .get(&agent_id)
+                    .is_some_and(|s| s.same_channel(&own_tx))
+                {
                     streams.remove(&agent_id);
                 }
-                let _ = run_scheduler_tick(&state_loop).await;
+            }
+            drop(own_tx);
+
+            if marked_offline {
+                tick(&state_loop).await;
 
                 let grace_s = state_loop.config.reconnect_grace_s;
                 let state_grace = state_loop.clone();
                 let agent_grace = agent_id.clone();
+                let session_grace = session_loop.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs_f64(grace_s.max(0.01))).await;
                     if let Ok(affected) = state_grace
                         .db
-                        .expire_disconnected_agent_tasks(&agent_grace)
+                        .expire_disconnected_agent_tasks(&agent_grace, &session_grace)
                         .await
                     {
                         if !affected.is_empty() {
-                            let _ = run_scheduler_tick(&state_grace).await;
+                            tick(&state_grace).await;
                         }
                     }
                 });
@@ -297,7 +310,7 @@ fn validate_and_parse_register(
             device: ex.device.clone(),
             mem_total_bytes: ex.mem_total_bytes,
             stages,
-            state: "idle".to_string(),
+            state: ExecutorState::Idle,
             current_stage: None,
             current_model_id: None,
             current_model_rev: None,
@@ -344,16 +357,16 @@ async fn handle_agent_message(
             warn!(agent = %agent_id, "Ignoring duplicate Register on existing stream");
         }
         proto::agent_message::Msg::ExecutorState(es) => {
-            let state_str = match proto::ExecutorStateKind::try_from(es.state)
+            let new_state = match proto::ExecutorStateKind::try_from(es.state)
                 .unwrap_or(proto::ExecutorStateKind::ExecutorStateUnspecified)
             {
-                proto::ExecutorStateKind::ExecutorStateIdle => "idle",
-                proto::ExecutorStateKind::ExecutorStateStarting => "starting",
-                proto::ExecutorStateKind::ExecutorStateReady => "ready",
-                proto::ExecutorStateKind::ExecutorStateBusy => "busy",
-                proto::ExecutorStateKind::ExecutorStateStopping => "stopping",
-                proto::ExecutorStateKind::ExecutorStateFailed => "idle",
-                proto::ExecutorStateKind::ExecutorStateUnspecified => "idle",
+                proto::ExecutorStateKind::ExecutorStateIdle => ExecutorState::Idle,
+                proto::ExecutorStateKind::ExecutorStateStarting => ExecutorState::Starting,
+                proto::ExecutorStateKind::ExecutorStateReady => ExecutorState::Ready,
+                proto::ExecutorStateKind::ExecutorStateBusy => ExecutorState::Busy,
+                proto::ExecutorStateKind::ExecutorStateStopping => ExecutorState::Stopping,
+                proto::ExecutorStateKind::ExecutorStateFailed => ExecutorState::Idle,
+                proto::ExecutorStateKind::ExecutorStateUnspecified => ExecutorState::Idle,
             };
             let stage_opt = proto_to_stage(es.stage);
             let pid_opt = if es.pid > 0 { Some(es.pid) } else { None };
@@ -367,7 +380,7 @@ async fn handle_agent_message(
                 .update_executor_state(
                     agent_id,
                     &es.executor,
-                    state_str,
+                    new_state,
                     stage_opt,
                     pid_opt,
                     load_opt,
@@ -413,11 +426,10 @@ async fn handle_agent_message(
                     .fail_task_attempt(
                         &task,
                         attempt,
-                        "upload_failed",
-                        &format!("Studio could not record the result: {e:#}"),
-                        -1,
-                        0,
-                        "",
+                        AttemptFailure::studio(
+                            "upload_failed",
+                            &format!("Studio could not record the result: {e:#}"),
+                        ),
                     )
                     .await?;
             }
@@ -430,11 +442,13 @@ async fn handle_agent_message(
                 .fail_task_attempt(
                     &failed.task,
                     failed.attempt,
-                    class_str,
-                    &failed.detail,
-                    failed.exit_code,
-                    failed.signal,
-                    &failed.kernel_log_tail,
+                    AttemptFailure {
+                        class: class_str,
+                        detail: &failed.detail,
+                        exit_code: failed.exit_code,
+                        signal: failed.signal,
+                        kernel_log_tail: &failed.kernel_log_tail,
+                    },
                 )
                 .await?;
             run_scheduler_tick(state).await?;
@@ -470,11 +484,7 @@ async fn handle_done_message(
             .fail_task_attempt(
                 &done.task,
                 done.attempt,
-                "python_error",
-                "Done message missing mandatory Provenance",
-                -1,
-                0,
-                "",
+                AttemptFailure::studio("python_error", "Done message missing mandatory Provenance"),
             )
             .await?;
         return Ok(());
@@ -485,11 +495,7 @@ async fn handle_done_message(
             .fail_task_attempt(
                 &done.task,
                 done.attempt,
-                "python_error",
-                "Done Provenance missing model",
-                -1,
-                0,
-                "",
+                AttemptFailure::studio("python_error", "Done Provenance missing model"),
             )
             .await?;
         return Ok(());
@@ -510,11 +516,7 @@ async fn handle_done_message(
             .fail_task_attempt(
                 &done.task,
                 done.attempt,
-                "python_error",
-                "Done Provenance has empty required fields",
-                -1,
-                0,
-                "",
+                AttemptFailure::studio("python_error", "Done Provenance has empty required fields"),
             )
             .await?;
         return Ok(());
@@ -547,11 +549,10 @@ async fn handle_done_message(
             .fail_task_attempt(
                 &done.task,
                 done.attempt,
-                "upload_failed",
-                &format!("Done received before artifact {expected_art_name} was uploaded"),
-                -1,
-                0,
-                "",
+                AttemptFailure::studio(
+                    "upload_failed",
+                    &format!("Done received before artifact {expected_art_name} was uploaded"),
+                ),
             )
             .await?;
         return Ok(());
@@ -564,7 +565,12 @@ async fn handle_done_message(
             for (i, r) in job.references.iter().enumerate() {
                 let stored = state
                     .db
-                    .get_reference_latents(&r.sha256, &model_proto.id, &model_proto.rev, state.config.reference_res)
+                    .get_reference_latents(
+                        &r.sha256,
+                        &model_proto.id,
+                        &model_proto.rev,
+                        state.config.reference_res,
+                    )
                     .await?;
                 if stored.is_none() {
                     state
@@ -572,11 +578,12 @@ async fn handle_done_message(
                         .fail_task_attempt(
                             &done.task,
                             done.attempt,
-                            "upload_failed",
-                            &format!("Done received before artifact ref{i}.safetensors was uploaded"),
-                            -1,
-                            0,
-                            "",
+                            AttemptFailure::studio(
+                                "upload_failed",
+                                &format!(
+                                    "Done received before artifact ref{i}.safetensors was uploaded"
+                                ),
+                            ),
                         )
                         .await?;
                     return Ok(());
@@ -589,9 +596,14 @@ async fn handle_done_message(
     let mut encode_model_info: Option<(String, String)> = None;
 
     if task.stage == "enhance" {
-        let bytes = state.blobs.get_blob(&uploaded_art.sha256)?;
+        let bytes = state.blobs.read_blob(&uploaded_art.sha256).await?;
         let parsed = validate_enhanced_json(&bytes)?;
-        enhanced_info = Some((parsed.rewritten_prompt, parsed.wh_ratio, parsed.thinking, parsed.ratio_follow));
+        enhanced_info = Some((
+            parsed.rewritten_prompt,
+            parsed.wh_ratio,
+            parsed.thinking,
+            parsed.ratio_follow,
+        ));
     } else if task.stage == "encode" {
         encode_model_info = Some((model_proto.id.clone(), model_proto.rev.clone()));
     }
@@ -633,7 +645,14 @@ async fn handle_done_message(
 
     if let Some((job_id, job_finished)) = completed {
         if job_finished {
-            finalize_completed_job_image(state, &job_id, &done.task, done.attempt, &uploaded_art.sha256).await?;
+            finalize_completed_job_image(
+                state,
+                &job_id,
+                &done.task,
+                done.attempt,
+                &uploaded_art.sha256,
+            )
+            .await?;
         }
     }
 
@@ -650,7 +669,7 @@ async fn finalize_completed_job_image(
     let Some(job) = state.db.get_job(job_id).await? else {
         return Ok(());
     };
-    let raw_png = state.blobs.get_blob(raw_png_sha256)?;
+    let raw_png = state.blobs.read_blob(raw_png_sha256).await?;
 
     let metadata_json = json!({
         "job_id": job.id,
@@ -665,11 +684,15 @@ async fn finalize_completed_job_image(
         "references": job.references,
         "provenance": job.provenance,
     });
-    let metadata_str = serde_json::to_string(&metadata_json)?;
+    let metadata_str = ascii_json(&metadata_json)?;
 
-    let tagged_png = inject_png_text_chunk(&raw_png, "aries-image-studio", &metadata_str)?;
+    let tagged_png = Bytes::from(inject_png_text_chunk(
+        &raw_png,
+        "aries-image-studio",
+        &metadata_str,
+    )?);
     let writing = state.blobs.writing().await;
-    let (new_sha, new_bytes) = state.blobs.put_blob(&tagged_png)?;
+    let (new_sha, new_bytes) = state.blobs.store_blob(tagged_png.clone()).await?;
 
     // Update artifact record to point to the metadata-tagged PNG
     sqlx::query(
@@ -712,9 +735,13 @@ async fn finalize_completed_job_image(
         state.metrics.observe_job_e2e(&size_label, job.enhance, e2e);
     }
 
-    // GC intermediate artifacts for this completed job (§7.4)
+    // GC this job's intermediate artifacts (§7.4); the periodic pass covers the rest.
     let _collecting = state.blobs.collecting().await;
-    if let Ok(orphans) = state.db.gc_intermediate_artifacts(86400.0, false).await {
+    if let Ok(orphans) = state
+        .db
+        .gc_intermediate_artifacts(86400.0, false, Some(job_id))
+        .await
+    {
         for sha in orphans {
             let _ = state.blobs.delete_blob(&sha);
         }

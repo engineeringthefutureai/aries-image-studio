@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface ShortcutsModalProps {
   isOpen: boolean;
@@ -7,6 +8,7 @@ interface ShortcutsModalProps {
 }
 
 export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose }) => {
+  useBodyScrollLock(isOpen);
   React.useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -24,11 +26,11 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
     { key: 'Shift + Enter', description: 'Insert newline in prompt' },
     { key: 'G', description: 'Switch to Gallery view' },
     { key: 'T', description: 'Switch to Timeline view' },
-    { key: '← / →', description: 'Previous / next image in Lightbox (pan when zoomed in)' },
-    { key: '+ / −', description: 'Zoom in / out in Lightbox' },
-    { key: '0 / 1', description: 'Fit to screen / actual size (1:1) in Lightbox' },
-    { key: 'F', description: 'Toggle favorite on active image' },
-    { key: 'Esc', description: 'Close Lightbox or modal' },
+    { key: '← / →', description: 'Previous / next image in the viewer (pan when zoomed in)' },
+    { key: '+ / −', description: 'Zoom in / out in the viewer' },
+    { key: '0 / 1', description: 'Fit to screen / actual size (1:1) in the viewer' },
+    { key: 'F', description: 'Toggle favorite on the viewed image' },
+    { key: 'Esc', description: 'Leave the viewer or the system view, close this sheet' },
   ];
 
   return (

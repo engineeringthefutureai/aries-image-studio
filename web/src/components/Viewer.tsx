@@ -4,6 +4,7 @@ import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { formatDuration, formatGiB, generationSeconds, queueSeconds } from '../utils/timings';
 import { ZoomableImage } from './ZoomableImage';
 import { ReferenceStrip } from './ReferenceStrip';
+import { ReasoningText } from './ReasoningText';
 import {
   X,
   ChevronLeft,
@@ -20,9 +21,11 @@ import {
   ChevronDown,
   Trash2,
   ImagePlus,
+  Link2,
 } from 'lucide-react';
+import { modelLabel } from '../utils/enhancers';
 
-interface LightboxProps {
+interface ViewerProps {
   generation: Generation | null;
   onClose: () => void;
   onPrev?: () => void;
@@ -36,10 +39,15 @@ interface LightboxProps {
   onRerun: (generation: Generation) => void;
   /** Attach this image as a reference in the composer (absent: no room or not supported). */
   onUseAsReference?: (generation: Generation) => void;
+  /** Ask to delete this image; once it is deleted the parent leaves the viewer. */
   onDelete?: (id: string) => void;
 }
 
-export const Lightbox: React.FC<LightboxProps> = ({
+/**
+ * The image viewer at `/images/{id}`: a page of its own (shareable, Back returns to the list),
+ * filling the window instead of covering the timeline, so scrolling it scrolls nothing else.
+ */
+export const Viewer: React.FC<ViewerProps> = ({
   generation,
   onClose,
   onPrev,
@@ -57,16 +65,19 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedEnhanced, setCopiedEnhanced] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
 
   // Reset sub-panels when viewing a different generation (the image remounts at fit)
-  useEffect(() => {
+  const [shownId, setShownId] = useState(generation?.id);
+  if (generation?.id !== shownId) {
+    setShownId(generation?.id);
     setCopiedPrompt(false);
     setCopiedEnhanced(false);
     setCopiedSeed(false);
     setShowThinking(false);
-  }, [generation?.id]);
+  }
 
   // Keyboard navigation & actions
   const handleKeyDown = useCallback(
@@ -104,10 +115,13 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const totalSeconds = timings?.total_s ?? genSeconds;
   const timeRows: { label: string; seconds: number; detail?: string }[] = [];
   if (timings?.enhance_s != null) {
+    // A cloud enhancer is named; the built-in one shows in Provenance.
+    const enhanceProv = generation.provenance?.enhance;
     timeRows.push({
       label: 'Enhance',
       seconds: timings.enhance_s,
       detail: [
+        enhanceProv?.agent === 'cloud' ? modelLabel(enhanceProv.model.id) : null,
         timings.generated_tokens != null
           ? `${timings.generated_tokens} / ${timings.max_new_tokens ?? generation.params.enhanceMaxTokens ?? '?'} tokens`
           : null,
@@ -144,6 +158,12 @@ export const Lightbox: React.FC<LightboxProps> = ({
     }
   };
 
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(window.location.href);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
   const handleCopySeed = () => {
     navigator.clipboard.writeText(generation.params.seed.toString());
     setCopiedSeed(true);
@@ -151,7 +171,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col xl:flex-row bg-black/95 backdrop-blur-xl text-white select-none animate-in fade-in duration-200">
+    <div className="h-dvh w-full overflow-hidden flex flex-col xl:flex-row bg-[#0b0b0a] text-white select-none">
       {/* Top Left Close & Header HUD on mobile */}
       <div className="xl:hidden flex items-center justify-between p-4 border-b border-white/10 z-20">
         <span className="font-mono text-xs text-white/70">
@@ -203,14 +223,9 @@ export const Lightbox: React.FC<LightboxProps> = ({
       {/* Right Details Inspector Panel */}
       <aside className="w-full xl:w-[410px] flex-shrink-0 bg-[#161614] border-t xl:border-t-0 xl:border-l border-white/10 flex flex-col h-[40vh] xl:h-full z-30 select-text overflow-hidden">
         <div className="p-4 sm:p-5 border-b border-white/10 bg-[#1a1a17] flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <h3 className="font-['Plus_Jakarta_Sans'] font-semibold text-base text-white leading-none shrink-0">
-              Inspector
-            </h3>
-            <span className="inline-flex items-center h-[22px] px-2.5 font-mono text-[11px] font-medium rounded-full bg-white/10 text-white/75 border border-white/10 leading-none whitespace-nowrap shrink-0">
-              Qwen-Image 2.1
-            </span>
-          </div>
+          <h3 className="font-['Plus_Jakarta_Sans'] font-semibold text-base text-white leading-none min-w-0 truncate">
+            Inspector
+          </h3>
 
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -224,6 +239,13 @@ export const Lightbox: React.FC<LightboxProps> = ({
             >
               <Heart className={`w-4 h-4 ${generation.favorite ? 'fill-current' : ''}`} />
             </button>
+            <button
+              onClick={handleCopyLink}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+              title="Copy a link to this image"
+            >
+              {copiedLink ? <Check className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
+            </button>
             <a
               href={generation.imageUrl}
               download={`${generation.id}.png`}
@@ -234,10 +256,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
             </a>
             {onDelete && (
               <button
-                onClick={() => {
-                  onDelete(generation.id);
-                  onClose();
-                }}
+                onClick={() => onDelete(generation.id)}
                 className="p-2 rounded-lg bg-white/10 hover:bg-rose-600/80 text-white/80 hover:text-white transition-colors"
                 title="Delete image"
               >
@@ -322,7 +341,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
                     {copiedEnhanced ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                     <span>{copiedEnhanced ? 'Copied' : 'Copy'}</span>
                   </button>
-                  {generation.thinking && (
+                  {generation.hasThinking && (
                     <button
                       onClick={() => setShowThinking((v) => !v)}
                       className="flex items-center gap-1 text-[11px] text-amber-300 hover:underline normal-case"
@@ -337,10 +356,11 @@ export const Lightbox: React.FC<LightboxProps> = ({
                 {sanitizeEnhancedPrompt(generation.enhancedPrompt)}
               </div>
 
-              {showThinking && generation.thinking && (
-                <div className="p-3 rounded-xl bg-black/40 border border-white/10 font-mono text-[11px] text-white/75 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-                  {generation.thinking}
-                </div>
+              {showThinking && generation.hasThinking && (
+                <ReasoningText
+                  generation={generation}
+                  className="p-3 rounded-xl bg-black/40 border border-white/10 font-mono text-[11px] text-white/75 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto"
+                />
               )}
             </div>
           )}

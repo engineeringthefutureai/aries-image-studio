@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use axum::body::Bytes;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
@@ -96,7 +97,9 @@ impl BlobStore {
 
     /// Thumbnail of `job_id` whose longer side is `size` (one of [`THUMB_SIZES`]).
     pub fn thumb_path(&self, job_id: &str, size: u32) -> PathBuf {
-        self.data_dir.join("thumbs").join(format!("{job_id}.{size}.jpg"))
+        self.data_dir
+            .join("thumbs")
+            .join(format!("{job_id}.{size}.jpg"))
     }
 
     /// Removes every thumbnail of `job_id`.
@@ -116,10 +119,10 @@ impl BlobStore {
             fs::create_dir_all(parent)?;
         }
         if !dest.exists() {
-            let tmp = self
-                .data_dir
-                .join("tmp")
-                .join(format!("{}.tmp.{}", sha256, ulid::Ulid::new()));
+            let tmp =
+                self.data_dir
+                    .join("tmp")
+                    .join(format!("{}.tmp.{}", sha256, ulid::Ulid::new()));
             fs::write(&tmp, bytes)?;
             fs::rename(&tmp, &dest)?;
         }
@@ -129,6 +132,24 @@ impl BlobStore {
     pub fn get_blob(&self, sha256: &str) -> Result<Vec<u8>> {
         let path = self.blob_path(sha256);
         fs::read(&path).with_context(|| format!("failed to read blob {sha256}"))
+    }
+
+    /// [`Self::get_blob`] on a blocking thread: images and latents are megabytes, and reading
+    /// them on the async runtime would stall other requests and the agents' streams.
+    pub async fn read_blob(&self, sha256: &str) -> Result<Vec<u8>> {
+        let (store, sha256) = (self.clone(), sha256.to_string());
+        blocking(move || store.get_blob(&sha256)).await
+    }
+
+    /// [`Self::put_blob`] on a blocking thread (it hashes and writes the whole file).
+    pub async fn store_blob(&self, bytes: Bytes) -> Result<(String, u64)> {
+        let store = self.clone();
+        blocking(move || store.put_blob(&bytes)).await
+    }
+
+    /// The thumbnail's bytes, if it has been made.
+    pub async fn read_thumb(&self, key: &str, size: u32) -> Option<Vec<u8>> {
+        tokio::fs::read(self.thumb_path(key, size)).await.ok()
     }
 
     pub fn delete_blob(&self, sha256: &str) -> Result<()> {
@@ -199,6 +220,13 @@ const UPLOAD_FORMATS: [(ImageFormat, &str); 3] = [
 const UPLOAD_MAX_SIDE: u32 = 16384;
 const UPLOAD_MAX_PIXELS: u64 = 64_000_000;
 
+/// Runs file work on tokio's blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .context("blocking file task failed")?
+}
+
 /// Upload thumbnails share the thumbnail directory with jobs; job ids are at most 64
 /// characters, so `up_` plus a 64-character hash never collides with one.
 pub fn upload_thumb_key(sha256: &str) -> String {
@@ -207,7 +235,9 @@ pub fn upload_thumb_key(sha256: &str) -> String {
 
 /// Whether `s` is a lowercase SHA-256 hex digest (blob names are nothing else).
 pub fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Decodes an image and turns it upright by its EXIF orientation (phone photos).
@@ -337,23 +367,17 @@ pub fn validate_embeds_safetensors(
 ) -> Result<SafetensorsHeader> {
     let header = parse_safetensors_header(bytes)?;
     // Masks are optional: the pipeline returns None for them when nothing is padded.
-    for req_tensor in ["prompt_embeds"] {
-        let t = header
-            .tensors
-            .get(req_tensor)
-            .ok_or_else(|| anyhow!("embeds.safetensors missing tensor '{req_tensor}'"))?;
-        if t.shape.is_empty() {
-            bail!("embeds.safetensors tensor '{req_tensor}' has empty shape");
-        }
+    let t = header
+        .tensors
+        .get("prompt_embeds")
+        .ok_or_else(|| anyhow!("embeds.safetensors missing tensor 'prompt_embeds'"))?;
+    if t.shape.is_empty() {
+        bail!("embeds.safetensors tensor 'prompt_embeds' has empty shape");
     }
-    if require_negative {
-        for req_tensor in ["negative_prompt_embeds"] {
-            if !header.tensors.contains_key(req_tensor) {
-                bail!(
-                    "embeds.safetensors missing '{req_tensor}' required when true_cfg_scale > 1"
-                );
-            }
-        }
+    if require_negative && !header.tensors.contains_key("negative_prompt_embeds") {
+        bail!(
+            "embeds.safetensors missing 'negative_prompt_embeds' required when true_cfg_scale > 1"
+        );
     }
     for req_meta in ["prompt", "prompt_source", "model", "rev", "dtype"] {
         let v = header
@@ -397,27 +421,54 @@ pub fn validate_reference_latents(
         .get("latents")
         .ok_or_else(|| anyhow!("reference latents missing tensor 'latents'"))?;
     if t.shape.len() != 3 {
-        bail!("reference latents tensor 'latents' must be (1, tokens, channels), got {:?}", t.shape);
+        bail!(
+            "reference latents tensor 'latents' must be (1, tokens, channels), got {:?}",
+            t.shape
+        );
     }
-    for req_meta in ["width", "height", "reference_res", "source_sha256", "model", "rev", "dtype"] {
+    for req_meta in [
+        "width",
+        "height",
+        "reference_res",
+        "source_sha256",
+        "model",
+        "rev",
+        "dtype",
+    ] {
         match header.metadata.get(req_meta) {
             Some(v) if !v.is_empty() => {}
             _ => bail!("reference latents missing metadata '{req_meta}'"),
         }
     }
-    let meta = |k: &str| header.metadata.get(k).map(|s| s.as_str()).unwrap_or_default();
+    let meta = |k: &str| {
+        header
+            .metadata
+            .get(k)
+            .map(|s| s.as_str())
+            .unwrap_or_default()
+    };
     if meta("source_sha256") != source_sha256 {
-        bail!("reference latents are of image {}, expected {source_sha256}", meta("source_sha256"));
+        bail!(
+            "reference latents are of image {}, expected {source_sha256}",
+            meta("source_sha256")
+        );
     }
     if meta("reference_res") != reference_res.to_string() {
-        bail!("reference latents at resolution {}, expected {reference_res}", meta("reference_res"));
+        bail!(
+            "reference latents at resolution {}, expected {reference_res}",
+            meta("reference_res")
+        );
     }
     let (Ok(w), Ok(h)) = (meta("width").parse::<u32>(), meta("height").parse::<u32>()) else {
         bail!("reference latents width/height are not numbers");
     };
     // One latent token per 16x16 pixel tile.
     if t.shape[1] != ((w / 16) * (h / 16)) as usize {
-        bail!("reference latents hold {} tokens, {w}x{h} needs {}", t.shape[1], (w / 16) * (h / 16));
+        bail!(
+            "reference latents hold {} tokens, {w}x{h} needs {}",
+            t.shape[1],
+            (w / 16) * (h / 16)
+        );
     }
     Ok((header, w, h))
 }
@@ -468,8 +519,8 @@ pub fn validate_png_dimensions(
     expected_width: Option<u32>,
     expected_height: Option<u32>,
 ) -> Result<(u32, u32)> {
-    let img = image::load_from_memory_with_format(bytes, ImageFormat::Png)
-        .context("invalid PNG file")?;
+    let img =
+        image::load_from_memory_with_format(bytes, ImageFormat::Png).context("invalid PNG file")?;
     let (w, h) = (img.width(), img.height());
     if let Some(ew) = expected_width {
         if w != ew {
@@ -486,10 +537,33 @@ pub fn validate_png_dimensions(
 
 const PNG_SIG: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
+/// JSON with every non-ASCII character written as a `\uXXXX` escape: still the same JSON,
+/// and plain ASCII, so it fits a `tEXt` chunk (Latin-1). Raw UTF-8 there, e.g. a Chinese
+/// prompt, reads as garbage in other tools.
+pub fn ascii_json(value: &serde_json::Value) -> Result<String> {
+    let json = serde_json::to_string(value)?;
+    let mut out = String::with_capacity(json.len());
+    let mut units = [0u16; 2];
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            for u in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{u:04x}"));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Injects or replaces a `tEXt` chunk with `keyword` and `text` before the `IEND` chunk in a PNG.
+/// `tEXt` is Latin-1, so `text` must be ASCII (see `ascii_json`).
 pub fn inject_png_text_chunk(png_bytes: &[u8], keyword: &str, text: &str) -> Result<Vec<u8>> {
     if png_bytes.len() < 8 || png_bytes[0..8] != PNG_SIG {
         bail!("invalid PNG signature");
+    }
+    if !keyword.is_ascii() || !text.is_ascii() {
+        bail!("tEXt chunk text must be ASCII");
     }
 
     let mut chunk_data = Vec::with_capacity(keyword.len() + 1 + text.len());
@@ -570,4 +644,30 @@ pub fn read_png_text_chunk(png_bytes: &[u8], keyword: &str) -> Result<Option<Str
         pos += total_chunk_len;
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provenance_text_is_ascii_and_reads_back() {
+        let mut png = Vec::new();
+        image::RgbImage::new(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let meta = serde_json::json!({"prompt": "一只青蛙 🐸 café"});
+        let text = ascii_json(&meta).unwrap();
+        assert!(text.is_ascii());
+        assert!(text.contains("\\u4e00") && text.contains("\\ud83d\\udc38"));
+
+        let tagged = inject_png_text_chunk(&png, "aries-image-studio", &text).unwrap();
+        let back = read_png_text_chunk(&tagged, "aries-image-studio")
+            .unwrap()
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(parsed, meta);
+
+        assert!(inject_png_text_chunk(&png, "k", "一").is_err());
+    }
 }

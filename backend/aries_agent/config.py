@@ -16,6 +16,8 @@ logger = logging.getLogger("aries_agent.config")
 
 # Largest UI preset: 4:3 at 2400 x 1792 (4.30 MP). Every preset ran untiled on v0.2.
 DEFAULT_MAX_PX = 2400 * 1792
+# Qwen-Image-2.1 takes at most 10 condition images (model card).
+MODEL_MAX_REFERENCE_IMAGES = 10
 
 
 @dataclass
@@ -109,7 +111,8 @@ class AgentConfig:
     # Reference images (docs/REFERENCE_IMAGES.md §5): each adds ~2.6 GiB to denoise; above
     # `denoise_refs_limit_above` the job spills into host RAM (the driver held ~7 GB for one
     # 4-reference denoise at full size), so it needs the decode floor and shares the
-    # one-at-a-time slot with full-size decodes on this agent.
+    # one-at-a-time slot with full-size decodes on this agent. Up to the model's limit,
+    # MODEL_MAX_REFERENCE_IMAGES; 4 is what one 24 GB card takes at full size.
     max_reference_images: int = 4
     denoise_refs_limit_above: int = 2
     # Host-RAM guard: kill the hungriest worker when MemAvailable stays below the floor
@@ -143,6 +146,13 @@ class AgentConfig:
             token = Path(token_file).read_text(encoding="utf-8").strip()
         if not token:
             raise ValueError("ARIES_AGENT_TOKEN (or ARIES_AGENT_TOKEN_FILE) must be set")
+
+        max_reference_images = int(os.environ.get("ARIES_MAX_REFERENCE_IMAGES", "4"))
+        if not 0 <= max_reference_images <= MODEL_MAX_REFERENCE_IMAGES:
+            raise ValueError(
+                f"ARIES_MAX_REFERENCE_IMAGES={max_reference_images}: Qwen-Image-2.1 takes 0 to "
+                f"{MODEL_MAX_REFERENCE_IMAGES} reference images"
+            )
 
         ca_cert = os.environ.get("ARIES_CA_CERT") or None
         metrics_host = os.environ.get("ARIES_METRICS_HOST", "0.0.0.0")
@@ -252,7 +262,7 @@ class AgentConfig:
             decode_split_above_px=int(os.environ.get("ARIES_DECODE_SPLIT_ABOVE_PX", "3500000")),
             decode_host_ram_floor_bytes=int(os.environ.get("ARIES_DECODE_RAM_FLOOR_BYTES", "6442450944")),
             decode_max_concurrent_per_agent=int(os.environ.get("ARIES_DECODE_MAX_CONCURRENT", "1")),
-            max_reference_images=int(os.environ.get("ARIES_MAX_REFERENCE_IMAGES", "4")),
+            max_reference_images=max_reference_images,
             denoise_refs_limit_above=int(os.environ.get("ARIES_DENOISE_REFS_LIMIT_ABOVE", "2")),
             ram_guard_floor_bytes=int(os.environ.get("ARIES_RAM_GUARD_FLOOR_BYTES", "4294967296")),
             ram_guard_interval_s=float(os.environ.get("ARIES_RAM_GUARD_INTERVAL_S", "0.25")),

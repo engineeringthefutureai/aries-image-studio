@@ -33,6 +33,10 @@ from aries_agent.metrics import AgentMetrics
 
 logger = logging.getLogger("aries_agent")
 
+# Longest worker output line the agent logs (asyncio's default is 64 KiB; a traceback or a
+# progress bar can exceed it). Longer lines are dropped, never left to block the worker.
+WORKER_LOG_LINE_LIMIT = 1024 * 1024
+
 STAGE_ENUM_TO_NAME = {
     agent_pb2.STAGE_ENHANCE: "enhance",
     agent_pb2.STAGE_ENCODE: "encode",
@@ -81,6 +85,10 @@ def worker_preexec(oom_score_adj: int):
     return apply
 
 
+class _CancelledBeforeStart(Exception):
+    """A Cancel arrived before the task reached the worker."""
+
+
 def compute_file_sha256(path: Path) -> Tuple[str, int]:
     h = hashlib.sha256()
     total = 0
@@ -102,6 +110,9 @@ class ActiveTask:
     output_paths: Dict[str, Path] = field(default_factory=dict)
     started_at: float = field(default_factory=time.monotonic)
     cancelled: bool = False
+    # Inputs downloaded: until then a worker's claim must not get the job (it would run
+    # without them).
+    inputs_ready: bool = False
     dispatched_to_worker: bool = False
     completed: bool = False
 
@@ -323,6 +334,7 @@ class ExecutorRuntime:
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=WORKER_LOG_LINE_LIMIT,
             preexec_fn=worker_preexec(self.agent_cfg.worker_oom_score_adj),
         )
         self.pid = self.process.pid or 0
@@ -332,15 +344,27 @@ class ExecutorRuntime:
 
     async def _monitor_process(self, proc: asyncio.subprocess.Process, stage_enum: int) -> None:
         stage_name = STAGE_ENUM_TO_NAME.get(stage_enum, "unknown")
-        try:
-            if proc.stdout:
-                while True:
+        # Keep draining the worker's output until it closes: a worker whose pipe nobody reads
+        # blocks on its next write.
+        if proc.stdout:
+            while True:
+                try:
                     line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    logger.info("[%s:%s] %s", self.cfg.id, stage_name, line.decode("utf-8", errors="replace").rstrip())
-        except Exception:
-            pass
+                except ValueError:
+                    # Longer than the stream limit: readline() has dropped it.
+                    logger.warning("[%s:%s] output line over %d bytes dropped", self.cfg.id, stage_name, WORKER_LOG_LINE_LIMIT)
+                    continue
+                except Exception:
+                    logger.exception("[%s:%s] reading worker output failed; discarding the rest", self.cfg.id, stage_name)
+                    try:
+                        while await proc.stdout.read(65536):
+                            pass
+                    except Exception:
+                        pass
+                    break
+                if not line:
+                    break
+                logger.info("[%s:%s] %s", self.cfg.id, stage_name, line.decode("utf-8", errors="replace").rstrip())
 
         rc = await proc.wait()
         if self.process is not proc:
@@ -550,7 +574,8 @@ class ExecutorRuntime:
             await self._send_worker_json({"action": "exit"})
             return
 
-        if self.active_task and not self.active_task.dispatched_to_worker:
+        task = self.active_task
+        if task and task.inputs_ready and not task.dispatched_to_worker:
             await self._dispatch_active_task_to_worker()
             return
 
@@ -609,7 +634,7 @@ class ExecutorRuntime:
 
     async def _dispatch_active_task_to_worker(self) -> None:
         task = self.active_task
-        if not task or task.dispatched_to_worker:
+        if not task or not task.inputs_ready or task.dispatched_to_worker:
             return
         task.dispatched_to_worker = True
         await self._send_worker_json(self._build_worker_job_payload(task))
@@ -668,7 +693,7 @@ class ExecutorRuntime:
                 out_file = task.output_paths.get(upload_spec.name)
                 if not out_file or not out_file.is_file():
                     raise FileNotFoundError(f"Worker did not produce expected output {upload_spec.name}")
-                sha256, size_bytes = compute_file_sha256(out_file)
+                sha256, size_bytes = await asyncio.to_thread(compute_file_sha256, out_file)
                 ok, err_detail = await self._upload_artifact_with_retry(upload_spec.url, out_file, sha256)
                 if not ok:
                     self.metrics.task_outcomes_total.labels(
@@ -817,8 +842,10 @@ class ExecutorRuntime:
                 res = await client.get(url, headers=headers, timeout=60.0)
                 res.raise_for_status()
                 dest = inputs_dir / inp.name
-                dest.write_bytes(res.content)
-                actual_sha, _ = compute_file_sha256(dest)
+                # Off the event loop: artifacts run to hundreds of MB, and the gRPC stream,
+                # worker messages and progress wait meanwhile.
+                await asyncio.to_thread(dest.write_bytes, res.content)
+                actual_sha, _ = await asyncio.to_thread(compute_file_sha256, dest)
                 if inp.sha256 and actual_sha.lower() != inp.sha256.lower():
                     raise ValueError(
                         f"Input artifact {inp.name} SHA-256 mismatch: expected {inp.sha256}, got {actual_sha}"
@@ -829,7 +856,7 @@ class ExecutorRuntime:
     async def _upload_artifact_with_retry(self, raw_url: str, path: Path, sha256: str) -> Tuple[bool, str]:
         """Upload an output with 3 tries and short backoff (1 s, 3 s), §7.4."""
         url = self._resolve_url(raw_url)
-        data = path.read_bytes()
+        data = await asyncio.to_thread(path.read_bytes)
         headers = {
             "Authorization": f"Bearer {self.agent_cfg.agent_token}",
             "X-Content-SHA256": sha256,
@@ -879,9 +906,14 @@ class ExecutorRuntime:
 
         try:
             await self._download_inputs(task)
+            if task.cancelled:
+                # Cancelled while downloading: the worker had no job to cancel yet.
+                raise _CancelledBeforeStart()
+            task.inputs_ready = True
             await self._dispatch_active_task_to_worker()
         except Exception as e:
-            logger.error("Failed preparing inputs for task %s: %s", assign.task, e)
+            if not task.cancelled:
+                logger.error("Failed preparing inputs for task %s: %s", assign.task, e)
             task.completed = True
             self.active_task = None
             shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -890,8 +922,10 @@ class ExecutorRuntime:
                     failed=agent_pb2.Failed(
                         task=assign.task,
                         attempt=assign.attempt,
-                        failure_class=agent_pb2.FAILURE_PYTHON_ERROR,
-                        detail=f"Input download failed: {e}",
+                        failure_class=agent_pb2.FAILURE_CANCELLED
+                        if task.cancelled
+                        else agent_pb2.FAILURE_PYTHON_ERROR,
+                        detail="cancelled" if task.cancelled else f"Input download failed: {e}",
                     )
                 )
             )
@@ -999,9 +1033,11 @@ class AriesAgent:
                 except Exception as e:
                     logger.debug("Could not start systemd-inhibit: %s", e)
         elif not any_alive and self._inhibitor_proc is not None:
+            # No wait(): this runs on the event loop. A process still exiting is reaped by the
+            # subprocess module once its Popen object is dropped.
             try:
                 self._inhibitor_proc.terminate()
-                self._inhibitor_proc.wait(timeout=1.0)
+                self._inhibitor_proc.poll()
             except Exception:
                 pass
             self._inhibitor_proc = None

@@ -1,6 +1,7 @@
 # Aries Image Studio — Architecture V3: one backend, thin agents
 
-Status: implemented in v0.3.0 (`studio/`, `backend/aries_agent/`). A new design, written
+Status: implemented in v0.3.0 (`studio/`, `backend/aries_agent/`); current for 0.5.0
+(reference images, the image-aware enhancer, split decode, cloud enhancers). A new design, written
 fresh; it does not edit the earlier docs. Where V3 and an earlier doc disagree about the runtime model, V3 wins. Measured
 hardware facts and failure modes still come from `HARDWARE.md`; the stage workers already
 built (enhance, encode, denoise, decode) are reused.
@@ -36,9 +37,8 @@ means writing an agent for it, not changing the backend.
 
 **Non-goals (for now)**
 
-- Tiled decode (declared in the schema, not supported).
 - Splitting one stage across GPUs.
-- Multiple backend replicas (single replica, SQLite, `Recreate` strategy).
+- Multiple backend replicas (single replica, SQLite).
 - Agents on untrusted networks (LAN + shared token is enough).
 
 ---
@@ -49,10 +49,10 @@ means writing an agent for it, not changing the backend.
                    browser (SPA, light theme)
                           │  HTTPS: /api/*  (polling, §8)
                           ▼
-┌──────────────────────── backend (Rust, k3s, 1 replica) ────────────────────────┐
+┌──────────────────── backend (Rust, Docker Compose, 1 replica) ─────────────────┐
 │  axum: SPA · public API · artifact HTTP   ·   tonic: AgentGateway (gRPC)        │
 │  scheduler · job state machine · capability matcher · metrics scraper          │
-│  SQLite (WAL) · blob store on PVC · /metrics                                   │
+│  SQLite (WAL) · blob store in the data directory · /metrics                    │
 └────────────▲───────────────────────────────▲───────────────────────────────────┘
              │ gRPC stream (agent dials out) │ HTTP scrape every 1 s (backend dials in)
              │ + HTTP GET/PUT artifacts      │
@@ -92,10 +92,10 @@ both sides (§7.2), so the two can't drift.
 
 | Stage | Input | Output | Notes |
 |---|---|---|---|
-| `enhance` (optional) | prompt, followed by `Aspect ratio: <preset nearest the job's size>` so the rewriter frames for the size that will render (its own `wh_ratio` is recorded, not used); with references their pixels (`ref<i>.image`), for the image-aware enhancer PE-I2I ([ENHANCER_I2I.md](ENHANCER_I2I.md)) | `enhanced.json` (`rewritten_prompt`, `wh_ratio`, `thinking`; PE-I2I may answer `ratio_follow: "<imageN>"` instead of a ratio, recorded, not used) | original prompt and the rewriter's reasoning kept on the job |
+| `enhance` (optional) | prompt, followed by `Aspect ratio: <preset nearest the job's size>` so the rewriter frames for the size that will render (its own `wh_ratio` is recorded, not used); with references their pixels (`ref<i>.image`), for the image-aware enhancer PE-I2I ([ENHANCER_I2I.md](ENHANCER_I2I.md)) | `enhanced.json` (`rewritten_prompt`, `wh_ratio`, `thinking`; PE-I2I may answer `ratio_follow: "<imageN>"` instead of a ratio, recorded, not used) | original prompt and the rewriter's reasoning kept on the job. A job may name a cloud enhancer instead: Studio then runs this stage itself, with the pseudo-agent `cloud` (CLOUD_ENHANCERS.md) |
 | `encode` | prompt (original or enhanced), `true_cfg_scale`, reference images (`ref<i>.image`) | `embeds.safetensors`: `prompt_embeds` (+ `negative_prompt_embeds` when `true_cfg_scale > 1`), and their masks when the pipeline returns them (it returns none when nothing is padded); header holds `prompt`, `prompt_source`, `model`, `rev`, `dtype`. With references also `image_pad_mask` and `reference_sizes`, and `ref<i>.safetensors` (VAE latents) for each reference Studio has none stored for | 0.25–2.5 MB; ~8 MB more per reference |
 | `denoise` | embeds + seed + size + steps, stored reference latents (`ref<i>.safetensors`) | `latent.safetensors`: tensor `latent`, the input `vae.decode` receives; header holds `model`, `rev`, `dtype`, `width`, `height`, `seed`, `steps` | ~2 MB at 2048²; initial noise from `torch.Generator("cpu").manual_seed(seed)`; with references our own copy of the pipeline's loop (REFERENCE_IMAGES.md §3.1) |
-| `decode` | latent | `image.png` | backend writes the PNG metadata chunk afterwards |
+| `decode` | latent, decode mode | `image.png` | untiled by default, full-size images as an exact split (HARDWARE.md §1.3); VAE tiling only when the job asks (`tiling`); backend writes the PNG metadata chunk afterwards |
 
 The exact tensor, metadata and field names are one file,
 `proto/aries/agent/v1/artifacts.json`. `backend/tests/test_contract.py` checks the workers
@@ -157,7 +157,10 @@ task:  waiting ─(previous task done)─▶ queued ─▶ assigned ─▶ runni
 - `blocked` is not a terminal state; it is `queued` with a reason the UI shows
   ("no executor online can decode 2048²", "waiting for host RAM", "executor xpu1 lent").
 - `failed(class)` uses the crash classes from HARDWARE.md: `gpu_fault`, `engine_reset`,
-  `wedged`, `oom_kill`, `python_error`, `lost` (agent vanished), `upload_failed`.
+  `wedged`, `oom_kill`, `python_error`, `device_mismatch` (the worker opened another
+  card, §10.3), `lost` (agent vanished), `upload_failed`. An attempt the agent reports as
+  `cancelled` ends the job as cancelled. A rejected assignment is not a failure: the task
+  is requeued and the executor disabled as `protocol_violation` (§6.4).
 - Intermediate artifacts stay until the job finishes, so a failed decode retries from the
   latent, not from scratch.
 
@@ -176,7 +179,7 @@ Shown in proto3 JSON form for readability; the wire type is `Register` (§7.2).
 {
   "type": "register",
   "agent": "aries",
-  "agent_version": "0.3.0",
+  "agent_version": "0.5.0",
   "backend_kind": "xpu",
   "metrics_url": "http://aries.lan:9464/metrics",
   "host": { "ram_total_bytes": 32212254720 },
@@ -192,8 +195,8 @@ Shown in proto3 JSON form for readability; the wire type is `Register` (§7.2).
         "enhance": { "models": ["Qwen/Qwen-Image-2.1-PE-T2I", "Qwen/Qwen-Image-2.1-PE-I2I"],
                      "reference_models": ["Qwen/Qwen-Image-2.1-PE-I2I"], "max_references": 4 },
         "encode":  { "models": ["Qwen/Qwen-Image-2.1"], "max_references": 4 },
-        "denoise": { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4194304, "max_references": 4 },
-        "decode":  { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4194304, "modes": ["untiled"] }
+        "denoise": { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4300800, "max_references": 4 },
+        "decode":  { "models": ["Qwen/Qwen-Image-2.1"], "max_px": 4300800, "modes": ["untiled", "tiled"] }
       }
     },
     { "id": "xpu1", "device": "0000:08:00.0", "...": "same shape" }
@@ -275,6 +278,8 @@ whatever their stage, since side by side they ended in a global OOM (HARDWARE.md
    released.
 5. **Model revision affinity:** denoise and decode only go to executors declaring the
    revision encode used.
+6. **Cloud enhances never take a card:** an enhance whose job names a cloud enhancer is
+   assigned to the pseudo-agent `cloud` and sent by Studio (CLOUD_ENHANCERS.md §3).
 
 Queued tasks that cannot run get a live `blocked_reason` (offline, lent, disabled, waiting
 for host RAM, stale metrics, ...), shown in the UI.
@@ -298,7 +303,7 @@ executor (`protocol_violation`).
 
 Messages are defined once in `proto/aries/agent/v1/agent.proto`; Rust code is generated at
 build time, Python code is checked in under `backend/aries/agent/v1/` (regenerate with
-`buf generate` or `python -m grpc_tools.protoc`, see `buf.gen.yaml`).
+`python -m grpc_tools.protoc`, BUILD_AND_RUN.md §9).
 
 ### 7.1 Transport and authentication
 
@@ -321,8 +326,12 @@ default token: the backend refuses to start and the agent refuses to run without
 ### 7.3 Disconnects and reconnects
 
 - When the stream ends the agent is marked offline. Its in-flight tasks wait
-  `reconnect_grace` (default 30 s); if it is still offline then, they are requeued (or
-  failed with class `lost` on their second attempt).
+  `reconnect_grace` (default 30 s); if it is still offline then, on the same session,
+  they are requeued (or failed with class `lost` on their second attempt). After a
+  reconnect and another drop, only the later drop's grace counts.
+- A worker the agent re-announces after a reconnect is `ready` for its stage, but Studio
+  no longer knows which model it loaded: an enhancer of unknown model gets no task and is
+  released, then started again with the model the queue needs.
 - On every `Register` the backend reconciles: tasks it has on that agent that are not in
   `Register.running` are requeued the same way (the agent restarted, or the result was
   lost), tasks in it keep their executor `busy`, and tasks it lists that the backend no
@@ -356,15 +365,17 @@ default token: the backend refuses to start and the agent refuses to run without
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `enhance_max_tokens` (256–24576, kept only with `enhance`) is the rewriter's token limit; unset, the worker's default: 4096 plus 2048 per reference image. Reasoning that runs out of room continues with the limit doubled, up to 24576, and only there is closed for the reply. `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. `references` lists reference images in prompt order, each `{upload: sha256}` or `{image: job_id}` (an earlier result); not with `true_cfg_scale > 1`, nor with `enhance` unless an executor has an image-aware enhancer for that many, and at most what an executor declares. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
+| `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `enhance_max_tokens` (256–24576, kept only with `enhance`) is the rewriter's token limit; unset, the worker's default: 4096 plus 2048 per reference image. Reasoning that runs out of room continues with the limit doubled, up to 24576, and only there is closed for the reply. `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. `references` lists reference images in prompt order, each `{upload: sha256}` or `{image: job_id}` (an earlier result); not with `true_cfg_scale > 1`, nor with `enhance` unless an executor has an image-aware enhancer for that many (or a cloud enhancer is named), and at most what an executor declares. `enhancer` names a cloud enhancer by its model id (`claude-sonnet-5-5`, `gemini-3.5-flash-lite`; CLOUD_ENHANCERS.md), kept only with `enhance`; unset or `builtin`: the agents' enhancer; one Studio does not offer is refused. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
 | `POST /api/uploads` · `GET /api/uploads/{sha256}` · `/thumb?size=` | upload a reference image (PNG, JPEG or WebP body, up to 32 MB, 16384 px a side and 64 MP; `422` otherwise) → `{id, sha256, width, height, mime}` (size upright by EXIF; the same image twice is one upload) · the image · a JPEG thumbnail like the job thumbnails (default 512) |
-| `GET /api/jobs?changed_since=<version>` | `{version, jobs, deleted}`: jobs changed since a version (all without it), each with tasks (status, step, enhance `sub_stage` and `stats`), per-stage provenance, `meta` and `favorite`; `deleted` lists ids deleted since that version. Poll 1 s while anything is active, 10 s when idle |
+| `GET /api/jobs?limit=<n>&before=<cursor>` | `{version, jobs, next}`: a page of at most `n` (1–200) jobs, newest first, after the previous page's `next` (null on the last). Filters: `status=done`, `favorite=true`, `q` (substring of the prompt, the enhanced prompt or the seed), `aspect=w:h` (size ratio within 0.01). The browser's lists load this way, a page as they scroll |
+| `GET /api/jobs?changed_since=<version>` | `{version, jobs, deleted}`: jobs changed since a version (every job when neither parameter is given), each with tasks (status, step, enhance `sub_stage` and `stats`), per-stage provenance, `meta` and `favorite`; `deleted` lists ids deleted since that version. Poll 1 s while anything is active, 10 s when idle. Lists leave out the enhancer's reasoning (`thinking`, most of a job's size) and say `has_thinking`; `GET /api/jobs/{id}` has it |
+| `GET /api/gallery/facets` | `{total, favorites, sizes: [{width, height, count}]}` over finished images, for the gallery's filter counts |
 | `GET /api/jobs/{id}` · `PATCH /api/jobs/{id}` · `DELETE /api/jobs/{id}` | detail · `{favorite}` · delete (cancels first; history is user-owned) |
 | `GET /api/preferences` · `PUT /api/preferences` | the UI's preferences (composer settings, theme): one JSON object up to 16 KiB, `{}` until saved |
-| `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact (`409` for any other state) |
+| `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact (`409` for any other state); `/retry` takes an optional `{enhancer}` to retry with another enhancer (`builtin` after a cloud one failed) |
 | `GET /api/images/{id}` · `/thumb?size=512\|768\|1024` | PNG with metadata · JPEG thumbnail (longer side; default 1024, `400` for other sizes). Both are sent with `Cache-Control: public, max-age=31536000, immutable`, since a finished job's image never changes |
 | `GET /api/system` | agents, executors, states, declared capabilities, latest scraped resources, scrape age, queue by stage, blocked reasons |
-| `GET /api/capabilities` | for the composer: max pixels, most reference images (`max_references_now`/`_ever`), most Enhance reads (`enhance_max_references_now`/`_ever`, 0 without PE-I2I) and the full-size presets servable **now** vs **ever** |
+| `GET /api/capabilities` | for the composer: max pixels, most reference images (`max_references_now`/`_ever`), most Enhance reads (`enhance_max_references_now`/`_ever`, 0 without PE-I2I), the cloud enhancers offered (`cloud_enhancers`: `id`, `label`, `model`, `max_references`; empty unless switched on) and the full-size presets servable **now** vs **ever** |
 | `POST /api/executors/{id}/lend` · `/return` · `/disable` · `/enable` | operator controls |
 | `GET /metrics` | backend metrics (§9) |
 
@@ -442,7 +453,8 @@ does not suspend mid-job.
 
 ## 11. Deployment
 
-- **Backend:** `studio/Dockerfile`; set `ARIES_AGENT_TOKEN`, `ARIES_DATA_DIR`,
+- **Backend:** `studio/Dockerfile`, run by `deploy/studio/compose.yaml` with the data directory
+  on the host; set `ARIES_AGENT_TOKEN`, `ARIES_DATA_DIR`,
   `ARIES_ARTIFACT_BASE_URL` (the URL agents use for artifacts) and the listen addresses.
 - **Agent:** `deploy/aries/compose.yaml` (container) or `deploy/aries/aries-agent.service`
   (systemd, token in `/etc/aries/agent.env`). `deploy/aries/.env` holds the token and is

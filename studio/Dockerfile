@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compil
 COPY Cargo.toml Cargo.lock ./
 COPY proto/ proto/
 COPY studio/ studio/
+# The cloud enhancers' rewriting prompt (studio/src/cloud.rs include_str!).
+COPY backend/aries_worker/stages/system_prompt.txt backend/aries_worker/stages/system_prompt.txt
 
 RUN cargo build --release --bin aries-image-studio -p aries-image-studio
 

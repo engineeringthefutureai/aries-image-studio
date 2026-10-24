@@ -27,7 +27,7 @@ export interface JobMeta {
 }
 
 /** The composer's aspect label for a size (exact or scaled-down preset), else "w:h". */
-function aspectOf(width: number, height: number): AspectRatio {
+export function aspectOf(width: number, height: number): AspectRatio {
   for (const [label, dim] of Object.entries(ASPECT_RATIOS)) {
     if (Math.abs(width / height - dim.width / dim.height) < 0.01) return label as AspectRatio;
   }
@@ -111,6 +111,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     prompt: v3.prompt,
     enhancedPrompt: v3.enhanced_prompt ? sanitizeEnhancedPrompt(v3.enhanced_prompt) : undefined,
     thinking: v3.thinking || undefined,
+    hasThinking: !!(v3.has_thinking || v3.thinking),
     params: {
       width: v3.width,
       height: v3.height,
@@ -121,6 +122,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
       quality: meta.quality || 'custom',
       enhance: v3.enhance,
       enhanceMaxTokens: v3.enhance_max_tokens ?? undefined,
+      enhancer: v3.enhancer ?? undefined,
       tiling: !!v3.tiling,
     },
     status,
@@ -245,16 +247,23 @@ export async function controlExecutorApi(
 export interface JobsPage {
   version: number;
   jobs: Generation[];
-  /** Jobs deleted since `changedSince` (empty for a full load). */
+  /** Jobs deleted since `changedSince` (empty otherwise). */
   deleted: string[];
+  /** Cursor of the next page (paged requests); null: no more. */
+  next: string | null;
 }
 
-/**
- * Jobs from Studio (`/api/jobs`): everything, or what changed since a version.
- */
-export async function fetchJobsApi(changedSince?: number): Promise<JobsPage> {
-  const url = changedSince !== undefined ? `/api/jobs?changed_since=${changedSince}` : '/api/jobs';
-  const res = await fetch(url, { cache: 'no-store' });
+/** Which jobs a paged list shows: all (the timeline) or finished images with filters (the gallery). */
+export interface JobQuery {
+  doneOnly?: boolean;
+  favorites?: boolean;
+  q?: string;
+  /** `w:h` of the image size (not the label: presets are only near their label's ratio). */
+  ratio?: string;
+}
+
+async function getJobs(params: URLSearchParams): Promise<JobsPage> {
+  const res = await fetch(`/api/jobs?${params}`, { cache: 'no-store' });
   if (!res.ok) {
     throw new Error(`Failed to fetch jobs (${res.status})`);
   }
@@ -263,7 +272,48 @@ export async function fetchJobsApi(changedSince?: number): Promise<JobsPage> {
     version: data.version,
     jobs: ((data.jobs || []) as V3JobRecord[]).map(jobToGeneration),
     deleted: data.deleted || [],
+    next: data.next ?? null,
   };
+}
+
+/** Jobs that changed (or were deleted) since a version, for the poll loop. */
+export function fetchJobChangesApi(changedSince: number): Promise<JobsPage> {
+  return getJobs(new URLSearchParams({ changed_since: String(changedSince) }));
+}
+
+/** One page of a list, newest first, after `before` (the previous page's `next`). */
+export function fetchJobsPageApi(query: JobQuery, limit: number, before?: string | null): Promise<JobsPage> {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (before) p.set('before', before);
+  if (query.doneOnly) p.set('status', 'done');
+  if (query.favorites) p.set('favorite', 'true');
+  if (query.q?.trim()) p.set('q', query.q.trim());
+  if (query.ratio) p.set('aspect', query.ratio);
+  return getJobs(p);
+}
+
+/** One job with everything (its enhancer reasoning too); null when Studio has no such job. */
+export async function fetchJobApi(id: string): Promise<Generation | null> {
+  const res = await fetch(`/api/jobs/${encodeURIComponent(id)}`, { cache: 'no-store' });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch job (${res.status})`);
+  return jobToGeneration(await res.json());
+}
+
+export interface GalleryFacets {
+  total: number;
+  favorites: number;
+  sizes: { width: number; height: number; count: number }[];
+}
+
+/** Counts for the gallery's filters, over all finished images. */
+export async function fetchGalleryFacetsApi(): Promise<GalleryFacets | null> {
+  try {
+    const res = await fetch('/api/gallery/facets', { cache: 'no-store' });
+    return res.ok ? res.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface JobSubmission {
@@ -276,6 +326,8 @@ export interface JobSubmission {
   enhance: boolean;
   /** The prompt rewriter's token limit; omitted: Studio's default. */
   enhance_max_tokens?: number;
+  /** A cloud enhancer's id; omitted: the built-in enhancer. */
+  enhancer?: string;
   tiling: boolean;
   meta: JobMeta;
   /** Reference images in prompt order: uploads (hash) or earlier results (job id). */
@@ -309,21 +361,30 @@ export async function submitBatchJobsApi(
   }
 }
 
-export async function cancelJobApi(jobId: string): Promise<void> {
+/**
+ * Cancel a job; returns the job as Studio left it. A job that finished before the cancel
+ * arrived stays done. `null`: no answer (the next poll shows the real state).
+ */
+export async function cancelJobApi(jobId: string): Promise<Generation | null> {
   try {
-    await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+    return res.ok ? jobToGeneration(await res.json()) : null;
   } catch {
-    // the next poll shows the real state
+    return null;
   }
 }
 
 /**
- * Retry a failed or cancelled job in place. `refused`: Studio will not retry it (409, e.g.
- * it is not failed any more); `missing`: no such job, or Studio could not be reached.
+ * Retry a failed or cancelled job in place, optionally with another enhancer (`builtin`
+ * after a cloud enhancer failed). `refused`: Studio will not retry it (409, e.g. it is not
+ * failed any more); `missing`: no such job, or Studio could not be reached.
  */
-export async function retryJobApi(jobId: string): Promise<'retried' | 'refused' | 'missing'> {
+export async function retryJobApi(jobId: string, enhancer?: string): Promise<'retried' | 'refused' | 'missing'> {
   try {
-    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
+      method: 'POST',
+      ...(enhancer ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enhancer }) } : {}),
+    });
     if (res.ok) return 'retried';
     return res.status === 409 ? 'refused' : 'missing';
   } catch {
