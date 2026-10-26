@@ -799,7 +799,7 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f6f3ec] dark:bg-[#20201d] flex flex-col justify-between p-3.5 shadow-xs cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f6f3ec] dark:bg-[#20201d] flex flex-col justify-between p-2.5 sm:p-3.5 overflow-hidden shadow-xs cursor-pointer transition-all ${
           isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db] dark:border-[#2e2e2a]'
         }`}
         style={tileStyle}
@@ -829,7 +829,7 @@ const TileCard: React.FC<TileCardProps> = ({
           </button>
         </div>
 
-        <div className="my-auto space-y-2 text-center px-3">
+        <div className="my-auto space-y-1.5 sm:space-y-2 text-center sm:px-3">
           <div
             className={`w-8 h-8 mx-auto rounded-full flex items-center justify-center ${
               isEnhance
@@ -916,7 +916,7 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f8f6f0] dark:bg-[#1e1e1b] flex flex-col justify-between p-3.5 cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-[#f8f6f0] dark:bg-[#1e1e1b] flex flex-col justify-between p-2.5 sm:p-3.5 overflow-hidden cursor-pointer transition-all ${
           isSelected
             ? 'ring-2 ring-amber-500 shadow-md border-solid border-amber-500/40'
             : 'border border-dashed border-[#dfdcce] dark:border-[#33332d]'
@@ -940,9 +940,9 @@ const TileCard: React.FC<TileCardProps> = ({
           </button>
         </div>
 
-        <div className="my-auto text-center space-y-2 px-3">
+        <div className="my-auto text-center space-y-1.5 sm:space-y-2 sm:px-3">
           <div
-            className={`w-8 h-8 mx-auto rounded-full flex items-center justify-center ${
+            className={`w-7 h-7 sm:w-8 sm:h-8 mx-auto rounded-full flex items-center justify-center ${
               gen.blockedReason
                 ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                 : 'bg-black/5 dark:bg-white/5 text-[#8c7169]'
@@ -958,7 +958,7 @@ const TileCard: React.FC<TileCardProps> = ({
             {gen.blockedReason ? 'Waiting' : 'Queued'}
           </div>
           <p
-            className={`text-xs max-w-[190px] mx-auto leading-relaxed ${
+            className={`text-[11px] sm:text-xs max-w-[190px] mx-auto leading-snug sm:leading-relaxed line-clamp-3 ${
               gen.blockedReason
                 ? 'text-amber-700 dark:text-amber-300 font-medium'
                 : 'text-[#8c7169] dark:text-[#a09088]'
@@ -971,15 +971,15 @@ const TileCard: React.FC<TileCardProps> = ({
               : gen.phase === 'encoding' || gen.stage === 'encode'
               ? 'Queued for text encoding'
               : gen.phase === 'denoising' || gen.stage === 'denoise'
-              ? 'Queued for drawing (waiting for GPU)'
+              ? 'Waiting for a GPU to draw'
               : gen.phase === 'decoding' || gen.stage === 'decode'
               ? 'Queued for decoding'
               : 'Waiting for generator to be ready'}
           </p>
         </div>
 
-        <div className="text-[10px] font-mono text-center text-[#8c7169] dark:text-[#a09088]">
-          seed #{gen.params.seed} · {gen.blockedReason ? 'Blocked' : 'Waiting for GPU'}
+        <div className="text-[10px] font-mono text-center text-[#8c7169] dark:text-[#a09088] truncate">
+          seed #{gen.params.seed}
         </div>
       </div>
     );
@@ -992,7 +992,7 @@ const TileCard: React.FC<TileCardProps> = ({
         onClick={() => {
           if (onSelect) onSelect();
         }}
-        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-rose-500/5 dark:bg-rose-500/10 flex flex-col justify-between p-3.5 text-center cursor-pointer transition-all ${
+        className={`${tileHeight} max-w-full shrink-0 rounded-xl bg-rose-500/5 dark:bg-rose-500/10 flex flex-col justify-between p-2.5 sm:p-3.5 overflow-hidden text-center cursor-pointer transition-all ${
           isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-rose-500/20'
         }`}
         style={tileStyle}
@@ -1003,17 +1003,18 @@ const TileCard: React.FC<TileCardProps> = ({
           </span>
         </div>
 
-        <div className="my-auto space-y-2 px-3">
+        <div className="my-auto space-y-1.5 sm:space-y-2 sm:px-3">
           <div className="w-8 h-8 mx-auto rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center">
             <AlertCircle className="w-4 h-4" />
           </div>
-          <div className="font-semibold text-sm text-rose-800 dark:text-rose-300">
-            Generation Stopped
+          <div className="font-semibold text-xs sm:text-sm text-rose-800 dark:text-rose-300 truncate">
+            <span className="sm:hidden">Stopped</span>
+            <span className="hidden sm:inline">Generation Stopped</span>
           </div>
-          <p className="text-xs text-[#8c7169] dark:text-[#a09088] line-clamp-2">
+          <p className="text-[11px] sm:text-xs text-[#8c7169] dark:text-[#a09088] line-clamp-2 leading-snug">
             {gen.error || 'The generator stopped unexpectedly'}
           </p>
-          <div className="flex items-center justify-center gap-2 mt-2">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 mt-1 sm:mt-2">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1045,9 +1046,10 @@ const TileCard: React.FC<TileCardProps> = ({
                 }}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 transition-colors"
                 title="Delete card"
+                aria-label="Delete card"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
+                <span className="hidden sm:inline">Delete</span>
               </button>
             )}
           </div>

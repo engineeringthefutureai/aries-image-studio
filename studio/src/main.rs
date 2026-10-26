@@ -21,7 +21,11 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = BackendConfig::from_env();
+    let config = BackendConfig::from_env()?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("login-link") {
+        return login_link(&config, args.get(1).map(String::as_str)).await;
+    }
     if config.agent_token.is_empty() {
         anyhow::bail!(
             "ARIES_AGENT_TOKEN must be set: agents and artifact transfers authenticate with it"
@@ -37,6 +41,18 @@ async fn main() -> Result<()> {
         info!(
             jobs = reclaimed.len(),
             "Requeued cloud enhances left from the last run"
+        );
+    }
+    if let Some(auth) = &config.auth {
+        // What was made before sign-in existed belongs to the owner.
+        let claimed = state.db.claim_unowned(&auth.owner).await?;
+        if claimed > 0 {
+            info!(jobs = claimed, owner = %auth.owner, "Earlier jobs now belong to the owner");
+        }
+        info!(
+            issuer = %auth.issuer,
+            accounts = auth.allowed_emails.len(),
+            "Sign-in required"
         );
     }
     for p in state.cloud.infos() {
@@ -78,5 +94,27 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// `aries-image-studio login-link <email>`: prints a single-use sign-in link that skips
+/// Google, for when it cannot be reached (docs/AUTH.md §2). Run it where Studio runs, with
+/// Studio's environment (`kubectl exec`, `docker compose exec`).
+async fn login_link(config: &BackendConfig, email: Option<&str>) -> Result<()> {
+    let Some(email) = email else {
+        anyhow::bail!("usage: aries-image-studio login-link <email>");
+    };
+    let Some(auth) = &config.auth else {
+        anyhow::bail!("sign-in is off (ARIES_OIDC_CLIENT_ID is not set): no link needed");
+    };
+    let db = Database::connect(config.data_dir.join("studio.db")).await?;
+    // One per address Studio is reached on; the same token, so any one of them, once.
+    for link in aries_image_studio::auth::create_login_link(&db, auth, email).await? {
+        println!("{link}");
+    }
+    eprintln!(
+        "Open one within {} minutes; it works once.",
+        aries_image_studio::auth::LOGIN_LINK_TTL_S as u64 / 60
+    );
     Ok(())
 }

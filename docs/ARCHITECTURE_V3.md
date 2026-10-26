@@ -382,7 +382,21 @@ default token: the backend refuses to start and the agent refuses to run without
 The SPA keeps nothing in browser storage: it renders what this API returns, shows images
 from `/api/images/{id}` (in the grids, the thumbnail size each tile needs through `srcset`;
 the viewer shows the 1024 px one until the PNG has loaded) and writes favorites and preferences
-back. There is no authentication on this API yet: keep the backend on a trusted network.
+back.
+
+**Sign-in (AUTH.md), off unless configured.** With it on, every `/api/*` route below but
+`/api/me` needs a session cookie (401 without) and answers for that account only:
+someone else's job, image or upload is 404, a submit reusing someone else's id is 409, and
+the operator controls are the owner's (403 for others). Writes from another origin are
+refused. Without it, the API is open: keep the backend on a trusted network.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/me` | `{auth: false}` (sign-in off) · `{auth: true, email, name, picture, owner}` · 401 signed out |
+| `GET /auth/login?next=` · `GET /auth/callback` · `POST /auth/logout` | OpenID Connect sign-in with PKCE and a nonce; the session cookie `aries_session` (renewed while used); sign out |
+| `GET /auth/link?token=` | Single-use sign-in link from `aries-image-studio login-link <email>`, for when Google cannot be reached (AUTH.md §2) |
+| `GET /healthz` | `ok`, always open (probes) |
+| `GET /privacy` · `GET /terms` | Privacy policy and terms of service, plain HTML, always open (`studio/src/legal.rs`, AUTH.md §3) |
 
 ---
 

@@ -19,6 +19,14 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ARIES_GEMINI_MODELS=${ARIES_GEMINI_MODELS:-}
       - ARIES_GEMINI_THINKING=${ARIES_GEMINI_THINKING:-}
+      # Sign-in with Google (docs/AUTH.md): off unless ARIES_OIDC_CLIENT_ID is set in .env.
+      - ARIES_OIDC_CLIENT_ID=${ARIES_OIDC_CLIENT_ID:-}
+      - ARIES_OIDC_CLIENT_SECRET=${ARIES_OIDC_CLIENT_SECRET:-}
+      - ARIES_AUTH_ALLOWED_EMAILS=${ARIES_AUTH_ALLOWED_EMAILS:-}
+      - ARIES_AUTH_OWNER=${ARIES_AUTH_OWNER:-}
+      - ARIES_PUBLIC_URL=${ARIES_PUBLIC_URL:-}
+      - ARIES_LEGAL_OPERATOR=${ARIES_LEGAL_OPERATOR:-}
+      - ARIES_LEGAL_CONTACT=${ARIES_LEGAL_CONTACT:-}
     volumes:
       # SQLite database, images and thumbnails. The container runs as uid 1000.
       - ${STUDIO_DATA_DIR:-/var/lib/aries-image-studio}:/app/data

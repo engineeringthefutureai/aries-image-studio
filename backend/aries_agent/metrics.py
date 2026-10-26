@@ -13,6 +13,10 @@ logger = logging.getLogger("aries_agent.metrics")
 
 EXECUTOR_STATES = ("idle", "starting", "ready", "busy", "stopping", "failed")
 
+# Model loads and stages take seconds to many minutes; the client's default buckets stop at
+# 10 s, which would put almost every observation in +Inf.
+DURATION_BUCKETS = (1, 2, 5, 10, 20, 30, 45, 60, 90, 120, 180, 300, 450, 600, 900, 1200, 1800)
+
 
 class AgentMetrics:
     def __init__(self, registry: Optional[CollectorRegistry] = None) -> None:
@@ -61,12 +65,14 @@ class AgentMetrics:
             "aries_worker_load_seconds",
             "Stage worker model load duration in seconds",
             ["executor", "stage", "model"],
+            buckets=DURATION_BUCKETS,
             registry=self.registry,
         )
         self.task_seconds = Histogram(
             "aries_task_seconds",
             "Task execution duration in seconds",
             ["executor", "stage"],
+            buckets=DURATION_BUCKETS,
             registry=self.registry,
         )
         self.task_outcomes_total = Counter(

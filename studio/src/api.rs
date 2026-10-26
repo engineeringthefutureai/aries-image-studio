@@ -1,9 +1,11 @@
+use crate::auth::{self, User};
 use crate::cloud::normalize_enhancer;
 use crate::config::bearer_matches;
 use crate::db::{
     is_valid_client_job_id, now_s, JobPageQuery, JobStatus, JobSubmitInput, ReferenceInput,
     ReferenceLatents, UploadRecord,
 };
+use crate::legal;
 use crate::metrics::{ExecutorLiveMetrics, MetricsSnapshot};
 use crate::proto;
 use crate::scheduler::{
@@ -19,7 +21,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{middleware, Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
@@ -31,7 +33,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn build_http_router(state: Arc<AppState>) -> Router {
-    let api_router = Router::new()
+    // The browser's API: a signed-in user on every request when sign-in is on (auth.rs).
+    let user_api = Router::new()
         .route("/api/jobs", post(submit_job).get(list_jobs))
         .route(
             "/api/jobs/:id",
@@ -55,15 +58,33 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/executors/:id/return", post(return_executor))
         .route("/api/executors/:id/disable", post(disable_executor))
         .route("/api/executors/:id/enable", post(enable_executor))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_user,
+        ));
+    // Open: agents (their own token), metrics, health, the privacy policy and terms, and
+    // signing in.
+    let mut api_router = user_api
         .route(
             "/agent/v1/artifacts/:task_id/:attempt/:name",
             get(download_artifact).put(upload_artifact),
         )
         .route("/agent/v1/blobs/:sha", get(download_blob))
         .route("/metrics", get(get_metrics))
-        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone());
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/privacy", get(legal::privacy))
+        .route("/terms", get(legal::terms))
+        .route("/api/me", get(auth::me))
+        .route("/auth/login", get(auth::login))
+        .route("/auth/callback", get(auth::callback))
+        .route("/auth/link", get(auth::link))
+        .route("/auth/logout", post(auth::logout))
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024));
+    // Any origin may call an open Studio; one that signs in is same-origin only.
+    if state.auth.is_none() {
+        api_router = api_router.layer(CorsLayer::permissive());
+    }
+    let api_router = api_router.with_state(state.clone());
 
     let static_dir = &state.config.static_dir;
     if static_dir.exists() {
@@ -142,8 +163,37 @@ pub struct SystemStageQueue {
     pub blocked_reasons: Vec<String>,
 }
 
+/// Whether `user` may see job `id`. `false` also when there is no such job: someone
+/// else's job is "not found", not "forbidden".
+async fn may_see_job(state: &AppState, user: &User, id: &str) -> bool {
+    match state.db.job_owner(id).await {
+        Ok(Some(owner)) => user.scope().is_none_or(|me| owner.as_deref() == Some(me)),
+        _ => false,
+    }
+}
+
+fn not_found(what: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": format!("{what} not found") })),
+    )
+        .into_response()
+}
+
+/// Lending, disabling and enabling cards is for the owner (any user when sign-in is off).
+fn owner_only(user: &User) -> Option<Response> {
+    (!user.is_owner).then(|| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "only the owner can change the cards" })),
+        )
+            .into_response()
+    })
+}
+
 async fn submit_job(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Json(mut input): Json<JobSubmitInput>,
 ) -> Response {
     if let Some(id) = &input.id {
@@ -156,6 +206,13 @@ async fn submit_job(
         }
         // Idempotent resubmission: the job already exists, return it unchanged.
         if let Ok(Some(existing)) = state.db.get_job(id).await {
+            if !may_see_job(&state, &user, id).await {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "id is taken" })),
+                )
+                    .into_response();
+            }
             return (StatusCode::OK, Json(existing)).into_response();
         }
     }
@@ -186,7 +243,7 @@ async fn submit_job(
             .into_response();
     }
 
-    let references = match resolve_references(&state, &input.references).await {
+    let references = match resolve_references(&state, &user, &input.references).await {
         Ok(r) => r,
         Err(reason) => {
             return (
@@ -202,7 +259,11 @@ async fn submit_job(
         t ^ 0x5DEECE66Du64
     });
 
-    match state.db.create_job(&input, seed, &references).await {
+    match state
+        .db
+        .create_job(&input, seed, &references, user.scope())
+        .await
+    {
         Ok(job) => {
             tick(&state).await;
             let refreshed = state
@@ -226,17 +287,21 @@ async fn submit_job(
 /// becomes an upload of its PNG (same blob), so every reference is stored the same way.
 async fn resolve_references(
     state: &Arc<AppState>,
+    user: &User,
     refs: &[ReferenceInput],
 ) -> Result<Vec<String>, String> {
     let mut out = Vec::with_capacity(refs.len());
     for (i, r) in refs.iter().enumerate() {
         match (&r.upload, &r.image) {
-            (Some(sha), None) => match state.db.get_upload(sha).await {
+            (Some(sha), None) => match state.db.get_upload_for(sha, user.scope()).await {
                 Ok(Some(up)) => out.push(up.sha256),
                 Ok(None) => return Err(format!("reference {} not found; attach it again", i + 1)),
                 Err(e) => return Err(e.to_string()),
             },
             (None, Some(job_id)) => {
+                if !may_see_job(state, user, job_id).await {
+                    return Err(format!("reference {}: job {job_id} not found", i + 1));
+                }
                 let art = match state.db.get_job_artifact_by_name(job_id, "image.png").await {
                     Ok(Some(a)) => a,
                     Ok(None) => {
@@ -256,7 +321,16 @@ async fn resolve_references(
                     created_at: now_s(),
                 };
                 match state.db.insert_upload(&up).await {
-                    Ok(up) => out.push(up.sha256),
+                    Ok(up) => {
+                        if let Some(owner) = user.scope() {
+                            state
+                                .db
+                                .add_upload_owner(&up.sha256, owner)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                        out.push(up.sha256)
+                    }
                     Err(e) => return Err(e.to_string()),
                 }
             }
@@ -276,7 +350,11 @@ const UPLOAD_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// `POST /api/uploads`: an image to use as a reference (PNG, JPEG or WebP, the raw bytes as
 /// the body). Stored by its SHA-256, so uploading the same image twice gives the same id.
-async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+async fn upload_image(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    body: Bytes,
+) -> Response {
     if body.len() > UPLOAD_MAX_BYTES {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -315,7 +393,18 @@ async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         bytes,
         created_at: now_s(),
     };
-    match state.db.insert_upload(&rec).await {
+    let inserted = match state.db.insert_upload(&rec).await {
+        Ok(up) => match user.scope() {
+            Some(owner) => state
+                .db
+                .add_upload_owner(&up.sha256, owner)
+                .await
+                .map(|_| up),
+            None => Ok(up),
+        },
+        Err(e) => Err(e),
+    };
+    match inserted {
         Ok(up) => (
             StatusCode::CREATED,
             Json(json!({
@@ -335,8 +424,12 @@ async fn upload_image(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
     }
 }
 
-async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>) -> Response {
-    let Ok(Some(up)) = state.db.get_upload(&sha).await else {
+async fn get_upload(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(sha): Path<String>,
+) -> Response {
+    let Ok(Some(up)) = state.db.get_upload_for(&sha, user.scope()).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "upload not found" })),
@@ -348,7 +441,7 @@ async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>)
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, up.mime),
-                (header::CACHE_CONTROL, IMMUTABLE.to_string()),
+                (header::CACHE_CONTROL, immutable(&state).to_string()),
             ],
             bytes,
         )
@@ -364,6 +457,7 @@ async fn get_upload(State(state): State<Arc<AppState>>, Path(sha): Path<String>)
 /// JPEG thumbnail of an upload, like `/api/images/{id}/thumb`; made on first request.
 async fn get_upload_thumb(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Path(sha): Path<String>,
     Query(query): Query<ThumbQuery>,
 ) -> Response {
@@ -375,12 +469,8 @@ async fn get_upload_thumb(
         )
             .into_response();
     }
-    let Ok(Some(up)) = state.db.get_upload(&sha).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "upload not found" })),
-        )
-            .into_response();
+    let Ok(Some(up)) = state.db.get_upload_for(&sha, user.scope()).await else {
+        return not_found("upload");
     };
     let key = upload_thumb_key(&up.sha256);
     let found = match state.blobs.read_thumb(&key, size).await {
@@ -402,7 +492,7 @@ async fn get_upload_thumb(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, IMMUTABLE),
+                (header::CACHE_CONTROL, immutable(&state)),
             ],
             bytes,
         )
@@ -415,11 +505,19 @@ async fn get_upload_thumb(
     }
 }
 
-async fn list_jobs(State(state): State<Arc<AppState>>, Query(q): Query<ListJobsQuery>) -> Response {
+async fn list_jobs(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Query(q): Query<ListJobsQuery>,
+) -> Response {
     let version = state.db.current_version().await.unwrap_or(1);
     // Deletions since the client's version, so every client drops them too.
     let deleted = match q.changed_since {
-        Some(since) => state.db.list_deleted_since(since).await.unwrap_or_default(),
+        Some(since) => state
+            .db
+            .list_deleted_since(since, user.scope())
+            .await
+            .unwrap_or_default(),
         None => Vec::new(),
     };
     let result = match (q.changed_since, q.limit) {
@@ -436,10 +534,15 @@ async fn list_jobs(State(state): State<Arc<AppState>>, Query(q): Query<ListJobsQ
                 favorites_only: q.favorite == Some(true),
                 search: q.q.clone(),
                 ratio,
+                owner: user.scope().map(str::to_string),
             };
             state.db.list_jobs_page(&page).await
         }
-        (since, _) => state.db.list_jobs(since).await.map(|jobs| (jobs, None)),
+        (since, _) => state
+            .db
+            .list_jobs(since, user.scope())
+            .await
+            .map(|jobs| (jobs, None)),
     };
     match result {
         Ok((mut jobs, next)) => {
@@ -468,8 +571,11 @@ async fn list_jobs(State(state): State<Arc<AppState>>, Query(q): Query<ListJobsQ
 }
 
 /// Counts for the gallery's filters, over all finished images.
-async fn get_gallery_facets(State(state): State<Arc<AppState>>) -> Response {
-    match state.db.gallery_facets().await {
+async fn get_gallery_facets(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+) -> Response {
+    match state.db.gallery_facets(user.scope()).await {
         Ok(f) => (StatusCode::OK, Json(f)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -479,7 +585,14 @@ async fn get_gallery_facets(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn get_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn get_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
     match state.db.get_job(&id).await {
         Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
         Ok(None) => (
@@ -497,9 +610,13 @@ async fn get_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 
 async fn patch_job(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Path(id): Path<String>,
     Json(body): Json<PatchJobBody>,
 ) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
     let Some(favorite) = body.favorite else {
         return match state.db.get_job(&id).await {
             Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
@@ -525,8 +642,11 @@ async fn patch_job(
     }
 }
 
-async fn get_preferences(State(state): State<Arc<AppState>>) -> Response {
-    match state.db.get_preferences().await {
+async fn get_preferences(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+) -> Response {
+    match state.db.get_preferences(user.scope()).await {
         Ok(prefs) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -536,7 +656,11 @@ async fn get_preferences(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn put_preferences(State(state): State<Arc<AppState>>, Json(prefs): Json<Value>) -> Response {
+async fn put_preferences(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Json(prefs): Json<Value>,
+) -> Response {
     if !is_small_object(&prefs, PREFERENCES_MAX_BYTES) {
         return (
             StatusCode::BAD_REQUEST,
@@ -544,7 +668,7 @@ async fn put_preferences(State(state): State<Arc<AppState>>, Json(prefs): Json<V
         )
             .into_response();
     }
-    match state.db.put_preferences(&prefs).await {
+    match state.db.put_preferences(&prefs, user.scope()).await {
         Ok(()) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -554,7 +678,14 @@ async fn put_preferences(State(state): State<Arc<AppState>>, Json(prefs): Json<V
     }
 }
 
-async fn delete_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn delete_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
     // Cancel first if running
     if let Ok(Some((Some((agent_id, task_id, attempt)), _))) = state.db.cancel_job(&id).await {
         state.send_to_agent(
@@ -591,7 +722,14 @@ async fn delete_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
     }
 }
 
-async fn cancel_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn cancel_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
     match state.db.cancel_job(&id).await {
         Ok(Some((cancel_sig, job))) => {
             if let Some((agent_id, task_id, attempt)) = cancel_sig {
@@ -623,9 +761,13 @@ async fn cancel_job(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
 
 async fn retry_job(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Path(id): Path<String>,
     body: Option<Json<RetryJobBody>>,
 ) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
     // Only a failed or cancelled job can be retried; anything else would be a silent no-op
     // that a client could mistake for "queued again" (a finished image vanished that way).
     if let Ok(Some(job)) = state.db.get_job(&id).await {
@@ -687,8 +829,25 @@ async fn retry_job(
 /// A finished job's image never changes (job ids are never reused), so browsers may keep
 /// images and thumbnails for good instead of downloading them again on every remount.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+/// The same with sign-in: an account's images are its own, so no shared cache keeps them.
+const IMMUTABLE_PRIVATE: &str = "private, max-age=31536000, immutable";
 
-async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+fn immutable(state: &AppState) -> &'static str {
+    if state.auth.is_some() {
+        IMMUTABLE_PRIVATE
+    } else {
+        IMMUTABLE
+    }
+}
+
+async fn get_image(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("image");
+    }
     // The job turns `done` just before the PNG with its provenance chunk replaces the
     // decoder's: a request in between can find the plain PNG, or a blob deleted under it.
     for _ in 0..2 {
@@ -700,7 +859,7 @@ async fn get_image(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
         };
         // Only the final PNG is cached for good.
         let cache = if art.metadata_json.is_some() {
-            IMMUTABLE
+            immutable(&state)
         } else {
             "no-store"
         };
@@ -735,11 +894,12 @@ struct ThumbQuery {
 /// when missing, e.g. for images from before thumbnails had these sizes.
 async fn get_image_thumb(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Path(id): Path<String>,
     Query(query): Query<ThumbQuery>,
 ) -> Response {
     // The id becomes part of a file path below: anything but a job id (`..%2F`) is not found.
-    if !is_valid_client_job_id(&id) {
+    if !is_valid_client_job_id(&id) || !may_see_job(&state, &user, &id).await {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "image not found" })),
@@ -777,7 +937,7 @@ async fn get_image_thumb(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, IMMUTABLE),
+                (header::CACHE_CONTROL, immutable(&state)),
             ],
             bytes,
         )
@@ -913,7 +1073,14 @@ async fn get_system(State(state): State<Arc<AppState>>) -> Response {
         .into_response()
 }
 
-async fn lend_executor(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn lend_executor(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(denied) = owner_only(&user) {
+        return denied;
+    }
     match state.db.lend_executor(&id).await {
         Ok(Some((agent_id, exec_id, should_release))) => {
             if should_release {
@@ -943,7 +1110,14 @@ async fn lend_executor(State(state): State<Arc<AppState>>, Path(id): Path<String
     }
 }
 
-async fn return_executor(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn return_executor(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(denied) = owner_only(&user) {
+        return denied;
+    }
     match state.db.return_executor(&id).await {
         Ok(Some(ex)) => {
             tick(&state).await;
@@ -964,9 +1138,13 @@ async fn return_executor(State(state): State<Arc<AppState>>, Path(id): Path<Stri
 
 async fn disable_executor(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
     Path(id): Path<String>,
     body: Option<Json<DisableExecutorBody>>,
 ) -> Response {
+    if let Some(denied) = owner_only(&user) {
+        return denied;
+    }
     let reason = body
         .and_then(|b| b.0.reason)
         .unwrap_or_else(|| "operator disabled".to_string());
@@ -999,7 +1177,14 @@ async fn disable_executor(
     }
 }
 
-async fn enable_executor(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn enable_executor(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(denied) = owner_only(&user) {
+        return denied;
+    }
     match state.db.enable_executor(&id).await {
         Ok(Some(ex)) => {
             tick(&state).await;

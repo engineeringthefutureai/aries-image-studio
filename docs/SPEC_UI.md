@@ -3,7 +3,7 @@
 Originally written as the design brief for the mockups in `mockups/`; it remains the
 reference for UI behavior. Items marked *(future)* are not built.
 
-A single-user web app for generating images from text prompts. You type
+A web app for one person or a few, for generating images from text prompts. You type
 a prompt, pick a few settings, and get pictures. Everything you've ever made stays
 in a browsable history with its settings attached.
 
@@ -35,7 +35,8 @@ reproduce any existing product's layout or branding.
 
 ## 2. Context of use
 
-- **One user**, at home, on a desktop browser (primary) and a phone (secondary).
+- **One user or a few**, at home, on a desktop browser (primary) and a phone (secondary).
+  With sign-in on (AUTH.md), each signs in with Google and sees only their own history.
 - Generation is **slow** (1–4 min per image) and mostly **sequential** (two graphics
   cards share the stages; others wait in a queue). Users often submit a few prompts
   and come back later.
@@ -50,7 +51,8 @@ reproduce any existing product's layout or branding.
 
 ```
 App                                          URL
-├── Top bar: app name · view switch (Timeline / Gallery) · generator status · theme
+├── Sign-in screen (sign-in on, signed out) — "Sign in with Google"    any URL
+├── Top bar: app name · view switch (Timeline / Gallery) · generator status · theme · account
 ├── Timeline view (default)      — chat-shaped history + composer      /
 ├── Gallery view                 — grid of all images + filters        /gallery?fav=1&aspect=16:9&q=…
 ├── Image viewer (a page)        — full image + details + actions      /images/{id}
@@ -124,7 +126,7 @@ Docked at the bottom of the Timeline. Should feel like a message box, not a form
 
 - **Prompt field** — multi-line, grows with content up to a limit. Enter submits,
   Shift+Enter makes a new line, and the field empties once the job is sent. Placeholder
-  suggests what to type.
+  suggests what to type (with the keyboard hint only where there is a mouse).
 - **Settings row** — compact chips/controls beside or under the field:
 
 | Setting | Options | Default |
@@ -277,6 +279,9 @@ list it came from; opened from a link, to the timeline.
 
   It should read in two seconds, not look like an admin console. Numbers update live.
 - Theme toggle (light / dark) — **light by default**, not "follow system"
+- **Account** (sign-in on): the account's Google picture (or its initial); a menu with the
+  name, the email and **Sign out**. Lend / Disable / Enable on the status page are shown
+  only to the owner.
 
 ### 4.7 Empty, edge and error states (please design)
 
@@ -288,6 +293,14 @@ list it came from; opened from a link, to the timeline.
 - Very long prompt; very long run of history (hundreds of turns).
 - Network lost in the browser (reconnecting).
 - Delete confirmation.
+- Signed out (sign-in on): instead of the app, a centered card with the mark, "Sign in to
+  see your images" and **Sign in with Google**, in the system's light or dark theme; under
+  it, one line of small print, always visible: what Studio is (a private, self-hosted image
+  generator, invitation only, open models on the host's computers) and that Google sign-in
+  only checks you are invited, no Google API making or editing images. Any
+  URL shows it, and signing in returns there. A refused or failed sign-in says why above
+  the button ("That Google account doesn't have access to this Studio."). A session that
+  expires while the app is open brings the card back.
 
 ---
 
@@ -325,6 +338,10 @@ list it came from; opened from a link, to the timeline.
 - **Tablet**: same structure, narrower.
 - **Phone** (≥360 px): single column; composer docked at bottom with settings in a
   compact row or a sheet; viewer details as a bottom sheet; no horizontal scrolling.
+  The image page runs to the screen's edges (under iOS's home indicator), its controls
+  kept clear of them. Once the details are scrolled they take a quarter of the image's
+  space: the image keeps its scale and moves up by half that, with its zoom controls; back
+  at the top of the details, it returns.
   The header shows the mark without the name and the status pill's one-word state.
 - Keyboard: `/` focuses the prompt · `T` / `G` switch views · `←`/`→` in the viewer ·
   `F` favorites · `+`/`-`/`0`/`1` zoom · `Esc` closes · `?` shows the shortcut sheet.

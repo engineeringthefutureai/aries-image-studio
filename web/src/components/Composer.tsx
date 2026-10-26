@@ -91,6 +91,8 @@ const QUALITY_LABELS: Record<Exclude<Quality, 'custom'>, string> = {
 const segmentOn = 'bg-[#fcf9f2] dark:bg-[#1a1a17] text-[#1c1c18] dark:text-[#f3f0e9] shadow-2xs font-semibold';
 const segmentOff = 'text-[#8c7169] dark:text-[#a09088]';
 const chip = 'flex items-center gap-1 px-2 py-1 rounded-lg bg-[#f1eee7] dark:bg-[#232320]';
+// Phones and tablets: no keyboard hints.
+const COARSE_POINTER = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
 const selectCls =
   'px-1.5 py-1 rounded-lg bg-[#f1eee7] dark:bg-[#232320] text-[#1c1c18] dark:text-[#f3f0e9] font-medium cursor-pointer outline-none';
 const SIZE_SHORT: Record<SizeMultiplier, string> = { full: 'Full', half: '½', quarter: '¼' };
@@ -664,7 +666,7 @@ export const Composer: React.FC<ComposerProps> = ({
               }}
               aria-label="Prompt"
               placeholder={
-                expanded
+                expanded && !COARSE_POINTER
                   ? "Describe an image you'd like to create... (Press Enter to submit, Shift+Enter for newline)"
                   : 'Describe an image…'
               }
@@ -931,7 +933,7 @@ export const Composer: React.FC<ComposerProps> = ({
             </div>
 
             {/* Right side: Advanced toggle and Prompt Enhancer Toggle */}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
               <button
                 type="button"
                 onClick={() => onUpdatePreferences({ advancedOpen: !advanced })}
@@ -943,9 +945,10 @@ export const Composer: React.FC<ComposerProps> = ({
                     : 'bg-[#f1eee7] dark:bg-[#232320] text-[#8c7169] dark:text-[#a09088] hover:text-[#1c1c18] dark:hover:text-[#f3f0e9]'
                 }`}
                 title="Advanced: custom steps, fixed seed, tiling, and rows of different settings"
+                aria-label="Advanced"
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Advanced</span>
+                <span className="hidden sm:inline">Advanced</span>
                 <ChevronDown className={`w-3 h-3 transition-transform ${advanced ? 'rotate-180' : ''}`} />
               </button>
               <button
@@ -985,7 +988,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   onChange={(e) => onUpdatePreferences({ enhancer: e.target.value })}
                   aria-label="Prompt enhancer"
                   title="Who rewrites the prompt. Cloud enhancers get the prompt and any reference images; the provider's terms apply."
-                  className={selectCls}
+                  className={`${selectCls} min-w-0 max-w-full truncate`}
                 >
                   <option value="builtin">Built-in</option>
                   {cloudEnhancers.map((c) => (

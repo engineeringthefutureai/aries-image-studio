@@ -19,6 +19,8 @@ interface StatusPageProps {
   onClose: () => void;
   health: WorkerHealth;
   onRefresh: () => void;
+  /** Lend / Disable buttons: only for the owner when Studio has sign-in. */
+  canControl: boolean;
 }
 
 /** The system view at `/status`: a page of its own, not a layer over the timeline. */
@@ -26,6 +28,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
   onClose,
   health,
   onRefresh,
+  canControl,
 }) => {
   const [busyExecutorId, setBusyExecutorId] = useState<string | null>(null);
 
@@ -274,44 +277,46 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                               </div>
 
                               {/* Operator controls: [Lend]/[Return] and [Disable]/[Enable] */}
-                              <div className="flex items-center gap-1.5">
-                                {isLent ? (
-                                  <button
-                                    disabled={isControlBusy}
-                                    onClick={() => handleExecutorControl(ex.id, 'return')}
-                                    className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 transition-colors cursor-pointer"
-                                  >
-                                    Return
-                                  </button>
-                                ) : (
-                                  <button
-                                    disabled={isControlBusy || isDisabled}
-                                    onClick={() => handleExecutorControl(ex.id, 'lend')}
-                                    className="px-2 py-0.5 rounded text-[11px] font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[#58423a] dark:text-[#a09088] disabled:opacity-40 transition-colors cursor-pointer"
-                                    title="Lend GPU for external work (stops resident worker)"
-                                  >
-                                    Lend
-                                  </button>
-                                )}
+                              {canControl && (
+                                <div className="flex items-center gap-1.5">
+                                  {isLent ? (
+                                    <button
+                                      disabled={isControlBusy}
+                                      onClick={() => handleExecutorControl(ex.id, 'return')}
+                                      className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 transition-colors cursor-pointer"
+                                    >
+                                      Return
+                                    </button>
+                                  ) : (
+                                    <button
+                                      disabled={isControlBusy || isDisabled}
+                                      onClick={() => handleExecutorControl(ex.id, 'lend')}
+                                      className="px-2 py-0.5 rounded text-[11px] font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[#58423a] dark:text-[#a09088] disabled:opacity-40 transition-colors cursor-pointer"
+                                      title="Lend GPU for external work (stops resident worker)"
+                                    >
+                                      Lend
+                                    </button>
+                                  )}
 
-                                {isDisabled ? (
-                                  <button
-                                    disabled={isControlBusy}
-                                    onClick={() => handleExecutorControl(ex.id, 'enable')}
-                                    className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 transition-colors cursor-pointer"
-                                  >
-                                    Enable
-                                  </button>
-                                ) : (
-                                  <button
-                                    disabled={isControlBusy}
-                                    onClick={() => handleExecutorControl(ex.id, 'disable')}
-                                    className="px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 transition-colors cursor-pointer"
-                                  >
-                                    Disable
-                                  </button>
-                                )}
-                              </div>
+                                  {isDisabled ? (
+                                    <button
+                                      disabled={isControlBusy}
+                                      onClick={() => handleExecutorControl(ex.id, 'enable')}
+                                      className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 transition-colors cursor-pointer"
+                                    >
+                                      Enable
+                                    </button>
+                                  ) : (
+                                    <button
+                                      disabled={isControlBusy}
+                                      onClick={() => handleExecutorControl(ex.id, 'disable')}
+                                      className="px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 transition-colors cursor-pointer"
+                                    >
+                                      Disable
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             {/* Memory bar + capabilities */}

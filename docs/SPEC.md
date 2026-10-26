@@ -1,13 +1,15 @@
 # Aries Image Studio — Product & API Spec
 
 Type a prompt, get pictures. A quiet, image-first app that sits between a chat
-timeline and a gallery. No node graphs, no LLM chat. Single user, LAN only.
+timeline and a gallery. No node graphs, no LLM chat. For one person or a few on a home
+network; optional sign-in with Google, each account with its own history (AUTH.md).
 
 Inspiration: the *feel* of lightweight Labs-style image tools — minimal chrome,
 results as the content, every image one click from "do that again, differently."
 Own design; don't copy any product's layout or branding.
 
-**Non-goals:** workflow editing, multi-user accounts, LLM conversation, training.
+**Non-goals:** workflow editing, public sign-up (accounts are an invited list only), LLM
+conversation, training.
 
 This document covers the product and UX. How Studio runs jobs — stages, agents, the
 protocol, scheduling, failure handling, telemetry — and the browser-facing API are in
@@ -123,7 +125,8 @@ images, favorite flag and the UI's own metadata (turn id, aspect label, size and
 preset); a **task** per stage; an **attempt** per try, with its provenance (agent, card,
 model, revision, precision, software versions, timings, peak memory) and, for a failure,
 its crash class. Files live in a content-addressed blob store; each finished image has
-JPEG thumbnails at 512, 768 and 1024 px.
+JPEG thumbnails at 512, 768 and 1024 px. With sign-in on, jobs, reference uploads and
+preferences belong to an account (AUTH.md §2); sessions are stored too.
 
 Seed is **always stored as a concrete number**, even when the user chose Random.
 
@@ -138,7 +141,8 @@ plain ASCII: other characters (a Chinese prompt, emoji) are `\uXXXX` escapes.
 The job API in ARCHITECTURE_V3.md §8: submit and page jobs (`/api/jobs`, filters for the
 gallery), poll changes (`?changed_since=`), images and thumbnails, reference uploads,
 preferences, system state and capabilities, operator controls, and `/metrics`. A batch of
-N images is N jobs sharing a turn id in their `meta`.
+N images is N jobs sharing a turn id in their `meta`. With sign-in on (AUTH.md), every
+`/api/*` route but `/api/me` needs a session and answers for that account only.
 
 ---
 

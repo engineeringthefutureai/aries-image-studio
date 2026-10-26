@@ -1,6 +1,8 @@
 import React from 'react';
 import type { WorkerHealth } from '../types';
 import { Grid, Clock, Moon, Sun, HelpCircle, AlertTriangle } from 'lucide-react';
+import { AccountMenu } from './AccountMenu';
+import type { Account } from '../services/session';
 import { Logo } from './Logo';
 import { onLinkClick } from '../utils/router';
 
@@ -13,6 +15,8 @@ interface HeaderProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onOpenShortcuts: () => void;
+  /** Who is signed in; null without sign-in (no account menu). */
+  account: Account | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   theme,
   onToggleTheme,
   onOpenShortcuts,
+  account,
 }) => {
   const isDark = theme === 'dark';
   const getStatusBadge = () => {
@@ -168,6 +173,8 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <HelpCircle className="w-4 h-4" />
           </button>
+
+          {account && <AccountMenu account={account} />}
         </div>
       </div>
     </header>

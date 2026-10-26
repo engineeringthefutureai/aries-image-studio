@@ -29,6 +29,7 @@ import {
   type JobSubmission,
 } from './services/api';
 import { usePagedJobs } from './hooks/usePagedJobs';
+import type { Account } from './services/session';
 import {
   useRoute,
   navigate,
@@ -72,10 +73,20 @@ const fetchStatus = () => Promise.all([fetchWorkerHealth(), fetchCapabilitiesApi
 const sameFilters = (a: GalleryFilters, b: GalleryFilters) =>
   a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q;
 
-export function App() {
+/** `account`: who is signed in; null when Studio runs without sign-in. */
+export function App({ account }: { account: Account | null }) {
   // Everything shown comes from Studio: jobs (with images, favorites and UI metadata) and
   // preferences. Nothing is kept in browser storage.
   const route = useRoute();
+  // The image page is dark: so is the page behind it (index.css `viewer-open`). It also runs
+  // to the screen's edges, under iOS's home indicator and collapsed toolbar (`viewport-fit`),
+  // and keeps its controls clear of them with the safe-area insets.
+  useEffect(() => {
+    const open = route.name === 'image';
+    document.documentElement.classList.toggle('viewer-open', open);
+    const meta = document.querySelector('meta[name="viewport"]');
+    meta?.setAttribute('content', `width=device-width, initial-scale=1.0${open ? ', viewport-fit=cover' : ''}`);
+  }, [route.name]);
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
 
@@ -653,7 +664,7 @@ export function App() {
   // The viewer fills the window on its own: no header, no list underneath.
   if (route.name === 'image') {
     return (
-      <div className="min-h-dvh bg-[#0b0b0a] text-white font-['Inter'] antialiased">
+      <div className="fixed inset-0 overflow-auto bg-[#0b0b0a] text-white font-['Inter'] antialiased">
         {viewerGen?.imageUrl ? (
           <Viewer
             generation={viewerGen}
@@ -704,13 +715,19 @@ export function App() {
           setPreferences((p) => ({ ...p, theme: p.theme === 'light' ? 'dark' : 'light' }))
         }
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        account={account}
       />
 
       {/* Main Content Area */}
       <main className={`flex-1 flex flex-col ${route.name === 'status' ? 'pb-8' : 'pb-24'}`}>
         <ErrorBoundary fallbackTitle="Page rendering error">
           {route.name === 'status' ? (
-            <StatusPage onClose={() => leavePage()} health={workerHealth} onRefresh={refreshStatus} />
+            <StatusPage
+              onClose={() => leavePage()}
+              health={workerHealth}
+              onRefresh={refreshStatus}
+              canControl={account?.owner ?? true}
+            />
           ) : route.name === 'timeline' ? (
             <Timeline
               generations={timeline.items}

@@ -26,6 +26,14 @@
   }
 }
 
+/* The image page is dark in both themes: so is whatever the browser shows around it (iOS
+   Safari's area behind a collapsing toolbar, overscroll). Outside the layers, so it wins
+   over the body's own background utility. */
+html.viewer-open,
+html.viewer-open body {
+  background-color: #0b0b0a;
+}
+
 /* Indeterminate progress: a bar sliding across its track, for stages without steps. */
 @keyframes progress-indeterminate {
   from {

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.0
+
+- **Sign-in with Google, with images that belong to each account** (docs/AUTH.md). Off
+  unless configured (`ARIES_OIDC_CLIENT_ID`, `ARIES_OIDC_CLIENT_SECRET`,
+  `ARIES_AUTH_ALLOWED_EMAILS`, `ARIES_PUBLIC_URL`); only the listed Google accounts can
+  sign in. No passwords.
+  - Studio is the OpenID Connect client (code flow with PKCE and a nonce). Sessions are
+    stored in SQLite by the hash of their token, in an HttpOnly, SameSite=Lax cookie, and
+    renew while in use (`ARIES_SESSION_DAYS` is how long an unused one lasts).
+  - Jobs, images, favorites, reference uploads and preferences belong to the account that
+    made them. The owner (`ARIES_AUTH_OWNER`, by default the first address) inherits
+    everything made before sign-in was turned on, and is the only one who can lend, disable
+    or enable cards.
+  - Sign-in screen when signed out, with a short description of the service; the account's
+    picture and a Sign out menu in the top bar.
+  - `ARIES_PUBLIC_URL` accepts several comma-separated addresses (for example an intranet
+    and an internet name); each sign-in returns to the address it started from.
+  - Removing an address from the allowlist signs it out on its next request.
+  - `aries-image-studio login-link <email>` prints a single-use, 10-minute sign-in link
+    for an allowed address, for when Google can't be reached.
+  - New routes: `GET /api/me`, `/auth/login`, `/auth/callback`, `/auth/link`,
+    `POST /auth/logout`, and `GET /healthz`, open, for health probes.
+- **Privacy policy and terms of service** at `/privacy` and `/terms`, required by Google's
+  OAuth consent screen. Public, generated from Studio's settings (the models in use, cloud
+  enhancers, session length), and linked from the sign-in screen and the account menu.
+  `ARIES_LEGAL_OPERATOR` and `ARIES_LEGAL_CONTACT` name who runs the service.
+- **Grafana dashboard** in `deploy/grafana/`: jobs and queue, why tasks wait, card state
+  and memory, host RAM, stage and model-load times, failures and crashes, and the GPU
+  host's temperatures, fans and power (from node_exporter) next to when each card was busy,
+  and wall power, energy and time-of-use cost from a metering smart plug (the plug's
+  metrics and the tariff are dashboard constants).
+- The agent's stage and model-load histograms have buckets up to 30 minutes; the default
+  ones stopped at 10 s, so percentiles were meaningless.
+- **Image page on phones** fills the screen on iOS, including under the home indicator.
+  Scrolling the details gives them more room while the image stays in view.
+- **Phone layout:** queued, running and failed tiles fit narrow screens, and the composer's
+  option row wraps instead of overflowing.
+- **Dark theme:** no lighter band appears while Android Chrome hides its address bar.
+
 ## 0.5.0
 
 - **Cloud prompt enhancers, off by default** (docs/CLOUD_ENHANCERS.md). With

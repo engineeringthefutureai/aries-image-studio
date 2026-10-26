@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
   const backendTarget = env.VITE_BACKEND_URL || 'http://localhost:8080'
   const proxy = Object.fromEntries(
-    ['/api', '/metrics'].map((path) => [
+    ['/api', '/metrics', '/auth', '/privacy', '/terms'].map((path) => [
       path,
       { target: backendTarget, changeOrigin: true },
     ])

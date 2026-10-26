@@ -34,7 +34,8 @@ IP addresses, never `localhost`.
   about 6 GiB of free host RAM. Host setup and known failure modes:
   [HARDWARE.md](HARDWARE.md).
 - Docker Engine with the Compose plugin, and `make`.
-- About 50 GB of disk for the model weights, and the `hf` CLI
+- About 50 GB of disk for the model weights (Qwen-Image-2.1 31 GB, PE-T2I 18 GB), 70 GB
+  with the image-aware enhancer (PE-I2I 18 GB), and the `hf` CLI
   (`pip install -U "huggingface_hub[cli]"`) to download them once. Nothing downloads at
   runtime (`HF_HUB_OFFLINE=1`).
 
@@ -152,6 +153,45 @@ curl -s http://localhost:8080/metrics | head  # Prometheus text
 
 Open `http://studio.lan:8080` in a browser. It shows the timeline. A submit is rejected
 ("no known executor registered in the last 7 days") until an agent has connected once.
+
+**Optional: sign-in with Google.** Without it, anyone who can reach port 8080 can use
+Studio and sees everything. To require a Google account from a short list
+([AUTH.md](AUTH.md) §3):
+
+1. Put Studio behind a TLS proxy: Google redirects only to https (or `localhost`). Any
+   certificate browsers trust works; Google never connects to Studio itself, so a
+   LAN-only Studio is fine. With Caddy:
+
+   ```
+   studio.example.com {
+       @internal path /metrics /agent/*
+       respond @internal 404          # agents and Prometheus use the LAN address
+       reverse_proxy studio.lan:8080
+   }
+   ```
+
+2. In the Google Cloud console create an OAuth client of type **Web application** with the
+   redirect URI `https://studio.example.com/auth/callback` (one per address, if Studio has
+   several). On the consent screen, give
+   `https://studio.example.com/privacy` and `/terms` as the privacy policy and terms (Studio
+   serves both, open without signing in) and add each allowed address as a test user;
+   leave the app in Testing (docs/AUTH.md §3).
+3. Set in `.env`, then `docker compose up -d`:
+
+   ```bash
+   ARIES_OIDC_CLIENT_ID=<client ID>
+   ARIES_OIDC_CLIENT_SECRET=<client secret>
+   ARIES_AUTH_ALLOWED_EMAILS=you@example.com,partner@example.com
+   ARIES_PUBLIC_URL=https://studio.example.com   # comma-separate several ways in
+   ARIES_LEGAL_OPERATOR=Your Name        # named on /privacy and /terms
+   ARIES_LEGAL_CONTACT=you@example.com   # or a URL
+   ```
+
+Each account then has its own history; the first address on the list owns what was made
+before. Read `/privacy` and `/terms` first: they are your commitments as the host, and
+`studio/src/legal.rs` is where to change them. To sign in a device without Google (no
+internet), `docker compose exec studio aries-image-studio login-link you@example.com`
+prints a single-use link. Point probes at `/healthz`: with sign-in on, `/api/*` needs a session.
 
 ## 5. Run the agent (GPU host)
 
@@ -278,6 +318,24 @@ connects. Back up the data directory to keep your history (stop Studio first, or
 - `docker compose logs -f` (Studio) and `make logs` (agent).
 - Studio's `http://studio.lan:8080/metrics` includes every connected agent's metrics with
   an `agent` label, so Prometheus needs only that one target.
+- `deploy/grafana/aries-image-studio.json` is a Grafana dashboard for it: jobs and queue,
+  why tasks wait, each card's state and memory, driver overflow, host RAM, stage and model
+  load times, failures and crashes, and the GPU host's vitals (each card's temperatures,
+  fan and power, CPU and NVMe temperatures) drawn against when each card was busy. The
+  vitals come from [node_exporter](https://github.com/prometheus/node_exporter) on the GPU
+  host (its hwmon collector reads the `xe` driver's sensors); Studio does not export
+  them. The energy row reads a metering smart plug in front of the GPU host (wall power
+  and its energy counter; by default a Shelly exporter's `shelly_power_watts` and
+  `shelly_energy_wh_total`), puts it next to the cards' board power, and prices each
+  minute with a time-of-use tariff: a base price, and up to two daily windows with their
+  own price. The plug's metric names and label matchers, the currency and the tariff are
+  hidden dashboard constants (`wall_*`, `energy_currency`, `tariff_*`; prices 0 until
+  set): change them in the dashboard's settings, or in the JSON
+  (`templating.list[].query` and `.current`) when provisioning it. The tariff panels use
+  MetricsQL's `timezone_offset()`, so they need VictoriaMetrics; the rest is plain PromQL.
+  Import it and pick the Prometheus data source. Its
+  last row, collapsed, is for a Studio on Kubernetes (cAdvisor, kubelet and
+  kube-state-metrics; set the namespace, container and claim at the top).
 - The status panel (click the pill in the header) shows each card's state, stage and
   memory, host RAM, and the queue.
 
@@ -359,6 +417,12 @@ validation and the contract tests on both sides.
 | Variable | Default | Meaning |
 |---|---|---|
 | `ARIES_AGENT_TOKEN` | — (required) | Shared secret agents present on gRPC and artifact HTTP |
+| `ARIES_OIDC_CLIENT_ID` · `ARIES_OIDC_CLIENT_SECRET` | unset | Sign-in with Google (AUTH.md): set both to require it; the secret belongs in a secret store |
+| `ARIES_AUTH_ALLOWED_EMAILS` | — (required with sign-in) | Comma-separated addresses that may sign in |
+| `ARIES_PUBLIC_URL` | — (required with sign-in) | Studio's address as the browser sees it; the redirect URI is `{this}/auth/callback`. Comma-separate several (intranet and internet names): each request uses the one its `Host` names |
+| `ARIES_AUTH_OWNER` | first allowed address | Owns what was made before sign-in; the only account that may lend, disable or enable cards |
+| `ARIES_OIDC_ISSUER` · `ARIES_SESSION_DAYS` | `https://accounts.google.com` · `30` | Another OpenID Connect provider; how long an unused session lasts (renewed while used) |
+| `ARIES_LEGAL_OPERATOR` · `ARIES_LEGAL_CONTACT` | unset | Who runs Studio and how to reach them (an email or a URL), named on the public `/privacy` and `/terms` pages |
 | `ARIES_ARTIFACT_BASE_URL` | `http://127.0.0.1:8080` | Base of the artifact URLs sent to agents |
 | `ARIES_DATA_DIR` | `./data` (`/app/data` in the image) | SQLite database, blobs, thumbnails |
 | `ARIES_HTTP_ADDR` | `0.0.0.0:8080` | Web app, `/api`, artifacts, `/metrics` |

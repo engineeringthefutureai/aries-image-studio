@@ -1,10 +1,12 @@
 use aries_image_studio::api::build_http_router;
+use aries_image_studio::auth::{create_login_link, token_hash, AuthConfig};
 use aries_image_studio::cloud::{Api, CloudConfig, ProviderConfig};
 use aries_image_studio::config::BackendConfig;
 use aries_image_studio::db::{
     now_s, AttemptFailure, Database, ExecutorState, JobStatus, TaskStatus,
 };
 use aries_image_studio::grpc::AgentGatewayService;
+use aries_image_studio::legal::LegalConfig;
 use aries_image_studio::metrics::{AgentLiveMetrics, ExecutorLiveMetrics};
 use aries_image_studio::proto;
 use aries_image_studio::proto::agent_gateway_client::AgentGatewayClient;
@@ -12,6 +14,7 @@ use aries_image_studio::proto::agent_gateway_server::AgentGatewayServer;
 use aries_image_studio::scheduler::{run_scheduler_tick, AppState};
 use aries_image_studio::storage::{read_png_text_chunk, BlobStore};
 use axum::http::HeaderMap;
+use base64::Engine;
 use image::{ImageBuffer, ImageFormat, Rgba};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -46,6 +49,11 @@ async fn start_test_harness() -> TestHarness {
 }
 
 async fn start_test_harness_with(cloud: CloudConfig) -> TestHarness {
+    start_test_harness_full(cloud, None).await
+}
+
+/// With `issuer`: sign-in on against that identity provider, for me@ (the owner) and you@.
+async fn start_test_harness_full(cloud: CloudConfig, issuer: Option<String>) -> TestHarness {
     let temp_dir = std::env::temp_dir().join(format!("aries_v3_test_{}", ulid::Ulid::new()));
     std::fs::create_dir_all(temp_dir.join("static")).unwrap();
     std::fs::write(
@@ -75,6 +83,19 @@ async fn start_test_harness_with(cloud: CloudConfig) -> TestHarness {
         disk_watermark_pct: 80.0,
         reference_res: 1024,
         cloud,
+        auth: issuer.map(|issuer| AuthConfig {
+            issuer,
+            client_id: "studio-test".into(),
+            client_secret: "test-client-secret".into(),
+            allowed_emails: vec!["me@example.com".into(), "you@example.com".into()],
+            owner: "me@example.com".into(),
+            public_urls: vec![format!("http://{http_addr}")],
+            session_days: 30,
+        }),
+        legal: LegalConfig {
+            operator: Some("Ops & <Co>".into()),
+            contact: Some("ops@example.com".into()),
+        },
     };
 
     let db = Database::connect(temp_dir.join("studio.db")).await.unwrap();
@@ -1342,7 +1363,10 @@ async fn test_client_job_id_is_used_and_idempotent() {
 
     let again = submit(&harness, body).await;
     assert_eq!(again.status(), 200);
-    assert_eq!(harness.state.db.list_jobs(None).await.unwrap().len(), 1);
+    assert_eq!(
+        harness.state.db.list_jobs(None, None).await.unwrap().len(),
+        1
+    );
 
     let bad = submit(
         &harness,
@@ -3619,6 +3643,13 @@ async fn test_cloud_enhancer_rewrites_in_studio() {
         .unwrap();
     assert_eq!(caps["cloud_enhancers"][0]["label"], "Claude Sonnet 5.5");
     assert_eq!(caps["cloud_enhancers"][1]["label"], "Gemini 3.5 Flash Lite");
+    let privacy = reqwest::get(format!("{}/privacy", harness.http_url))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(privacy.contains("(Anthropic (Claude), Google (Gemini))"));
     assert_eq!(caps["cloud_enhancers"][1]["provider"], "google");
     assert!(!caps.to_string().contains("test-key"));
     assert_eq!(
@@ -3753,4 +3784,712 @@ async fn test_cloud_enhancer_failure_is_visible_and_retry_can_go_builtin() {
     );
     let job = harness.state.db.get_job(&job_id).await.unwrap().unwrap();
     assert!(job.enhancer.is_none());
+}
+
+// ---------- sign-in (docs/AUTH.md) ----------
+
+#[derive(Default)]
+struct FakeIdp {
+    /// ID token claims to hand out per authorization code.
+    codes: HashMap<String, Value>,
+    /// The token requests' form fields.
+    token_requests: Vec<HashMap<String, String>>,
+}
+
+type Idp = Arc<std::sync::Mutex<FakeIdp>>;
+
+/// A stand-in for accounts.google.com: discovery and the token endpoint.
+async fn start_fake_idp() -> (Idp, String) {
+    use axum::extract::State as S;
+    let idp: Idp = Default::default();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let discovery = {
+        let base = base.clone();
+        move || async move {
+            axum::Json(json!({
+                "issuer": base,
+                "authorization_endpoint": format!("{base}/authorize"),
+                "token_endpoint": format!("{base}/token"),
+            }))
+        }
+    };
+    let token = |S(idp): S<Idp>, axum::Form(form): axum::Form<HashMap<String, String>>| async move {
+        let mut idp = idp.lock().unwrap();
+        idp.token_requests.push(form.clone());
+        let Some(claims) = idp.codes.get(&form["code"]) else {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "invalid_grant"})),
+            );
+        };
+        let enc =
+            |v: &Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+        let id_token = format!("{}.{}.sig", enc(&json!({"alg": "RS256"})), enc(claims));
+        (
+            axum::http::StatusCode::OK,
+            axum::Json(json!({"id_token": id_token, "access_token": "x"})),
+        )
+    };
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/openid-configuration",
+            axum::routing::get(discovery),
+        )
+        .route("/token", axum::routing::post(token))
+        .with_state(idp.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (idp, base)
+}
+
+fn no_redirects() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+/// Starts a sign-in: the provider URL's query parameters.
+async fn begin_sign_in(harness: &TestHarness, next: &str) -> HashMap<String, String> {
+    let res = no_redirects()
+        .get(format!("{}/auth/login?next={next}", harness.http_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 303, "a redirect to the provider");
+    let location = res.headers()["location"].to_str().unwrap().to_string();
+    reqwest::Url::parse(&location)
+        .unwrap()
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+/// The provider sends the browser back with a code for `claims` (nonce filled in unless
+/// given). Returns the callback's response.
+async fn finish_sign_in(
+    harness: &TestHarness,
+    idp: &Idp,
+    params: &HashMap<String, String>,
+    mut claims: Value,
+) -> reqwest::Response {
+    let defaults = json!({
+        "iss": harness.state.config.auth.as_ref().unwrap().issuer,
+        "aud": "studio-test",
+        "exp": now_s() + 600.0,
+        "nonce": params["nonce"],
+        "email_verified": true,
+        "name": "Test User",
+        "picture": "https://example.com/p.png",
+    });
+    for (k, v) in defaults.as_object().unwrap() {
+        claims
+            .as_object_mut()
+            .unwrap()
+            .entry(k.clone())
+            .or_insert(v.clone());
+    }
+    let code = format!("code-{}", ulid::Ulid::new());
+    idp.lock().unwrap().codes.insert(code.clone(), claims);
+    no_redirects()
+        .get(format!(
+            "{}/auth/callback?code={code}&state={}",
+            harness.http_url, params["state"]
+        ))
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Signs `email` in; returns the `Cookie` header value for its session.
+async fn sign_in(harness: &TestHarness, idp: &Idp, email: &str) -> String {
+    let params = begin_sign_in(harness, "/gallery").await;
+    let res = finish_sign_in(harness, idp, &params, json!({ "email": email })).await;
+    assert_eq!(res.status(), 302);
+    assert_eq!(res.headers()["location"], "/gallery");
+    let set_cookie = res.headers()["set-cookie"].to_str().unwrap().to_string();
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"));
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+async fn as_user(
+    method: reqwest::Method,
+    url: String,
+    cookie: &str,
+    body: Option<Value>,
+) -> reqwest::Response {
+    let mut req = reqwest::Client::new()
+        .request(method, url)
+        .header("cookie", cookie);
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    req.send().await.unwrap()
+}
+
+/// Signed out, the API answers 401; health, metrics and the agents' routes stay open. A
+/// sign-in goes through the provider with PKCE and a nonce, and lands on `next`.
+#[tokio::test]
+async fn test_sign_in_with_the_provider() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let http = reqwest::Client::new();
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    assert_eq!(
+        http.get(url("/api/jobs")).send().await.unwrap().status(),
+        401
+    );
+    assert_eq!(http.get(url("/api/me")).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(url("/healthz")).send().await.unwrap().status(),
+        200
+    );
+    assert_eq!(
+        http.get(url("/metrics")).send().await.unwrap().status(),
+        200
+    );
+    assert_eq!(
+        http.get(url("/gallery")).send().await.unwrap().status(),
+        200,
+        "the app itself loads"
+    );
+    // The privacy policy and terms are public, written from this Studio's settings.
+    let privacy = http.get(url("/privacy")).send().await.unwrap();
+    assert_eq!(privacy.status(), 200);
+    let privacy = privacy.text().await.unwrap();
+    assert!(privacy.contains("Ops &amp; &lt;Co&gt;"), "operator escaped");
+    assert!(privacy.contains(r#"<a href="mailto:ops@example.com">"#));
+    assert!(privacy.contains("until 30 days pass"));
+    assert!(privacy.contains("Limited Use"));
+    assert!(privacy.contains("wherever Studio stores it,\nlogs included"));
+    assert!(privacy.contains("you also share its prompt"));
+    assert!(privacy.contains("ask the\nhost to delete your account"));
+    assert!(privacy.contains("Nothing here limits rights you have"));
+    assert!(privacy.contains("makes no commitment to privacy"));
+    assert!(privacy.contains("This is a self-hosted service"));
+    assert!(privacy.contains("in full control of the code running on it"));
+    assert!(privacy.contains("in compliance\nwith the laws and regulations that apply"));
+    assert!(!privacy.contains("16 or"));
+    assert!(privacy.contains("Its authors are not the\nhost"));
+    assert!(privacy.contains("Prompt rewriting runs on hardware the host controls"));
+    let terms = http.get(url("/terms")).send().await.unwrap();
+    assert_eq!(terms.status(), 200);
+    let terms = terms.text().await.unwrap();
+    assert!(terms.contains("Acceptable use"));
+    assert!(terms.contains("minimum age for its\nusers"));
+    // Before any agent: the default model, and what its license says.
+    assert!(terms.contains("by default\n<a href=\"https://huggingface.co/Qwen/Qwen-Image-2.1\">"));
+    assert!(terms.contains("Qwen/Qwen-Image-2.1 does not allow commercial use"));
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    // Then the models the agents declare.
+    let terms = http
+        .get(url("/terms"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(terms.contains("currently\n<a href=\"https://huggingface.co/Qwen/Qwen-Image-2.1\">"));
+    assert!(terms.contains("Qwen/Qwen-Image-2.1-PE-T2I"));
+    assert!(terms.contains(
+        "Qwen/Qwen-Image-2.1 and Qwen/Qwen-Image-2.1-PE-T2I do not allow commercial use"
+    ));
+    assert!(terms.contains("Use it only if you trust the\nhost"));
+    assert!(!terms.contains("advised not to use"));
+    assert!(terms.contains("Intimate images and minors: zero tolerance"));
+    assert!(terms.contains("https://policies.google.com/terms/generative-ai/use-policy"));
+    assert!(terms.contains("report you to the authorities"));
+    assert!(terms.contains("The host has no duty to look for it."));
+    assert!(!terms.contains("will be reported"));
+    assert!(terms.contains(r#"AI-generated, including "undressing" a photo"#));
+    assert!(terms.contains("Nothing here limits rights you have"));
+    assert!(terms.contains("only as the license of the model"));
+
+    let params = begin_sign_in(&harness, "/gallery").await;
+    assert_eq!(params["client_id"], "studio-test");
+    assert_eq!(params["redirect_uri"], url("/auth/callback"));
+    assert_eq!(params["code_challenge_method"], "S256");
+    let me = sign_in(&harness, &idp, "Me@Example.com").await;
+    {
+        let idp = idp.lock().unwrap();
+        let form = idp.token_requests.last().unwrap();
+        assert_eq!(form["client_secret"], "test-client-secret");
+        assert_eq!(form["redirect_uri"], url("/auth/callback"));
+        assert!(!form["code_verifier"].is_empty());
+    }
+    let who: Value = as_user(reqwest::Method::GET, url("/api/me"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(who["email"], "me@example.com");
+    assert_eq!(who["owner"], true);
+    assert_eq!(
+        as_user(reqwest::Method::GET, url("/api/jobs"), &me, None)
+            .await
+            .status(),
+        200
+    );
+
+    // Another site's page cannot write with the cookie.
+    let res = reqwest::Client::new()
+        .post(url("/api/jobs"))
+        .header("cookie", &me)
+        .header("origin", "https://evil.example")
+        .json(&json!({ "prompt": "p", "width": 1024, "height": 1024 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+
+    // Signing out ends the session.
+    let out = as_user(reqwest::Method::POST, url("/auth/logout"), &me, None).await;
+    assert_eq!(out.status(), 204);
+    assert_eq!(
+        as_user(reqwest::Method::GET, url("/api/jobs"), &me, None)
+            .await
+            .status(),
+        401
+    );
+}
+
+/// A session in use moves its expiry forward (at most hourly) and renews the cookie, so a
+/// device signed in while online keeps working through an outage.
+#[tokio::test]
+async fn test_sign_in_sessions_renew_while_used() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let hash = token_hash(me.split_once('=').unwrap().1);
+    let day = 86400.0;
+
+    // Fresh: nothing to renew.
+    let res = as_user(reqwest::Method::GET, url("/api/jobs"), &me, None).await;
+    assert_eq!(res.status(), 200);
+    assert!(res.headers().get("set-cookie").is_none());
+
+    // A day left: the next request renews it for the full 30 days.
+    harness
+        .state
+        .db
+        .renew_session(&hash, now_s() + day)
+        .await
+        .unwrap();
+    let res = as_user(reqwest::Method::GET, url("/api/jobs"), &me, None).await;
+    assert_eq!(res.status(), 200);
+    let cookie = res.headers()["set-cookie"].to_str().unwrap();
+    assert!(cookie.starts_with(&format!("{me};")), "{cookie}");
+    assert!(cookie.contains("Max-Age=2592000"), "{cookie}");
+    let s = harness.state.db.get_session(&hash).await.unwrap().unwrap();
+    assert!(s.expires_at > now_s() + 29.9 * day);
+
+    // /api/me, which the app asks first, renews too.
+    harness
+        .state
+        .db
+        .renew_session(&hash, now_s() + day)
+        .await
+        .unwrap();
+    let res = as_user(reqwest::Method::GET, url("/api/me"), &me, None).await;
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=2592000"));
+
+    // Expired: gone, whatever the cookie says.
+    harness
+        .state
+        .db
+        .renew_session(&hash, now_s() - 1.0)
+        .await
+        .unwrap();
+    let res = as_user(reqwest::Method::GET, url("/api/jobs"), &me, None).await;
+    assert_eq!(res.status(), 401);
+}
+
+/// An address taken off the allowlist is signed out on its next request, however fresh
+/// its session: the list is checked on every request, not only at sign-in.
+#[tokio::test]
+async fn test_sign_in_session_ends_when_taken_off_the_list() {
+    let (_idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    // A session for an address the list no longer has (as if removed and restarted).
+    let token = "removed-token";
+    harness
+        .state
+        .db
+        .create_session(
+            &token_hash(token),
+            "removed@example.com",
+            "",
+            "",
+            now_s() + 86400.0,
+        )
+        .await
+        .unwrap();
+    let cookie = format!("aries_session={token}");
+    let res = as_user(reqwest::Method::GET, url("/api/jobs"), &cookie, None).await;
+    assert_eq!(res.status(), 401);
+    let res = as_user(reqwest::Method::GET, url("/api/me"), &cookie, None).await;
+    assert_eq!(res.status(), 401);
+    assert!(
+        harness
+            .state
+            .db
+            .get_session(&token_hash(token))
+            .await
+            .unwrap()
+            .is_none(),
+        "deleted"
+    );
+}
+
+/// `aries-image-studio login-link` makes a single-use link that signs in without the
+/// provider, for allowlisted addresses only, with the profile the provider last gave.
+#[tokio::test]
+async fn test_sign_in_with_a_login_link() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let db = &harness.state.db;
+    let cfg = harness.state.config.auth.as_ref().unwrap();
+    let no_redirect = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    assert!(create_login_link(db, cfg, "stranger@example.com")
+        .await
+        .is_err());
+
+    let earlier = sign_in(&harness, &idp, "me@example.com").await;
+    let profile: Value = as_user(reqwest::Method::GET, url("/api/me"), &earlier, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let links = create_login_link(db, cfg, " Me@Example.com ")
+        .await
+        .unwrap();
+    assert_eq!(links.len(), 1, "one per public URL");
+    let link = &links[0];
+    assert!(link.starts_with(&url("/auth/link?token=")), "{link}");
+    let res = no_redirect.get(link).send().await.unwrap();
+    assert_eq!(res.status(), 302);
+    assert_eq!(res.headers()["location"], "/");
+    let cookie = res.headers()["set-cookie"].to_str().unwrap();
+    assert!(cookie.contains("HttpOnly"));
+    let session = cookie.split(';').next().unwrap().to_string();
+    assert_ne!(session, earlier, "a session of its own");
+    let me: Value = as_user(reqwest::Method::GET, url("/api/me"), &session, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(me["email"], "me@example.com");
+    assert_eq!(me["name"], profile["name"]);
+    assert_eq!(me["owner"], true);
+
+    // Once only.
+    let res = no_redirect.get(link).send().await.unwrap();
+    assert_eq!(res.headers()["location"], "/?auth_error=expired");
+    // Too old.
+    db.save_login_link(&token_hash("old"), "me@example.com", now_s() - 1.0)
+        .await
+        .unwrap();
+    let res = no_redirect
+        .get(url("/auth/link?token=old"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["location"], "/?auth_error=expired");
+    // Made up.
+    let res = no_redirect
+        .get(url("/auth/link?token=nope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["location"], "/?auth_error=expired");
+}
+
+/// Only verified addresses on the allowlist get a session; a sign-in state works once.
+#[tokio::test]
+async fn test_sign_in_refusals() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let refused = |res: &reqwest::Response, reason: &str| {
+        assert_eq!(res.status(), 303);
+        assert_eq!(
+            res.headers()["location"],
+            format!("/?auth_error={reason}").as_str()
+        );
+        assert!(res.headers().get("set-cookie").is_none());
+    };
+
+    let p = begin_sign_in(&harness, "/").await;
+    refused(
+        &finish_sign_in(&harness, &idp, &p, json!({"email": "stranger@example.com"})).await,
+        "not_allowed",
+    );
+    let p = begin_sign_in(&harness, "/").await;
+    refused(
+        &finish_sign_in(
+            &harness,
+            &idp,
+            &p,
+            json!({"email": "me@example.com", "email_verified": false}),
+        )
+        .await,
+        "not_allowed",
+    );
+    let p = begin_sign_in(&harness, "/").await;
+    refused(
+        &finish_sign_in(
+            &harness,
+            &idp,
+            &p,
+            json!({"email": "me@example.com", "nonce": "other"}),
+        )
+        .await,
+        "failed",
+    );
+    let p = begin_sign_in(&harness, "/").await;
+    refused(
+        &finish_sign_in(
+            &harness,
+            &idp,
+            &p,
+            json!({"email": "me@example.com", "aud": "someone-else"}),
+        )
+        .await,
+        "failed",
+    );
+    // The state was used up by the attempt above.
+    refused(
+        &finish_sign_in(&harness, &idp, &p, json!({"email": "me@example.com"})).await,
+        "expired",
+    );
+}
+
+/// Each account sees only its own jobs, images, uploads and preferences; someone else's
+/// are "not found". Only the owner changes the cards.
+#[tokio::test]
+async fn test_jobs_images_and_uploads_belong_to_their_account() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let you = sign_in(&harness, &idp, "you@example.com").await;
+    use reqwest::Method as M;
+
+    let job = json!({ "id": "mine", "prompt": "p", "width": 1024, "height": 1024 });
+    assert_eq!(
+        as_user(M::POST, url("/api/jobs"), &me, Some(job.clone()))
+            .await
+            .status(),
+        201
+    );
+    assert_eq!(
+        as_user(M::POST, url("/api/jobs"), &you, Some(job))
+            .await
+            .status(),
+        409,
+        "id taken"
+    );
+
+    async fn jobs(base: &str, cookie: &str) -> (usize, usize) {
+        let get = |q: &str| {
+            as_user(
+                reqwest::Method::GET,
+                format!("{base}/api/jobs?{q}"),
+                cookie,
+                None,
+            )
+        };
+        let page: Value = get("limit=10").await.json().await.unwrap();
+        let changes: Value = get("changed_since=0").await.json().await.unwrap();
+        (
+            page["jobs"].as_array().unwrap().len(),
+            changes["jobs"].as_array().unwrap().len(),
+        )
+    }
+    assert_eq!(jobs(&harness.http_url, &me).await, (1, 1));
+    assert_eq!(jobs(&harness.http_url, &you).await, (0, 0));
+    for (method, path) in [
+        (M::GET, "/api/jobs/mine"),
+        (M::PATCH, "/api/jobs/mine"),
+        (M::POST, "/api/jobs/mine/cancel"),
+        (M::POST, "/api/jobs/mine/retry"),
+        (M::GET, "/api/images/mine"),
+        (M::GET, "/api/images/mine/thumb"),
+        (M::DELETE, "/api/jobs/mine"),
+    ] {
+        let body = (method == M::PATCH).then(|| json!({"favorite": true}));
+        assert_eq!(
+            as_user(method.clone(), url(path), &you, body)
+                .await
+                .status(),
+            404,
+            "{method} {path}"
+        );
+    }
+    assert_eq!(
+        as_user(M::GET, url("/api/jobs/mine"), &me, None)
+            .await
+            .status(),
+        200
+    );
+    let up_cache: Value = reqwest::Client::new()
+        .post(url("/api/uploads"))
+        .header("cookie", &me)
+        .body(build_png_bytes(32, 32))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let up_sha = up_cache["id"].as_str().unwrap();
+    let fetched = as_user(M::GET, url(&format!("/api/uploads/{up_sha}")), &me, None).await;
+    assert!(
+        fetched.headers()["cache-control"]
+            .to_str()
+            .unwrap()
+            .starts_with("private"),
+        "no shared cache keeps an account's images"
+    );
+    let facets: Value = as_user(M::GET, url("/api/gallery/facets"), &you, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(facets["total"], 0);
+
+    // Preferences are per account.
+    as_user(
+        M::PUT,
+        url("/api/preferences"),
+        &me,
+        Some(json!({"theme": "dark"})),
+    )
+    .await;
+    let theirs: Value = as_user(M::GET, url("/api/preferences"), &you, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(theirs, json!({}));
+    let mine: Value = as_user(M::GET, url("/api/preferences"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(mine["theme"], "dark");
+
+    // An upload is its uploader's: no one else may see it or use it as a reference.
+    let up: Value = reqwest::Client::new()
+        .post(url("/api/uploads"))
+        .header("cookie", &me)
+        .body(build_png_bytes(64, 64))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sha = up["id"].as_str().unwrap();
+    assert_eq!(
+        as_user(M::GET, url(&format!("/api/uploads/{sha}")), &me, None)
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        as_user(M::GET, url(&format!("/api/uploads/{sha}")), &you, None)
+            .await
+            .status(),
+        404
+    );
+    let with_ref = json!({ "prompt": "edit image 1", "width": 1024, "height": 1024, "references": [{"upload": sha}] });
+    assert_eq!(
+        as_user(M::POST, url("/api/jobs"), &you, Some(with_ref))
+            .await
+            .status(),
+        422
+    );
+    let with_job = json!({ "prompt": "edit image 1", "width": 1024, "height": 1024, "references": [{"image": "mine"}] });
+    assert_eq!(
+        as_user(M::POST, url("/api/jobs"), &you, Some(with_job))
+            .await
+            .status(),
+        422
+    );
+
+    // Deleting tells only its owner.
+    assert_eq!(
+        as_user(M::DELETE, url("/api/jobs/mine"), &me, None)
+            .await
+            .status(),
+        204
+    );
+    let changes: Value = as_user(M::GET, url("/api/jobs?changed_since=0"), &you, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(changes["deleted"], json!([]));
+    let changes: Value = as_user(M::GET, url("/api/jobs?changed_since=0"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(changes["deleted"], json!(["mine"]));
+
+    // The cards are the owner's to change.
+    let disable = url("/api/executors/aries:xpu0/disable");
+    assert_eq!(
+        as_user(M::POST, disable.clone(), &you, None).await.status(),
+        403
+    );
+    assert_eq!(as_user(M::POST, disable, &me, None).await.status(), 200);
+}
+
+/// Switching sign-in on gives the owner what was made before.
+#[tokio::test]
+async fn test_owner_gets_what_was_made_before_sign_in() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let db = &harness.state.db;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let input: aries_image_studio::db::JobSubmitInput = serde_json::from_value(
+        json!({ "id": "old", "prompt": "p", "width": 1024, "height": 1024 }),
+    )
+    .unwrap();
+    db.create_job(&input, 1, &[], None).await.unwrap();
+    db.put_preferences(&json!({"theme": "dark"}), None)
+        .await
+        .unwrap();
+    assert_eq!(db.claim_unowned("me@example.com").await.unwrap(), 1);
+
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    assert_eq!(
+        as_user(reqwest::Method::GET, url("/api/jobs/old"), &me, None)
+            .await
+            .status(),
+        200
+    );
+    let prefs: Value = as_user(reqwest::Method::GET, url("/api/preferences"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prefs["theme"], "dark");
 }

@@ -275,7 +275,7 @@ export const ZoomableImage: React.FC<ZoomableImageProps> = ({
       {zoomed && (
         <div
           data-navigator
-          className="absolute top-3 left-3 sm:top-4 sm:left-4 z-20 rounded-lg overflow-hidden border border-white/20 shadow-xl bg-black/60 cursor-crosshair touch-none"
+          className="absolute top-[calc(0.75rem+var(--grow,0px)/2)] left-3 sm:top-[calc(1rem+var(--grow,0px)/2)] sm:left-4 z-20 rounded-lg overflow-hidden border border-white/20 shadow-xl bg-black/60 cursor-crosshair touch-none"
           style={{ width: navW, height: navH }}
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
@@ -292,8 +292,9 @@ export const ZoomableImage: React.FC<ZoomableImageProps> = ({
         </div>
       )}
 
-      {/* Zoom controls */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-black/60 backdrop-blur-xl border border-white/15 shadow-xl text-xs font-mono">
+      {/* Zoom controls. The viewer's details can cover the stage's ends on a phone (`--grow`):
+          the navigator and the controls stay in the part that shows. */}
+      <div className="absolute bottom-[calc(1.5rem+var(--grow,0px)/2)] transition-[bottom] duration-200 ease-out motion-reduce:transition-none left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-black/60 backdrop-blur-xl border border-white/15 shadow-xl text-xs font-mono">
         <button onClick={() => step(-1)} disabled={scale <= minScale + 1e-4} className={btn} title="Zoom out (−)">
           <ZoomOut className="w-4 h-4" />
         </button>

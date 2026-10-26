@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import type { Generation } from '../types';
 import { sanitizeEnhancedPrompt } from '../utils/prompt';
 import { formatDuration, formatGiB, generationSeconds, queueSeconds } from '../utils/timings';
@@ -68,6 +68,11 @@ export const Viewer: React.FC<ViewerProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
+  // Phones: once the details scroll, they take a quarter of the image's space. The stage keeps
+  // its size (so the image keeps its scale) and moves up by half of that, under the header.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageH, setStageH] = useState(0);
+  const [detailsUp, setDetailsUp] = useState(false);
 
   // Reset sub-panels when viewing a different generation (the image remounts at fit)
   const [shownId, setShownId] = useState(generation?.id);
@@ -77,7 +82,19 @@ export const Viewer: React.FC<ViewerProps> = ({
     setCopiedEnhanced(false);
     setCopiedSeed(false);
     setShowThinking(false);
+    setDetailsUp(false);
   }
+
+  const hasImage = !!generation?.imageUrl;
+  useLayoutEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const measure = () => setStageH(el.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasImage]);
 
   // Keyboard navigation & actions
   const handleKeyDown = useCallback(
@@ -164,6 +181,15 @@ export const Viewer: React.FC<ViewerProps> = ({
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
+  const grow = detailsUp ? Math.round(stageH / 4) : 0;
+  const handleDetailsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (window.matchMedia('(min-width: 1280px)').matches) return;
+    const el = e.currentTarget;
+    if (el.scrollTop <= 0) setDetailsUp(false);
+    // Only when there is more to read than the room it gains: it would snap back otherwise.
+    else if (!detailsUp && el.scrollHeight - el.clientHeight > stageH / 4) setDetailsUp(true);
+  };
+
   const handleCopySeed = () => {
     navigator.clipboard.writeText(generation.params.seed.toString());
     setCopiedSeed(true);
@@ -171,9 +197,12 @@ export const Viewer: React.FC<ViewerProps> = ({
   };
 
   return (
-    <div className="h-dvh w-full overflow-hidden flex flex-col xl:flex-row bg-[#0b0b0a] text-white select-none">
+    <div
+      className="h-full w-full overflow-hidden flex flex-col xl:flex-row bg-[#0b0b0a] text-white select-none pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+      style={{ '--grow': `${grow}px` } as React.CSSProperties}
+    >
       {/* Top Left Close & Header HUD on mobile */}
-      <div className="xl:hidden flex items-center justify-between p-4 border-b border-white/10 z-20">
+      <div className="xl:hidden flex items-center justify-between px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-white/10 bg-[#0b0b0a] z-20">
         <span className="font-mono text-xs text-white/70">
           {generation.params.width} × {generation.params.height} · {generation.params.aspect}
         </span>
@@ -186,7 +215,10 @@ export const Viewer: React.FC<ViewerProps> = ({
       </div>
 
       {/* Main Artwork Stage Area */}
-      <div className="relative flex-1 flex items-center justify-center overflow-hidden p-4 sm:p-8 min-h-0">
+      <div
+        ref={stageRef}
+        className="relative flex-1 flex items-center justify-center overflow-hidden p-4 sm:p-8 min-h-0 translate-y-[calc(var(--grow)*-0.5)] xl:translate-y-0 transition-transform duration-200 ease-out motion-reduce:transition-none"
+      >
         {/* Navigation Chevron: Prev */}
         {hasPrev && onPrev && (
           <button
@@ -221,7 +253,7 @@ export const Viewer: React.FC<ViewerProps> = ({
       </div>
 
       {/* Right Details Inspector Panel */}
-      <aside className="w-full xl:w-[410px] flex-shrink-0 bg-[#161614] border-t xl:border-t-0 xl:border-l border-white/10 flex flex-col h-[40vh] xl:h-full z-30 select-text overflow-hidden">
+      <aside className="w-full xl:w-[410px] flex-shrink-0 bg-[#161614] border-t xl:border-t-0 xl:border-l border-white/10 flex flex-col h-[calc(40vh+var(--grow))] -mt-[var(--grow)] xl:mt-0 xl:h-full transition-[height,margin] duration-200 ease-out motion-reduce:transition-none z-30 select-text overflow-hidden">
         <div className="p-4 sm:p-5 border-b border-white/10 bg-[#1a1a17] flex items-center justify-between gap-3">
           <h3 className="font-['Plus_Jakarta_Sans'] font-semibold text-base text-white leading-none min-w-0 truncate">
             Inspector
@@ -307,7 +339,10 @@ export const Viewer: React.FC<ViewerProps> = ({
         </div>
 
         {/* Scrollable Inspector Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 text-xs text-white/90">
+        <div
+          onScroll={handleDetailsScroll}
+          className="flex-1 overflow-y-auto p-4 sm:p-5 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-[calc(1.25rem+env(safe-area-inset-bottom))] space-y-5 text-xs text-white/90"
+        >
           {/* Active Prompt Section */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-white/50">

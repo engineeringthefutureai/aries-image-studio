@@ -90,6 +90,16 @@ pub struct JobPageQuery {
     pub search: Option<String>,
     /// Width / height, within 0.01.
     pub ratio: Option<f64>,
+    /// One account's jobs (sign-in on); `None`: everyone's.
+    pub owner: Option<String>,
+}
+
+/// A sign-in between the redirect to the provider and its callback.
+#[derive(Debug, Clone)]
+pub struct LoginState {
+    pub nonce: String,
+    pub verifier: String,
+    pub next: String,
 }
 
 /// The opaque cursor of the page after `job`.
@@ -131,6 +141,8 @@ enum JobFilter {
     Version(i64),
     /// A JSON array of job ids, for `json_each`.
     Ids(String),
+    /// `[version, owner]` as JSON, for `json_extract(?1, ...)`.
+    VersionOwner(String),
 }
 
 impl JobFilter {
@@ -140,7 +152,7 @@ impl JobFilter {
     ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
         match self {
             Self::Version(v) => q.bind(*v),
-            Self::Ids(ids) => q.bind(ids.clone()),
+            Self::Ids(ids) | Self::VersionOwner(ids) => q.bind(ids.clone()),
         }
     }
 }
@@ -427,6 +439,10 @@ pub struct JobRecord {
     pub tasks: Vec<TaskRecord>,
     #[serde(default)]
     pub provenance: HashMap<String, ProvenanceRecord>,
+    /// The account that made it (docs/AUTH.md); `None` with sign-in off. Not sent to
+    /// clients: each sees only its own.
+    #[serde(skip)]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -728,6 +744,43 @@ impl Database {
             .await?;
         self.ensure_column("jobs", "ratio_follow", "TEXT").await?;
         self.ensure_column("jobs", "enhancer", "TEXT").await?;
+        // Sign-in (docs/AUTH.md): who made a job; NULL with sign-in off.
+        self.ensure_column("jobs", "owner", "TEXT").await?;
+        self.ensure_column("deleted_jobs", "owner", "TEXT").await?;
+        for q in [
+            "CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner, created_at)",
+            "CREATE TABLE IF NOT EXISTS upload_owners (
+                sha256 TEXT NOT NULL REFERENCES uploads(sha256) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                PRIMARY KEY (sha256, owner)
+            )",
+            "CREATE TABLE IF NOT EXISTS user_preferences (
+                owner TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            )",
+            "CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                picture TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )",
+            "CREATE TABLE IF NOT EXISTS login_states (
+                state TEXT PRIMARY KEY,
+                nonce TEXT NOT NULL,
+                verifier TEXT NOT NULL,
+                next TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )",
+            "CREATE TABLE IF NOT EXISTS login_links (
+                token_hash TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            )",
+        ] {
+            sqlx::query(q).execute(&self.pool).await?;
+        }
         self.ensure_column("tasks", "sub_stage", "TEXT").await?;
         self.ensure_column("tasks", "stats_json", "TEXT").await?;
         // Encode inputs, so jobs of one send share one encode (scheduler.rs `encode_cache_key`).
@@ -1166,6 +1219,7 @@ impl Database {
         input: &JobSubmitInput,
         seed: u64,
         references: &[String],
+        owner: Option<&str>,
     ) -> Result<JobRecord> {
         let mut tx = self.pool.begin().await?;
         let now = now_s();
@@ -1179,8 +1233,8 @@ impl Database {
             "INSERT INTO jobs (
                 id, status, prompt, negative_prompt, width, height, steps, seed,
                 true_cfg_scale, enhance, meta, tiling, version, created_at, enhance_max_tokens,
-                enhancer
-            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                enhancer, owner
+            ) VALUES (?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job_id)
         .bind(&input.prompt)
@@ -1208,6 +1262,7 @@ impl Database {
                 .map(|t| t as i64),
         )
         .bind(input.enhancer.as_deref().filter(|_| input.enhance))
+        .bind(owner)
         .execute(&mut *tx)
         .await?;
 
@@ -1269,13 +1324,28 @@ impl Database {
         Ok(Some(job))
     }
 
-    /// Jobs (all, or changed since a version) with their tasks and provenance.
-    pub async fn list_jobs(&self, changed_since: Option<i64>) -> Result<Vec<JobRecord>> {
-        self.load_jobs(
-            "j.version > ?",
-            JobFilter::Version(changed_since.unwrap_or(i64::MIN)),
-        )
-        .await
+    /// Jobs (all, or changed since a version) with their tasks and provenance; with an
+    /// owner, only that account's.
+    pub async fn list_jobs(
+        &self,
+        changed_since: Option<i64>,
+        owner: Option<&str>,
+    ) -> Result<Vec<JobRecord>> {
+        let since = changed_since.unwrap_or(i64::MIN);
+        match owner {
+            None => {
+                self.load_jobs("j.version > ?", JobFilter::Version(since))
+                    .await
+            }
+            Some(o) => {
+                let filter = serde_json::json!([since, o]).to_string();
+                self.load_jobs(
+                    "j.version > json_extract(?1, '$[0]') AND j.owner = json_extract(?1, '$[1]')",
+                    JobFilter::VersionOwner(filter),
+                )
+                .await
+            }
+        }
     }
 
     /// The jobs with these ids that exist, in one batch (the scheduler tick's jobs).
@@ -1369,6 +1439,9 @@ impl Database {
         q: &JobPageQuery,
     ) -> Result<(Vec<JobRecord>, Option<String>)> {
         let mut sql = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM jobs WHERE 1 = 1");
+        if let Some(owner) = &q.owner {
+            sql.push(" AND owner = ").push_bind(owner.clone());
+        }
         if q.done_only {
             sql.push(" AND status = 'done'");
         }
@@ -1433,11 +1506,13 @@ impl Database {
     }
 
     /// Counts for the gallery's filters: finished images in all, favorites, and per size.
-    pub async fn gallery_facets(&self) -> Result<GalleryFacets> {
+    pub async fn gallery_facets(&self, owner: Option<&str>) -> Result<GalleryFacets> {
         let rows = sqlx::query(
             "SELECT width, height, COUNT(*) AS n, SUM(favorite) AS favorites
-             FROM jobs WHERE status = 'done' GROUP BY width, height",
+             FROM jobs WHERE status = 'done' AND (?1 IS NULL OR owner = ?1)
+             GROUP BY width, height",
         )
+        .bind(owner)
         .fetch_all(&self.pool)
         .await?;
         let mut facets = GalleryFacets::default();
@@ -1634,12 +1709,20 @@ impl Database {
         Ok(orphans)
     }
 
-    /// Ids of jobs deleted after `version`.
-    pub async fn list_deleted_since(&self, version: i64) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT id FROM deleted_jobs WHERE version > ? ORDER BY version")
-            .bind(version)
-            .fetch_all(&self.pool)
-            .await?;
+    /// Ids of jobs (one account's, with an owner) deleted after `version`.
+    pub async fn list_deleted_since(
+        &self,
+        version: i64,
+        owner: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT id FROM deleted_jobs WHERE version > ?1 AND (?2 IS NULL OR owner = ?2)
+             ORDER BY version",
+        )
+        .bind(version)
+        .bind(owner)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
     }
 
@@ -1664,18 +1747,259 @@ impl Database {
     }
 
     /// The UI's preferences (composer settings, theme): one JSON document, `{}` if unset.
-    pub async fn get_preferences(&self) -> Result<serde_json::Value> {
-        let row = sqlx::query("SELECT json FROM preferences WHERE id = 1")
-            .fetch_optional(&self.pool)
-            .await?;
+    /// With sign-in, each account has its own.
+    pub async fn get_preferences(&self, owner: Option<&str>) -> Result<serde_json::Value> {
+        let row = match owner {
+            None => {
+                sqlx::query("SELECT json FROM preferences WHERE id = 1")
+                    .fetch_optional(&self.pool)
+                    .await?
+            }
+            Some(o) => {
+                sqlx::query("SELECT json FROM user_preferences WHERE owner = ?")
+                    .bind(o)
+                    .fetch_optional(&self.pool)
+                    .await?
+            }
+        };
         Ok(row
             .and_then(|r| serde_json::from_str(&r.get::<String, _>("json")).ok())
             .unwrap_or_else(|| serde_json::json!({})))
     }
 
-    pub async fn put_preferences(&self, prefs: &serde_json::Value) -> Result<()> {
-        sqlx::query("INSERT INTO preferences (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json")
-            .bind(prefs.to_string())
+    pub async fn put_preferences(
+        &self,
+        prefs: &serde_json::Value,
+        owner: Option<&str>,
+    ) -> Result<()> {
+        match owner {
+            None => sqlx::query("INSERT INTO preferences (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json")
+                .bind(prefs.to_string()),
+            Some(o) => sqlx::query("INSERT INTO user_preferences (owner, json) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET json = excluded.json")
+                .bind(o)
+                .bind(prefs.to_string()),
+        }
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Who made the job: `None` no such job, `Some(None)` a job without an owner.
+    pub async fn job_owner(&self, job_id: &str) -> Result<Option<Option<String>>> {
+        let row = sqlx::query("SELECT owner FROM jobs WHERE id = ?")
+            .bind(job_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get("owner")))
+    }
+
+    /// Gives `owner` everything made without one (before sign-in was switched on): jobs,
+    /// their tombstones, uploads, and the preferences. Returns how many jobs it took.
+    pub async fn claim_unowned(&self, owner: &str) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let ver = Self::next_version_tx(&mut tx).await?;
+        let jobs = sqlx::query("UPDATE jobs SET owner = ?, version = ? WHERE owner IS NULL")
+            .bind(owner)
+            .bind(ver)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        sqlx::query("UPDATE deleted_jobs SET owner = ? WHERE owner IS NULL")
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO upload_owners (sha256, owner)
+             SELECT u.sha256, ? FROM uploads u
+             WHERE NOT EXISTS (SELECT 1 FROM upload_owners o WHERE o.sha256 = u.sha256)",
+        )
+        .bind(owner)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO user_preferences (owner, json)
+             SELECT ?, json FROM preferences WHERE id = 1",
+        )
+        .bind(owner)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(jobs)
+    }
+
+    /// Records that `owner` may use an upload (it uploaded it, or used its own image).
+    pub async fn add_upload_owner(&self, sha256: &str, owner: &str) -> Result<()> {
+        sqlx::query("INSERT OR IGNORE INTO upload_owners (sha256, owner) VALUES (?, ?)")
+            .bind(sha256)
+            .bind(owner)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The upload, if this account may see it (`None`: everyone may).
+    pub async fn get_upload_for(
+        &self,
+        sha256: &str,
+        owner: Option<&str>,
+    ) -> Result<Option<UploadRecord>> {
+        if let Some(o) = owner {
+            let owned = sqlx::query("SELECT 1 FROM upload_owners WHERE sha256 = ? AND owner = ?")
+                .bind(sha256)
+                .bind(o)
+                .fetch_optional(&self.pool)
+                .await?;
+            if owned.is_none() {
+                return Ok(None);
+            }
+        }
+        self.get_upload(sha256).await
+    }
+
+    pub async fn create_session(
+        &self,
+        token_hash: &str,
+        email: &str,
+        name: &str,
+        picture: &str,
+        expires_at: f64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions (token_hash, email, name, picture, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(token_hash)
+        .bind(email)
+        .bind(name)
+        .bind(picture)
+        .bind(now_s())
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// A session that has not expired.
+    pub async fn get_session(&self, token_hash: &str) -> Result<Option<crate::auth::Session>> {
+        let row = sqlx::query(
+            "SELECT email, name, picture, expires_at FROM sessions
+             WHERE token_hash = ? AND expires_at > ?",
+        )
+        .bind(token_hash)
+        .bind(now_s())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| crate::auth::Session {
+            email: r.get("email"),
+            name: r.get("name"),
+            picture: r.get("picture"),
+            expires_at: r.get("expires_at"),
+        }))
+    }
+
+    /// Moves a session's expiry to `expires_at` (a session in use does not run out).
+    pub async fn renew_session(&self, token_hash: &str, expires_at: f64) -> Result<()> {
+        sqlx::query("UPDATE sessions SET expires_at = ? WHERE token_hash = ?")
+            .bind(expires_at)
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The name and picture the provider last gave for `email`, if it ever signed in.
+    pub async fn last_profile(&self, email: &str) -> Result<Option<(String, String)>> {
+        let row = sqlx::query(
+            "SELECT name, picture FROM sessions WHERE email = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| (r.get("name"), r.get("picture"))))
+    }
+
+    pub async fn save_login_link(
+        &self,
+        token_hash: &str,
+        email: &str,
+        expires_at: f64,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO login_links (token_hash, email, expires_at) VALUES (?, ?, ?)")
+            .bind(token_hash)
+            .bind(email)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The email a login link was made for, once: it is deleted on the way out. Expired: none.
+    pub async fn take_login_link(&self, token_hash: &str) -> Result<Option<String>> {
+        let row = sqlx::query("DELETE FROM login_links WHERE token_hash = ? RETURNING *")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row
+            .filter(|r| r.get::<f64, _>("expires_at") > now_s())
+            .map(|r| r.get("email")))
+    }
+
+    pub async fn delete_session(&self, token_hash: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn save_login_state(
+        &self,
+        state: &str,
+        nonce: &str,
+        verifier: &str,
+        next: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO login_states (state, nonce, verifier, next, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(state)
+        .bind(nonce)
+        .bind(verifier)
+        .bind(next)
+        .bind(now_s())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The sign-in started with `state`, once: it is deleted on the way out. Too old: none.
+    pub async fn take_login_state(&self, state: &str) -> Result<Option<LoginState>> {
+        let row = sqlx::query("DELETE FROM login_states WHERE state = ? RETURNING *")
+            .bind(state)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row
+            .filter(|r| r.get::<f64, _>("created_at") > now_s() - crate::auth::LOGIN_STATE_TTL_S)
+            .map(|r| LoginState {
+                nonce: r.get("nonce"),
+                verifier: r.get("verifier"),
+                next: r.get("next"),
+            }))
+    }
+
+    /// Drops expired sessions and login links, and abandoned sign-ins.
+    pub async fn purge_auth(&self) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+            .bind(now_s())
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM login_links WHERE expires_at <= ?")
+            .bind(now_s())
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM login_states WHERE created_at <= ?")
+            .bind(now_s() - crate::auth::LOGIN_STATE_TTL_S)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1821,6 +2145,7 @@ impl Database {
             finished_at: r.get("finished_at"),
             tasks: Vec::new(),
             provenance: HashMap::new(),
+            owner: r.get("owner"),
         }
     }
 
@@ -3096,11 +3421,15 @@ impl Database {
 
         let ver = Self::next_version_tx(&mut tx).await?;
         // Tombstone, so clients polling `changed_since` learn about the deletion.
-        sqlx::query("INSERT OR REPLACE INTO deleted_jobs (id, version) VALUES (?, ?)")
-            .bind(job_id)
-            .bind(ver)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO deleted_jobs (id, version, owner)
+             VALUES (?, ?, (SELECT owner FROM jobs WHERE id = ?))",
+        )
+        .bind(job_id)
+        .bind(ver)
+        .bind(job_id)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("DELETE FROM jobs WHERE id = ?")
             .bind(job_id)
             .execute(&mut *tx)

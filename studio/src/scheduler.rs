@@ -61,6 +61,8 @@ pub struct AppState {
     pub db: Database,
     pub blobs: BlobStore,
     pub cloud: CloudEnhancers,
+    /// Sign-in (docs/AUTH.md); `None`: off, one user sees everything.
+    pub auth: Option<crate::auth::Auth>,
     pub metrics: BackendMetricsRegistry,
     pub live_metrics: RwLock<HashMap<String, AgentLiveMetrics>>,
     pub agent_streams: RwLock<HashMap<String, AgentTx>>,
@@ -70,8 +72,10 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: BackendConfig, db: Database, blobs: BlobStore) -> Arc<Self> {
         let cloud = CloudEnhancers::new(&config.cloud);
+        let auth = config.auth.clone().map(crate::auth::Auth::new);
         Arc::new(Self {
             cloud,
+            auth,
             config,
             db,
             blobs,

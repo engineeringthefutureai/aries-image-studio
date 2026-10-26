@@ -1,4 +1,6 @@
+use crate::auth::AuthConfig;
 use crate::cloud::CloudConfig;
+use crate::legal::LegalConfig;
 use std::env;
 use std::path::PathBuf;
 
@@ -21,6 +23,11 @@ pub struct BackendConfig {
     pub reference_res: u32,
     /// Cloud prompt enhancers (docs/CLOUD_ENHANCERS.md): none unless switched on.
     pub cloud: CloudConfig,
+    /// Sign-in with Google (docs/AUTH.md): none unless configured, and then every
+    /// `/api/*` request needs a session.
+    pub auth: Option<AuthConfig>,
+    /// Who runs Studio, for the privacy policy and terms (`/privacy`, `/terms`).
+    pub legal: LegalConfig,
 }
 
 impl Default for BackendConfig {
@@ -40,12 +47,15 @@ impl Default for BackendConfig {
             disk_watermark_pct: 80.0,
             reference_res: 1024,
             cloud: CloudConfig::default(),
+            auth: None,
+            legal: LegalConfig::default(),
         }
     }
 }
 
 impl BackendConfig {
-    pub fn from_env() -> Self {
+    /// Fails only on a half-configured sign-in (`ARIES_OIDC_CLIENT_ID` without the rest).
+    pub fn from_env() -> anyhow::Result<Self> {
         let mut cfg = Self::default();
         if let Ok(v) = env::var("ARIES_HTTP_ADDR") {
             cfg.http_addr = v;
@@ -103,7 +113,9 @@ impl BackendConfig {
             }
         }
         cfg.cloud = CloudConfig::from_env();
-        cfg
+        cfg.auth = AuthConfig::from_env()?;
+        cfg.legal = LegalConfig::from_env();
+        Ok(cfg)
     }
 }
 

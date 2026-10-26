@@ -7,7 +7,8 @@ live resource scraping, provenance) lives in **docs/ARCHITECTURE_V3.md** (earlie
 design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HARDWARE.md**
 (memory and performance work so far summarized in **docs/OPTIMIZATIONS.md**); reference
 images in **docs/REFERENCE_IMAGES.md**, the image-aware enhancer in **docs/ENHANCER_I2I.md**,
-cloud prompt enhancers (Studio calls Anthropic / Gemini itself) in **docs/CLOUD_ENHANCERS.md**;
+cloud prompt enhancers (Studio calls Anthropic / Gemini itself) in **docs/CLOUD_ENHANCERS.md**,
+sign-in with Google and per-account ownership in **docs/AUTH.md**;
 changes by release in **CHANGELOG.md**.
 Treat them as the source of truth and flag disagreements instead of silently
 diverging. When behavior changes, update the doc in the same change.
@@ -31,6 +32,7 @@ backend/tests/           pytest; stage & agent tests mock torch/diffusers/transf
 web/                     Vite + React + TypeScript + Tailwind SPA.
 deploy/studio/           Docker Compose for Studio.
 deploy/aries/            Systemd unit for aries-agent + Docker Compose / Makefile.
+deploy/grafana/          Grafana dashboard (import the JSON; picks a Prometheus data source).
 docs/  mockups/  reference/
 ```
 
@@ -39,7 +41,8 @@ docs/  mockups/  reference/
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
   `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/gallery/facets`, `/api/uploads` (reference images),
   `/api/system`, `/api/capabilities`,
-  `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`), runs the gRPC
+  `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`, the public `/privacy` and `/terms`; with sign-in on, `/api/me`
+  and `/auth/{login,callback,link,logout}`, every `/api/*` route scoped to the signed-in account), runs the gRPC
   `AgentGateway` server, scrapes each online agent's `/metrics` every 1 s, and owns
   SQLite state and the content-addressed blob store.
 - **Thin Agent (`backend/aries_agent/`)**: Connects out to `AgentGateway`, declares
