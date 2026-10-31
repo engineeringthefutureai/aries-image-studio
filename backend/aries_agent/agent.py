@@ -6,6 +6,8 @@ existing Unix-socket JSON-lines protocol, transfers task inputs/outputs over HTT
 exposes `/metrics` for live scraping.
 """
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -36,6 +38,10 @@ logger = logging.getLogger("aries_agent")
 # Longest worker output line the agent logs (asyncio's default is 64 KiB; a traceback or a
 # progress bar can exceed it). Longer lines are dropped, never left to block the worker.
 WORKER_LOG_LINE_LIMIT = 1024 * 1024
+# Longest event line a worker may send on its socket: a progress event carries a step
+# preview as base64 JPEG, past asyncio's default 64 KiB for large images. Past the limit
+# readline() raises and the agent drops the worker's connection.
+WORKER_SOCKET_LINE_LIMIT = 16 * 1024 * 1024
 
 STAGE_ENUM_TO_NAME = {
     agent_pb2.STAGE_ENHANCE: "enhance",
@@ -216,6 +222,7 @@ class ExecutorRuntime:
         self.unix_server = await asyncio.start_unix_server(
             self._handle_worker_conn,
             path=str(self.socket_path),
+            limit=WORKER_SOCKET_LINE_LIMIT,
         )
 
     async def stop_socket_server(self) -> None:
@@ -622,6 +629,8 @@ class ExecutorRuntime:
             params["seed"] = assign.denoise.seed
             params["true_cfg_scale"] = assign.denoise.true_cfg_scale or 1.0
             params["references"] = assign.denoise.references
+            params["preview_every"] = assign.denoise.preview_every
+            params["preview_downscale"] = assign.denoise.preview_downscale or 1
         elif which == "decode":
             params["decode_mode"] = DECODE_MODE_TO_NAME.get(assign.decode.mode, "untiled")
 
@@ -661,6 +670,16 @@ class ExecutorRuntime:
                 tps = stats.get("generation_tps", 0.0)
                 sps = round(1.0 / tps, 4) if tps > 0 else 0.0
 
+        # Denoise, when asked: the step's preview JPEG (base64 on the worker's line), passed on
+        # as it is, with the worker's time to make it (ARCHITECTURE_V3.md §7.5).
+        preview = b""
+        if isinstance(msg.get("preview"), str):
+            try:
+                preview = base64.b64decode(msg["preview"], validate=True)
+            except (binascii.Error, ValueError):
+                logger.warning("Dropping a malformed preview from the %s worker", self.cfg.id)
+            if preview and isinstance(msg.get("preview_ms"), (int, float)):
+                stats["preview_ms"] = float(msg["preview_ms"])
         self.emit_msg(
             agent_pb2.AgentMessage(
                 progress=agent_pb2.Progress(
@@ -671,6 +690,7 @@ class ExecutorRuntime:
                     s_per_step=sps,
                     sub_stage=str(msg.get("sub_stage") or ""),
                     stats=stats,
+                    preview=preview,
                 )
             )
         )

@@ -45,7 +45,7 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
             tick(&state).await;
 
             // Every 30 ticks (~30s), run intermediate artifact GC (§7.4)
-            if ticks % 30 == 0 {
+            if ticks.is_multiple_of(30) {
                 let emergency = state
                     .blobs
                     .disk_usage_pct()

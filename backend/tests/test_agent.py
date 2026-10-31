@@ -1,5 +1,6 @@
 """Tests for aries_agent (Architecture V3 §5-§10, §12)."""
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -764,6 +765,60 @@ async def test_enhance_progress_forwards_sub_stage_and_stats(tmp_path: Path):
     assert prog.sub_stage == "thinking"
     assert dict(prog.stats) == {"generated_tokens": 300.0, "max_new_tokens": 2048.0, "generation_tps": 20.0}
     assert (prog.step, prog.steps) == (300, 2048)
+
+
+@pytest.mark.asyncio
+async def test_denoise_progress_forwards_preview(tmp_path: Path):
+    agent = AriesAgent(config=_make_test_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    from aries_agent.agent import ActiveTask
+
+    assign = agent_pb2.Assign(
+        task="t1", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_DENOISE,
+        denoise=agent_pb2.DenoiseParams(width=1024, height=512, steps=20, preview_every=2, preview_downscale=2),
+    )
+    rt.active_task = ActiveTask(assign=assign, scratch_dir=tmp_path)
+    params = rt._build_worker_job_payload(rt.active_task)["params"]
+    assert (params["preview_every"], params["preview_downscale"]) == (2, 2)
+    await rt._on_worker_progress({
+        "id": "t1", "step": 4, "steps": 20, "s_per_step": 2.5,
+        "preview": base64.b64encode(b"\xff\xd8jpeg").decode(), "preview_ms": 9.5,
+    })
+    prog = (await agent.send_queue.get()).progress
+    assert prog.preview == b"\xff\xd8jpeg"
+    assert dict(prog.stats) == {"preview_ms": 9.5}
+    # A broken one is dropped, the progress still goes out.
+    await rt._on_worker_progress({"id": "t1", "step": 5, "steps": 20, "preview": "not base64!", "preview_ms": 1.0})
+    prog = (await agent.send_queue.get()).progress
+    assert (prog.step, prog.preview, dict(prog.stats)) == (5, b"", {})
+
+
+@pytest.mark.asyncio
+async def test_large_preview_over_the_worker_socket(tmp_path: Path):
+    """A step preview of a large image is one JSON line well past asyncio's default 64 KiB."""
+    agent = AriesAgent(config=_make_test_config(tmp_path))
+    rt = agent.executors["xpu0"]
+    from aries_agent.agent import ActiveTask
+
+    assign = agent_pb2.Assign(
+        task="t1", attempt=1, executor="xpu0", stage=agent_pb2.STAGE_DENOISE,
+        denoise=agent_pb2.DenoiseParams(width=2752, height=1536, steps=40, preview_every=1),
+    )
+    rt.active_task = ActiveTask(assign=assign, scratch_dir=tmp_path)
+    await rt.start_socket_server()
+    _, w = await asyncio.open_unix_connection(str(rt.socket_path))
+    jpeg = b"\xff\xd8" + os.urandom(400_000)
+    for step in (6, 7):
+        event = {"event": "progress", "id": "t1", "step": step, "steps": 40,
+                 "preview": base64.b64encode(jpeg).decode(), "preview_ms": 12.0}
+        w.write((json.dumps(event) + "\n").encode("utf-8"))
+        await w.drain()
+        prog = (await asyncio.wait_for(agent.send_queue.get(), timeout=3.0)).progress
+        assert (prog.step, prog.preview) == (step, jpeg)
+    assert rt.worker_writer is not None
+    w.close()
+    await w.wait_closed()
+    await rt.stop_socket_server()
 
 
 def test_reconnect_keeps_results_and_reports_them_running(tmp_path: Path):

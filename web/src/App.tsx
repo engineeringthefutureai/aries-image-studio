@@ -58,20 +58,26 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 
 /** The timeline lists every job. */
 const TIMELINE_QUERY: JobQuery = {};
-const NO_FILTERS: GalleryFilters = { favorites: false, aspect: '', q: '' };
+const NO_FILTERS: GalleryFilters = { favorites: false, aspect: '', q: '', like: '' };
 
 /** The gallery's Studio query: an aspect label stands for its preset's exact size ratio. */
 function galleryQuery(f: GalleryFilters): JobQuery {
   const preset = ASPECT_RATIOS[f.aspect as AspectRatio];
   const ratio = preset ? `${preset.width}:${preset.height}` : f.aspect || undefined;
-  return { doneOnly: true, favorites: f.favorites || undefined, q: f.q.trim() || undefined, ratio };
+  return {
+    doneOnly: true,
+    favorites: f.favorites || undefined,
+    q: f.q.trim() || undefined,
+    like: f.like || undefined,
+    ratio,
+  };
 }
 
 /** Studio's system view and capabilities, polled together. */
 const fetchStatus = () => Promise.all([fetchWorkerHealth(), fetchCapabilitiesApi()]);
 
 const sameFilters = (a: GalleryFilters, b: GalleryFilters) =>
-  a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q;
+  a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q && a.like === b.like;
 
 /** `account`: who is signed in; null when Studio runs without sign-in. */
 export function App({ account }: { account: Account | null }) {

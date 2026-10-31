@@ -33,6 +33,8 @@ class WorkerSocketClient:
         self.running = False
         self.cancelled_jobs = set()
         self.should_exit = False
+        self.current_job: Optional[str] = None
+        self.connection_lost = False
         self.msg_queue: asyncio.Queue = asyncio.Queue()
 
     async def connect(self, max_retries: int = 20, retry_delay: float = 0.5) -> None:
@@ -49,12 +51,28 @@ class WorkerSocketClient:
                 await asyncio.sleep(retry_delay)
 
     async def send_event(self, data: Dict[str, Any]) -> None:
-        """Send a JSON-lines message to the agent."""
-        if not self.writer:
+        """Send a JSON-lines message to the agent. Once the connection is gone, events are
+        dropped: nobody is left to read them."""
+        if not self.writer or self.connection_lost:
             return
         line = json.dumps(data) + "\n"
-        self.writer.write(line.encode("utf-8"))
-        await self.writer.drain()
+        try:
+            self.writer.write(line.encode("utf-8"))
+            await self.writer.drain()
+        except (ConnectionError, OSError) as e:
+            logger.warning("Lost the agent socket while sending %s: %s", data.get("event"), e)
+            await self._on_connection_lost()
+
+    async def _on_connection_lost(self) -> None:
+        """The agent is gone: stop the running job at its next step and exit, instead of
+        finishing work nobody will collect."""
+        if self.connection_lost:
+            return
+        self.connection_lost = True
+        self.should_exit = True
+        if self.current_job is not None:
+            self.cancelled_jobs.add(self.current_job)
+        await self.msg_queue.put({"action": "exit"})
 
     async def _heartbeat_loop(self) -> None:
         """Send heartbeat with VRAM usage every 5s."""
@@ -79,8 +97,7 @@ class WorkerSocketClient:
                 line = await self.reader.readline()
                 if not line:
                     logger.info("Agent closed socket connection.")
-                    self.should_exit = True
-                    await self.msg_queue.put({"action": "exit"})
+                    await self._on_connection_lost()
                     break
 
                 text = line.decode("utf-8").strip()
@@ -105,8 +122,7 @@ class WorkerSocketClient:
                 break
             except Exception as e:
                 logger.warning("Error reading from agent socket: %s", e)
-                self.should_exit = True
-                await self.msg_queue.put({"action": "exit"})
+                await self._on_connection_lost()
                 break
 
     async def run(self) -> None:
@@ -190,6 +206,7 @@ class WorkerSocketClient:
         paths = msg.get("paths", {})
         params = msg.get("params", {})
         logger.info("Claimed job %s for stage %s", job_id, self.stage)
+        self.current_job = job_id
         loop = asyncio.get_running_loop()
 
         def progress_cb(
@@ -198,6 +215,8 @@ class WorkerSocketClient:
             sps: Optional[float] = None,
             sub_stage: Optional[str] = None,
             enhance_stats: Optional[Dict[str, Any]] = None,
+            preview: Optional[str] = None,
+            preview_ms: Optional[float] = None,
         ) -> None:
             payload: Dict[str, Any] = {"event": "progress", "id": job_id, "vram": get_vram_stats()}
             for key, value in (
@@ -206,6 +225,8 @@ class WorkerSocketClient:
                 ("s_per_step", sps),
                 ("sub_stage", sub_stage),
                 ("enhance_stats", enhance_stats),
+                ("preview", preview),
+                ("preview_ms", preview_ms),
             ):
                 if value is not None:
                     payload[key] = value
@@ -235,4 +256,5 @@ class WorkerSocketClient:
                 message = str(e)
             await self.send_event({"event": "error", "id": job_id, "message": message})
         finally:
+            self.current_job = None
             self.cancelled_jobs.discard(job_id)

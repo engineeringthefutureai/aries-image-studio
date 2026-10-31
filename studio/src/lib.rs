@@ -12,6 +12,8 @@ pub mod db;
 pub mod grpc;
 pub mod legal;
 pub mod metrics;
+pub mod preview;
 pub mod scheduler;
 pub mod scraper;
+pub mod search;
 pub mod storage;

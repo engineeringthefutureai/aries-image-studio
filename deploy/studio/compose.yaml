@@ -19,6 +19,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ARIES_GEMINI_MODELS=${ARIES_GEMINI_MODELS:-}
       - ARIES_GEMINI_THINKING=${ARIES_GEMINI_THINKING:-}
+      # Live preview while drawing: every Nth step (default 1), 0 for none.
+      - ARIES_PREVIEW_EVERY_STEPS=${ARIES_PREVIEW_EVERY_STEPS:-}
+      - ARIES_PREVIEW_HALVE_ABOVE_PX=${ARIES_PREVIEW_HALVE_ABOVE_PX:-}
       # Sign-in with Google (docs/AUTH.md): off unless ARIES_OIDC_CLIENT_ID is set in .env.
       - ARIES_OIDC_CLIENT_ID=${ARIES_OIDC_CLIENT_ID:-}
       - ARIES_OIDC_CLIENT_SECRET=${ARIES_OIDC_CLIENT_SECRET:-}

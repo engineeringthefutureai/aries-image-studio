@@ -22,8 +22,10 @@ import {
   Trash2,
   ImagePlus,
   Link2,
+  ScanSearch,
 } from 'lucide-react';
 import { modelLabel } from '../utils/enhancers';
+import { galleryHref, onLinkClick } from '../utils/router';
 
 interface ViewerProps {
   generation: Generation | null;
@@ -126,13 +128,14 @@ export const Viewer: React.FC<ViewerProps> = ({
     setTimeout(() => setCopiedPrompt(false), 2000);
   };
 
+  const moreLikeThis = galleryHref({ favorites: false, aspect: '', q: '', like: generation.id });
   const timings = generation.timings;
   const genSeconds = generationSeconds(timings);
   const waitSeconds = queueSeconds(timings);
   const totalSeconds = timings?.total_s ?? genSeconds;
   const timeRows: { label: string; seconds: number; detail?: string }[] = [];
   if (timings?.enhance_s != null) {
-    // A cloud enhancer is named; the built-in one shows in Provenance.
+    // A cloud enhancer is named; the local one shows in Provenance.
     const enhanceProv = generation.provenance?.enhance;
     timeRows.push({
       label: 'Enhance',
@@ -329,12 +332,23 @@ export const Viewer: React.FC<ViewerProps> = ({
           {onUseAsReference && (
             <button
               onClick={() => onUseAsReference(generation)}
-              className="col-span-2 flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all"
+              className={`${generation.imageUrl ? '' : 'col-span-2 '}flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all`}
               title="Attach this image to the next prompt as a reference"
             >
               <ImagePlus className="w-4 h-4" />
               Use as reference
             </button>
+          )}
+          {generation.imageUrl && (
+            <a
+              href={moreLikeThis}
+              onClick={(e) => onLinkClick(e, moreLikeThis)}
+              className={`${onUseAsReference ? '' : 'col-span-2 '}flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all`}
+              title="The gallery, ranked by how alike the images look to this one"
+            >
+              <ScanSearch className="w-4 h-4" />
+              More like this
+            </a>
           )}
         </div>
 

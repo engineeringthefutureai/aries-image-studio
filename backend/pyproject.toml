@@ -1,6 +1,6 @@
 [project]
 name = "aries-image-studio-backend"
-version = "0.6.0"
+version = "0.7.0"
 description = "Aries Image Studio thin agent and stage workers: staged Qwen-Image-2.1 inference on Intel XPU"
 requires-python = ">=3.12"
 license = "MIT"
@@ -40,7 +40,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"aries_worker.stages" = ["system_prompt.txt"]
+"aries_worker.stages" = ["system_prompt.txt", "latent_preview.bin"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

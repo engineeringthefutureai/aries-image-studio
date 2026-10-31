@@ -16,6 +16,8 @@ export interface GalleryFilters {
   /** Aspect label (`16:9`, or `w:h` for sizes outside the presets); empty: all. */
   aspect: string;
   q: string;
+  /** "More like this": the job whose image the gallery ranks the rest against; empty: none. */
+  like: string;
 }
 
 /** Where the viewer was opened from: its ←/→ follow that list, and closing goes back to it. */
@@ -35,7 +37,12 @@ export function parseRoute(path: string, search: string): Route {
     const p = new URLSearchParams(search);
     return {
       name: 'gallery',
-      filters: { favorites: p.get('fav') === '1', aspect: p.get('aspect') || '', q: p.get('q') || '' },
+      filters: {
+        favorites: p.get('fav') === '1',
+        aspect: p.get('aspect') || '',
+        q: p.get('q') || '',
+        like: p.get('like') || '',
+      },
     };
   }
   if (/^\/status\/?$/.test(path)) return { name: 'status' };
@@ -47,6 +54,7 @@ export function galleryHref(f: GalleryFilters): string {
   if (f.favorites) p.set('fav', '1');
   if (f.aspect) p.set('aspect', f.aspect);
   if (f.q.trim()) p.set('q', f.q.trim());
+  if (f.like) p.set('like', f.like);
   const qs = p.toString();
   return qs ? `/gallery?${qs}` : '/gallery';
 }

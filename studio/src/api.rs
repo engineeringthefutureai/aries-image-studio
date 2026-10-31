@@ -45,6 +45,7 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/gallery/facets", get(get_gallery_facets))
         .route("/api/images/:id", get(get_image))
         .route("/api/images/:id/thumb", get(get_image_thumb))
+        .route("/api/jobs/:id/preview", get(get_job_preview))
         .route("/api/uploads", post(upload_image))
         .route("/api/uploads/:sha", get(get_upload))
         .route("/api/uploads/:sha/thumb", get(get_upload_thumb))
@@ -122,8 +123,11 @@ pub struct ListJobsQuery {
     /// `done`: finished images only.
     pub status: Option<String>,
     pub favorite: Option<bool>,
-    /// Substring of the prompt, the enhanced prompt or the seed.
+    /// Search (docs/SEARCH.md): images ranked by what they show and the words of their
+    /// prompts (or a seed's digits), best first; `next` is then an offset.
     pub q: Option<String>,
+    /// "More like this": images ranked by how alike they look to this job's.
+    pub like: Option<String>,
     /// `w:h`: images of this aspect ratio.
     pub aspect: Option<String>,
 }
@@ -532,11 +536,21 @@ async fn list_jobs(
                 before: q.before.clone(),
                 done_only: q.status.as_deref() == Some("done"),
                 favorites_only: q.favorite == Some(true),
-                search: q.q.clone(),
                 ratio,
                 owner: user.scope().map(str::to_string),
             };
-            state.db.list_jobs_page(&page).await
+            let text = q.q.as_deref().map(str::trim).filter(|t| !t.is_empty());
+            let like = q.like.as_deref().filter(|l| !l.is_empty());
+            if let Some(id) = like {
+                if !may_see_job(&state, &user, id).await {
+                    return not_found("job");
+                }
+            }
+            if text.is_some() || like.is_some() {
+                crate::search::page(&state, &page, text, like).await
+            } else {
+                state.db.list_jobs_page(&page).await
+            }
         }
         (since, _) => state
             .db
@@ -551,6 +565,7 @@ async fn list_jobs(
             for job in &mut jobs {
                 job.thinking = None;
             }
+            crate::preview::attach_steps(&mut jobs);
             (
                 StatusCode::OK,
                 Json(json!({
@@ -594,7 +609,10 @@ async fn get_job(
         return not_found("job");
     }
     match state.db.get_job(&id).await {
-        Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
+        Ok(Some(mut job)) => {
+            crate::preview::attach_steps(std::slice::from_mut(&mut job));
+            (StatusCode::OK, Json(job)).into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "job not found" })),
@@ -707,6 +725,7 @@ async fn delete_job(
             }
             drop(collecting);
             state.blobs.delete_thumbnails(&id);
+            state.search.remove(&id);
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(None) => (
@@ -892,6 +911,89 @@ struct ThumbQuery {
 
 /// JPEG thumbnail, `?size=` 512, 768 or 1024 (longer side; default 1024). Generated on request
 /// when missing, e.g. for images from before thumbnails had these sizes.
+/// `GET /api/jobs/{id}/preview`: a rough JPEG of the image at a quarter size, from the
+/// denoised latent, for the tile while decode waits (preview.rs). 404 until denoise is done,
+/// and once the latent is cleaned up.
+async fn get_job_preview(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("preview");
+    }
+    let Ok(Some(job)) = state.db.get_job(&id).await else {
+        return not_found("preview");
+    };
+    // While it draws: the denoise worker's newest per-step preview (ARCHITECTURE_V3.md §7.5).
+    if let Some((_, jpeg)) = crate::preview::drawing_task(&job).and_then(crate::preview::live) {
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, no-cache"),
+            ],
+            jpeg.as_ref().clone(),
+        )
+            .into_response();
+    }
+    let Ok(Some(art)) = state
+        .db
+        .get_job_artifact_by_name(&id, "latent.safetensors")
+        .await
+    else {
+        return not_found("preview");
+    };
+    let model = art
+        .metadata_json
+        .as_deref()
+        .and_then(|m| serde_json::from_str::<HashMap<String, String>>(m).ok())
+        .and_then(|m| m.get("model").cloned())
+        .unwrap_or_default();
+    if !crate::preview::supports(&model) {
+        return not_found("preview");
+    }
+    let rendered = match crate::preview::cached(&art.sha256) {
+        Some(jpeg) => Ok(Ok(jpeg)),
+        None => {
+            let blobs = state.blobs.clone();
+            let (width, height) = (job.width, job.height);
+            let sha = art.sha256.clone();
+            let started = std::time::Instant::now();
+            let rendered = tokio::task::spawn_blocking(move || {
+                let latent = blobs.get_blob(&sha)?;
+                crate::preview::render_jpeg(&latent, width, height).map(Arc::new)
+            })
+            .await;
+            if let Ok(Ok(jpeg)) = &rendered {
+                // Renders only: cache hits cost nothing worth timing.
+                state.metrics.observe_preview(
+                    &format!("{width}x{height}"),
+                    started.elapsed().as_secs_f64(),
+                );
+                crate::preview::remember(&art.sha256, jpeg.clone());
+            }
+            rendered
+        }
+    };
+    match rendered {
+        Ok(Ok(jpeg)) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, max-age=300"),
+            ],
+            jpeg.as_ref().clone(),
+        )
+            .into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!("preview of {id}: {e:#}");
+            not_found("preview")
+        }
+        Err(_) => not_found("preview"),
+    }
+}
+
 async fn get_image_thumb(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,

@@ -133,6 +133,24 @@ export function calculateDimensions(
   };
 }
 
+/** Which of a search's rankings found an image: what it shows, its prompt's words, or both. */
+export type SearchMatch = 'semantic' | 'text' | 'both';
+/** How closely an image's look matches a search (docs/SEARCH.md). */
+export type SearchStrength = 'strong' | 'possible' | 'weak';
+/** Where a search's words were found: the prompt as written, only the enhanced one, the seed. */
+export type SearchWords = 'prompt' | 'enhanced' | 'seed';
+
+/** How a search found an image. */
+export interface SearchHit {
+  match: SearchMatch;
+  /** When its look matched. */
+  strength?: SearchStrength;
+  /** When its words matched. */
+  words?: SearchWords;
+  /** The words as the exact phrase typed. */
+  phrase?: boolean;
+}
+
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export type JobPhase =
@@ -155,7 +173,7 @@ export interface JobParams {
   enhance?: boolean;
   /** The prompt rewriter's token limit (advanced; unset: the worker's default, 4096 + 2048 per reference image). */
   enhanceMaxTokens?: number;
-  /** The cloud enhancer that rewrites the prompt: its model id (`claude-sonnet-5-5`); unset: the built-in one. */
+  /** The cloud enhancer that rewrites the prompt: its model id (`claude-sonnet-5-5`); unset: the local one. */
   enhancer?: string;
   /** VAE tiling at decode (advanced; off by default). */
   tiling?: boolean;
@@ -245,6 +263,9 @@ export interface Generation {
   thumbUrl?: string;
   /** `srcset` of the thumbnails (512, 768 and 1024 px), for grid tiles. */
   thumbSrcSet?: string;
+  /** Rough quarter-size preview: of the step while it draws, of the drawn latent while
+   *  decode is still to come. */
+  previewUrl?: string;
   error?: string;
   blockedReason?: string;
   provenance?: Record<string, StageProvenance>;
@@ -257,6 +278,8 @@ export interface Generation {
   peakVram?: number;
   /** Reference images in prompt order (none for text-only jobs). */
   references?: JobReference[];
+  /** In search results: how the search found it (docs/SEARCH.md). */
+  search?: SearchHit;
 }
 
 /** One executor as the header's status pill sees it. */
@@ -400,6 +423,14 @@ export interface V3JobRecord {
   /** Left out of job lists (`has_thinking` says whether there is some). */
   thinking?: string | null;
   has_thinking?: boolean;
+  /** While it draws: the step of the newest per-step preview Studio holds. */
+  preview_step?: number;
+  /** In search results: which ranking found it, how closely it looks the part, where its
+   * words were found and whether as typed. */
+  search_match?: SearchMatch;
+  search_strength?: SearchStrength;
+  search_words?: SearchWords;
+  search_phrase?: boolean;
   negative_prompt: string;
   /** UI metadata the SPA stored with the job (see services/api.ts JobMeta). */
   meta?: Record<string, unknown>;
@@ -411,7 +442,7 @@ export interface V3JobRecord {
   true_cfg_scale: number;
   enhance: boolean;
   enhance_max_tokens?: number | null;
-  /** The cloud enhancer that rewrites the prompt; unset: the built-in one. */
+  /** The cloud enhancer that rewrites the prompt; unset: the local one. */
   enhancer?: string | null;
   tiling?: boolean;
   wh_ratio?: string | null;

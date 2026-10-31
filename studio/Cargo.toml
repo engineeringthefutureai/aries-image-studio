@@ -1,9 +1,9 @@
 [package]
 name = "aries-image-studio"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 # The toolchain studio/Dockerfile builds with; clippy then suggests nothing newer.
-rust-version = "1.85"
+rust-version = "1.92"
 description = "Aries Image Studio Architecture V3 backend: AgentGateway, scheduler, SQLite state machine, blob store, and public API"
 license = "MIT"
 
@@ -21,6 +21,9 @@ getrandom = "0.2"
 hex = "0.4"
 image = { version = "=0.25.5", default-features = false, features = ["png", "jpeg", "webp"] }
 libc = "0.2"
+# Search (docs/SEARCH.md): SigLIP 2 through ONNX Runtime, loaded from ORT_DYLIB_PATH at
+# startup (the image ships the library next to the model), so nothing downloads at build.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -28,6 +31,8 @@ serde_json = "1.0"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 tokio = { version = "1.40", features = ["full"] }
+# The search model's tokenizer.json; the pure-Rust regex backend, no C++ deps.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = { version = "0.12", features = ["tls"] }
 tower = { version = "0.5", features = ["util"] }

@@ -159,7 +159,7 @@ impl Facts {
                  you attached are sent to that provider to be rewritten, under the host's \
                  account with it, and its terms and privacy policy apply to them. Only the \
                  prompt and the images are sent: not your email address, name or any account \
-                 identifier. The built-in enhancer runs on the host's own hardware.",
+                 identifier. The local enhancer runs on the host's own hardware.",
                 self.providers.join(", ")
             )
         }

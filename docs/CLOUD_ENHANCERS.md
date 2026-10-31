@@ -6,13 +6,13 @@ stage ([ARCHITECTURE_V3.md](ARCHITECTURE_V3.md) §3.1) and the image-aware enhan
 
 ## 1. Why
 
-The built-in enhancer is the slowest part of an Enhance job: it writes 3,000–4,000 tokens of
+The local enhancer is the slowest part of an Enhance job: it writes 3,000–4,000 tokens of
 reasoning and reply at ~31 tok/s, so 100–135 s per image (ENHANCER_I2I.md §2), on a card that
 could be drawing meanwhile. For a Draft or ¼-size preview that is most of the job. A hosted
 model rewrites the same prompt in seconds without a card, and a different model gives
 different rewrites, which helps when you want variations to choose from.
 
-The built-in enhancer stays the default, and it is the only one that works offline.
+The local enhancer stays the default, and it is the only one that works offline.
 
 ## 2. What it is
 
@@ -30,7 +30,7 @@ The built-in enhancer stays the default, and it is the only one that works offli
 
   `ARIES_GEMINI_MODELS` chooses the Gemini models and their limits.
 
-- **Per send, in the composer.** With Enhance on, a picker next to it offers Built-in and
+- **Per send, in the composer.** With Enhance on, a picker next to it offers Local and
   each cloud enhancer. The choice is saved with the other preferences. Rerun and Vary
   bring back the image's enhancer.
 - **A job names it:** `POST /api/jobs` takes `"enhancer": "<model id>"` (unset, or
@@ -45,7 +45,7 @@ job names a cloud enhancer to the pseudo-agent `cloud`, with the model id as its
 and Studio sends the request itself (`studio/src/cloud.rs`). Nothing changes for agents,
 workers or the protocol; no card is used.
 
-- **Same request as the built-in enhancer.** The system prompt is the project's
+- **Same request as the local enhancer.** The system prompt is the project's
   rewriting prompt (`backend/aries_worker/stages/system_prompt.txt`, compiled into Studio);
   `ARIES_CLOUD_ENHANCER_PROMPT_FILE` replaces it, e.g. with the copy in the PE-T2I model
   directory. The user message is the prompt plus `Aspect ratio: …`, as the worker gets it.
@@ -57,7 +57,7 @@ workers or the protocol; no card is used.
 - **Same result:** the reply's JSON (`rewritten_prompt`, then `wh_ratio` or
   `ratio_follow`) becomes the job's enhanced prompt, as from `enhanced.json`. The Gemini
   models' reasoning (thought parts, asked for with `includeThoughts`;
-  `ARIES_GEMINI_THINKING=high`) is kept like the built-in enhancer's. Anthropic's system prompt is marked for prompt caching.
+  `ARIES_GEMINI_THINKING=high`) is kept like the local enhancer's. Anthropic's system prompt is marked for prompt caching.
 - **Token limit:** the job's enhancer token limit when set, else 8192.
 - **Provenance:** agent `cloud`, executor the model id, backend kind
   `anthropic` / `gemini`, the model id, and timings (`enhance_s`, prompt and generated
@@ -84,25 +84,25 @@ workers or the protocol; no card is used.
 - **Anything else fails the attempt visibly**: a bad key (`cloud_auth`), a refusal
   (`cloud_refused`), a reply without the JSON (`bad_output`, also when it ran out of
   tokens), other HTTP errors (`cloud_error`). Like any stage it is tried once more, then
-  the job fails with the reason. The failed card offers **Built-in** next to Retry:
+  the job fails with the reason. The failed card offers **Local** next to Retry:
   `POST /api/jobs/{id}/retry` with `{"enhancer": "builtin"}` (or another cloud id) retries
   with that enhancer. Studio never falls back to another enhancer by itself, so the
   enhancer recorded is always the one that wrote the prompt.
 - **Studio restarts** requeue cloud enhances that were in flight (they ran in the old
   process).
 - **An enhancer switched off** after a job was queued fails that job's enhance
-  (`cloud_unavailable`); retry it with Built-in.
+  (`cloud_unavailable`); retry it with Local.
 
 ## 5. Side by side
 
-![The same prompt through Built-in, Claude Sonnet 5.5 and Gemini 3.5 Flash-Lite](screenshots/cloud-enhancers-compare.webp)
+![The same prompt through Local, Claude Sonnet 5.5 and Gemini 3.5 Flash-Lite](screenshots/cloud-enhancers-compare.webp)
 
 "Buff frog", 4 images at ¼ size (448×608), Draft (12 steps), sent once per enhancer,
-newest on top: **Built-in** (Qwen-Image-2.1-PE-T2I int4 on the cards), **Claude Sonnet
+newest on top: **Local** (Qwen-Image-2.1-PE-T2I int4 on the cards), **Claude Sonnet
 5.5**, **Gemini 3.5 Flash-Lite** (`thinkingLevel` high). Each image of a batch gets its
 own rewrite.
 
-| | Built-in | Claude Sonnet 5.5 | Gemini 3.5 Flash-Lite |
+| | Local | Claude Sonnet 5.5 | Gemini 3.5 Flash-Lite |
 |---|---|---|---|
 | Rewrite, each | 31–37 s (+ 9.5 s load), on a card | 12–20 s | 8–10 s |
 | Tokens out, each | ~1,000 (~600 reasoning) at 33 tok/s | 1,300–2,400 at ~120 tok/s | 1,500–1,650 (1,150–1,350 reasoning) at 150–200 tok/s |
@@ -112,9 +112,9 @@ own rewrite.
 | What it made of "buff" | a big, bulky, wild frog: no muscles | a bodybuilder frog in shorts, in a gym, 3D-render look | a muscular bullfrog in a jungle, photographic |
 
 - **The cloud enhancers roughly halve a draft batch** here, and leave both cards to
-  encode and draw. With the built-in enhancer the cards spend most of the batch
+  encode and draw. With the local enhancer the cards spend most of the batch
   rewriting (two at a time, then the second two), even for a two-word prompt.
-- **They read the prompt differently.** The built-in rewriter kept to a wildlife photo
+- **They read the prompt differently.** The local rewriter kept to a wildlife photo
   and lost "buff"; Sonnet took it literally and furthest; Flash-Lite stayed closest to a
   photograph while keeping the muscles. Rewrites vary a lot between enhancers, much
   less within one batch.

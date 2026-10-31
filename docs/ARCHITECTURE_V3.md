@@ -359,6 +359,45 @@ default token: the backend refuses to start and the agent refuses to run without
   failed or cancelled jobs, or at once above the disk watermark. Stored reference latents
   stay with their image; uploaded images no job uses are deleted a day after upload.
 
+### 7.5 Per-step preview
+
+While a job draws, its tile shows the picture forming. The denoise worker renders a small
+preview on the card every few steps and sends it with its progress; Studio keeps only the
+newest one per job, in memory.
+
+- **What is previewed.** The clean-latent estimate, not the noisy latent: for this
+  flow-matching model `x0 = x_t - sigma_t * v`. The reference-image loop has `v` (the
+  model output). The pipeline's step callback sees only latents, so the worker keeps the
+  previous one and uses the Euler step it just took: `v = (x_next - x_t) / (sigma_next -
+  sigma_t)`, so `x0 = x_next - sigma_next * v`, with the sigmas from the scheduler.
+- **Rendering.** The same linear map as Studio's preview after denoise (`studio/src/preview.rs`):
+  each latent pixel and its 3x3 neighbourhood to 4x4 RGB pixels, a quarter of the image's
+  size, as one 3x3 convolution (64 to 48 channels) and a pixel shuffle on the card, then
+  a JPEG (quality 75). Images above `ARIES_PREVIEW_HALVE_ABOVE_PX` (default 2 MP, so the
+  full-size presets) get half the sides, an eighth of the image, averaged 2x2 on the card
+  (`DenoiseParams.preview_downscale` 2): about 20 KB instead of 50 to 70 KB, the same
+  pixels as half-size images. The worker image carries its own copy of
+  `latent_preview.bin`; a contract test checks it matches Studio's byte for byte.
+  The first step has none (the step before it is needed); the last always has one.
+- **How often.** `DenoiseParams.preview_every`: every N steps, 0 for none. Studio sets it
+  from `ARIES_PREVIEW_EVERY_STEPS` (default 1), so it changes with a Studio restart and no
+  agent change. A preview runs between steps and its time counts in the next step's
+  `s_per_step`; a failed one is logged and skipped, never failing the job.
+- **Protocol.** Worker to agent: the progress event gains `preview` (the JPEG, base64)
+  and `preview_ms` (time to render and encode), one JSON line of up to some 100 KB; the
+  agent reads worker lines up to 16 MiB (asyncio's default 64 KiB is too short). If the
+  agent drops the socket, the worker cancels its job at the next step and exits. Agent to Studio: `Progress.preview`
+  (bytes, new field) and `preview_ms` in the existing `stats` map. Older workers send
+  neither, and Studio carries on as now.
+- **Studio.** The newest preview per denoise task, with its step, in memory (the last 64
+  tasks; lost on restart). While the task is active, jobs carry `preview_step` and
+  `GET /api/jobs/{id}/preview` serves that preview (`Cache-Control: private, no-cache`);
+  after denoise it renders the latent, as in §8. The tile asks for `?step=` so each step's
+  preview is one URL.
+- **Metrics.** `aries_step_preview_seconds{size}` (the worker's `preview_ms`, rendering
+  on the card and encoding) and `aries_step_preview_bytes{size}`, both histograms by the
+  image's size, so the cost can be checked per size and set against step time.
+
 ---
 
 ## 8. Public API (browser-facing)
@@ -367,12 +406,13 @@ default token: the backend refuses to start and the agent refuses to run without
 |---|---|
 | `POST /api/jobs` | submit; `{id?, prompt, negative_prompt?, width, height, steps?, seed?, true_cfg_scale?, enhance?, meta?}`. `meta` is the UI's own metadata (a JSON object up to 4 KiB: turn id, aspect label, size and quality preset), stored and returned as is. `steps` is 1–100 (default 20); `tiling` (default false) decodes with VAE tiling and needs an executor that declares the `tiled` decode mode (agents declare both). `enhance_max_tokens` (256–24576, kept only with `enhance`) is the rewriter's token limit; unset, the worker's default: 4096 plus 2048 per reference image. Reasoning that runs out of room continues with the limit doubled, up to 24576, and only there is closed for the reply. `id` is the client's (1–64 chars of `[A-Za-z0-9_-]`); resubmitting it returns the existing job with `200`. `references` lists reference images in prompt order, each `{upload: sha256}` or `{image: job_id}` (an earlier result); not with `true_cfg_scale > 1`, nor with `enhance` unless an executor has an image-aware enhancer for that many (or a cloud enhancer is named), and at most what an executor declares. `enhancer` names a cloud enhancer by its model id (`claude-sonnet-5-5`, `gemini-3.5-flash-lite`; CLOUD_ENHANCERS.md), kept only with `enhance`; unset or `builtin`: the agents' enhancer; one Studio does not offer is refused. Returns `201`, `400` (bad id) or `422 {rejected: reason}` (§6.2) |
 | `POST /api/uploads` · `GET /api/uploads/{sha256}` · `/thumb?size=` | upload a reference image (PNG, JPEG or WebP body, up to 32 MB, 16384 px a side and 64 MP; `422` otherwise) → `{id, sha256, width, height, mime}` (size upright by EXIF; the same image twice is one upload) · the image · a JPEG thumbnail like the job thumbnails (default 512) |
-| `GET /api/jobs?limit=<n>&before=<cursor>` | `{version, jobs, next}`: a page of at most `n` (1–200) jobs, newest first, after the previous page's `next` (null on the last). Filters: `status=done`, `favorite=true`, `q` (substring of the prompt, the enhanced prompt or the seed), `aspect=w:h` (size ratio within 0.01). The browser's lists load this way, a page as they scroll |
+| `GET /api/jobs?limit=<n>&before=<cursor>` | `{version, jobs, next}`: a page of at most `n` (1–200) jobs, newest first, after the previous page's `next` (null on the last). Filters: `status=done`, `favorite=true`, `aspect=w:h` (size ratio within 0.01). The browser's lists load this way, a page as they scroll. With `q` (search) or `like=<job id>` (more like this) the page is ranked instead, best first, each job with `search_match` (`semantic`, `text` or `both`) and, as they apply, `search_strength`, `search_words` and `search_phrase`, and `next` is an offset (`o:<n>`); SEARCH.md |
 | `GET /api/jobs?changed_since=<version>` | `{version, jobs, deleted}`: jobs changed since a version (every job when neither parameter is given), each with tasks (status, step, enhance `sub_stage` and `stats`), per-stage provenance, `meta` and `favorite`; `deleted` lists ids deleted since that version. Poll 1 s while anything is active, 10 s when idle. Lists leave out the enhancer's reasoning (`thinking`, most of a job's size) and say `has_thinking`; `GET /api/jobs/{id}` has it |
 | `GET /api/gallery/facets` | `{total, favorites, sizes: [{width, height, count}]}` over finished images, for the gallery's filter counts |
 | `GET /api/jobs/{id}` · `PATCH /api/jobs/{id}` · `DELETE /api/jobs/{id}` | detail · `{favorite}` · delete (cancels first; history is user-owned) |
 | `GET /api/preferences` · `PUT /api/preferences` | the UI's preferences (composer settings, theme): one JSON object up to 16 KiB, `{}` until saved |
 | `POST /api/jobs/{id}/cancel` · `/retry` | cancel · retry a failed or cancelled job from its last good artifact (`409` for any other state); `/retry` takes an optional `{enhancer}` to retry with another enhancer (`builtin` after a cloud one failed) |
+| `GET /api/jobs/{id}/preview` | Rough JPEG of the image at a quarter size, from the denoised latent, rendered in Studio (`studio/src/preview.rs`: one linear map fitted for the Qwen-Image-2.1 VAE, no model, no GPU; the last 32 kept in memory by latent). Once denoise is done and until its latent is cleaned up; `404` otherwise and for other models. `Cache-Control: private, max-age=300` |
 | `GET /api/images/{id}` · `/thumb?size=512\|768\|1024` | PNG with metadata · JPEG thumbnail (longer side; default 1024, `400` for other sizes). Both are sent with `Cache-Control: public, max-age=31536000, immutable`, since a finished job's image never changes |
 | `GET /api/system` | agents, executors, states, declared capabilities, latest scraped resources, scrape age, queue by stage, blocked reasons |
 | `GET /api/capabilities` | for the composer: max pixels, most reference images (`max_references_now`/`_ever`), most Enhance reads (`enhance_max_references_now`/`_ever`, 0 without PE-I2I), the cloud enhancers offered (`cloud_enhancers`: `id`, `label`, `model`, `max_references`; empty unless switched on) and the full-size presets servable **now** vs **ever** |
@@ -405,7 +445,8 @@ refused. Without it, the API is open: keep the backend on a trusted network.
 - **Backend** (`/metrics`): `aries_jobs_total{state}`, `aries_tasks_queued{stage}`,
   `aries_tasks_blocked{stage,reason}`, `aries_task_wait_seconds`, `aries_job_e2e_seconds`,
   `aries_executor_switch_total`, `aries_agent_connected`, `aries_agent_scrape_age_seconds`,
-  `aries_artifacts_bytes{kind}`.
+  `aries_artifacts_bytes{kind}`, `aries_preview_seconds{size}` (histogram: rendering a
+  preview from a latent, on Studio's CPU).
 - **Agent** (`/metrics`, scraped by the backend every second): host RAM available,
   per-executor memory used/total/overflow and state, worker load and task durations, task
   outcomes and worker exits by class, reconnects. The same listener serves `/healthz`

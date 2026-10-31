@@ -9,6 +9,7 @@ import { ReasoningText } from './ReasoningText';
 import { LoadMore } from './LoadMore';
 import { formatDuration, generationSeconds, queueSeconds } from '../utils/timings';
 import { ReferenceStrip } from './ReferenceStrip';
+import { modelLabel } from '../utils/enhancers';
 import {
   Heart,
   Dices,
@@ -76,7 +77,7 @@ interface TimelineProps {
   /** Fill the composer from an image with a new (random) seed. */
   onVary: (generation: Generation) => void;
   /** Retry a failed or cancelled job in place. */
-  /** `enhancer`: retry with another one (`builtin` after a cloud enhancer failed). */
+  /** `enhancer`: retry with another one (`builtin`, the local one, after a cloud enhancer failed). */
   onRetry: (generation: Generation, enhancer?: string) => void;
   /** Fill the composer from an image with its seed locked. */
   onRerun: (generation: Generation) => void;
@@ -415,7 +416,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                       <Sparkles className="w-3.5 h-3.5" />
                       <span className="font-medium">
                         {selectedGen.phase === 'enhancing'
-                          ? `Enhancing prompt details for Image #${selectedIdx + 1} with Qwen-Image-PE...`
+                          ? `Enhancing prompt details for Image #${selectedIdx + 1} with ${selectedGen.params.enhancer ? modelLabel(selectedGen.params.enhancer) : 'Qwen-Image-PE'}...`
                           : `Enhancement pending for Image #${selectedIdx + 1}...`}
                       </span>
                     </div>
@@ -618,6 +619,8 @@ const TileCard: React.FC<TileCardProps> = ({
   const aspectRatioStyle = `${aspectConfig.ratioWidth} / ${aspectConfig.ratioHeight}`;
   const tileHeight = 'h-[190px] sm:h-[220px] md:h-[240px]';
   const tileStyle: React.CSSProperties = { aspectRatio: aspectRatioStyle };
+  // A preview URL that failed to load (none held, another model): the plain tile instead.
+  const [failedPreview, setFailedPreview] = useState<string>();
 
   // 1. DONE STATE
   if (gen.status === 'done') {
@@ -747,7 +750,63 @@ const TileCard: React.FC<TileCardProps> = ({
     );
   }
 
-  // 2. RUNNING STATE (Generating with live phases)
+  // 2. PREVIEW: the picture forming while it draws, then the drawn latent while decode waits
+  //    or runs.
+  if (gen.previewUrl && gen.previewUrl !== failedPreview) {
+    const drawing = gen.stage === 'denoise';
+    const drawnPct = Math.min(100, Math.round(((gen.step || 0) / (gen.totalSteps || gen.params.steps)) * 100));
+    return (
+      <div
+        onClick={() => {
+          if (onSelect) onSelect();
+        }}
+        className={`${tileHeight} relative max-w-full shrink-0 rounded-xl overflow-hidden bg-[#f6f3ec] dark:bg-[#20201d] shadow-xs cursor-pointer transition-all ${
+          isSelected ? 'ring-2 ring-amber-500 shadow-md' : 'border border-[#e5e2db] dark:border-[#2e2e2a]'
+        }`}
+        style={tileStyle}
+      >
+        <img
+          src={gen.previewUrl}
+          alt=""
+          onError={() => setFailedPreview(gen.previewUrl)}
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+        <div className="absolute inset-x-0 top-0 flex justify-between items-center p-2 sm:p-2.5">
+          <span className="px-1.5 py-0.5 rounded bg-black/45 text-white font-mono text-[10px] font-semibold">
+            {gen.params.aspect}
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel();
+            }}
+            className="p-0.5 rounded-full bg-black/45 text-white hover:bg-rose-600 transition-colors cursor-pointer"
+            title="Cancel generation"
+            aria-label="Cancel generation"
+          >
+            <XCircle className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="absolute inset-x-0 bottom-0 px-2 pb-1.5 pt-4 bg-gradient-to-t from-black/70 to-transparent text-white text-[11px] font-medium">
+          <div className="flex items-center justify-center gap-1.5">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            {drawing
+              ? `Drawing · ${drawnPct}%${gen.etaSeconds ? ` · ~${Math.round(gen.etaSeconds)}s left` : ''}`
+              : gen.status === 'running'
+                ? 'Finishing'
+                : 'Preview · waiting to finish'}
+          </div>
+          {drawing && (
+            <div className="mt-1 h-1 rounded-full bg-white/25 overflow-hidden" role="progressbar" aria-valuenow={drawnPct} aria-valuemin={0} aria-valuemax={100}>
+              <div className="h-full rounded-full bg-white transition-all duration-300" style={{ width: `${Math.max(3, drawnPct)}%` }} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 3. RUNNING STATE (Generating with live phases)
   if (gen.status === 'running') {
     const isEnhance = gen.phase === 'enhancing' || gen.stage === 'enhance';
     // Progress is tokens against the expected finish line (85 % of the token limit). Past
@@ -909,7 +968,7 @@ const TileCard: React.FC<TileCardProps> = ({
     );
   }
 
-  // 3. QUEUED STATE
+  // 4. QUEUED STATE
   if (gen.status === 'queued') {
     return (
       <div
@@ -985,7 +1044,7 @@ const TileCard: React.FC<TileCardProps> = ({
     );
   }
 
-  // 4. FAILED STATE
+  // 5. FAILED STATE
   if (gen.status === 'failed') {
     return (
       <div
@@ -1025,7 +1084,7 @@ const TileCard: React.FC<TileCardProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Retry</span>
             </button>
-            {/* A cloud enhancer failed (or is gone): the built-in one may do. */}
+            {/* A cloud enhancer failed (or is gone): the local one may do. */}
             {gen.params.enhancer && (
               <button
                 onClick={(e) => {
@@ -1033,9 +1092,9 @@ const TileCard: React.FC<TileCardProps> = ({
                   onRetry('builtin');
                 }}
                 className="inline-flex items-center whitespace-nowrap gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#f1eee7] dark:bg-[#2c2c28] hover:bg-[#e5e2db] dark:hover:bg-[#363632] text-[#1c1c18] dark:text-[#f3f0e9] transition-colors"
-                title="Retry with the built-in enhancer instead of the cloud one"
+                title="Retry with the local enhancer instead of the cloud one"
               >
-                <span>Built-in</span>
+                <span>Local</span>
               </button>
             )}
             {onDelete && (
@@ -1062,7 +1121,7 @@ const TileCard: React.FC<TileCardProps> = ({
     );
   }
 
-  // 5. CANCELLED STATE
+  // 6. CANCELLED STATE
   return (
     <div
       onClick={() => {

@@ -70,7 +70,7 @@ Each **turn** = one submission:
     With reference images attached it uses the image-aware enhancer (Qwen-Image-2.1-PE-I2I),
     which reads them; without one installed, Enhance is off while references are attached
     (ENHANCER_I2I.md). When Studio offers cloud enhancers (off by default), a picker next
-    to it chooses Built-in (the default, the only one that works offline), Claude Sonnet
+    to it chooses Local (the default, the only one that works offline), Claude Sonnet
     5.5 or Gemini 3.5 Flash-Lite: seconds instead of minutes, no card used, and the prompt and
     references go to the provider (CLOUD_ENHANCERS.md)
 - **Reference images**: up to 4 (the agent's limit) attached from files (picker, drop
@@ -81,7 +81,8 @@ Each **turn** = one submission:
 
 ### 2.3 Gallery
 - Masonry grid of all finished images, newest first, infinite scroll (thumbnails)
-- Filters: Favorites, aspect, text search over prompts
+- Filters: Favorites, aspect, search by what the images show and their prompts' words
+  (SEARCH.md), and "more like this" from any image
 - Click → image viewer
 
 ### 2.4 Image viewer (shared by timeline and gallery; a page at `/images/{id}`)
@@ -232,9 +233,8 @@ harness needed.
   is available.
 - **Wake on submit.** If the GPU box is asleep, Studio wakes it (Wake-on-LAN or a small
   helper on the box).
-- **Live preview.** Cheap latent→RGB approximation per step instead of a progress
-  ring (full VAE decode per step is far too expensive at 2048²). It need not slow
-  generation: the denoised estimate and a fixed 64→3 colour projection on the 1/16-size
-  latent take milliseconds against seconds per step. It needs that projection fitted
-  for this VAE and a way to send a small frame every few steps through the agent to the
-  browser.
+- **Live preview** *(built)*. The tile shows the picture forming: every N steps the
+  denoise worker renders the model's clean-image estimate with a linear map fitted for
+  this VAE (a quarter of the image's size) and sends it with its progress; once denoise is
+  done, Studio renders the latent the same way while decode waits (ARCHITECTURE_V3.md
+  §7.5, `GET /api/jobs/{id}/preview`).

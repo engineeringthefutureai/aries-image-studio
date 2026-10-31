@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
     }
 
     spawn_scraper_and_gc_loop(state.clone());
+    aries_image_studio::search::spawn_indexer(state.clone());
 
     let http_addr: SocketAddr = config.http_addr.parse()?;
     let grpc_addr: SocketAddr = config.grpc_addr.parse()?;

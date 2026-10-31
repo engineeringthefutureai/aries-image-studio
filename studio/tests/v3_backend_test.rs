@@ -76,12 +76,16 @@ async fn start_test_harness_full(cloud: CloudConfig, issuer: Option<String>) -> 
         agent_token: token.clone(),
         artifact_base_url: format!("http://{http_addr}"),
         max_wait_s: 600.0,
+        preview_every_steps: 1,
+        preview_halve_above_px: 2_000_000,
         idle_grace_s: 0.05,
         scrape_interval_ms: 1000,
         scrape_stale_s: 5.0,
         reconnect_grace_s: 0.2,
         disk_watermark_pct: 80.0,
         reference_res: 1024,
+        search_model_dir: None,
+        search_threads: 1,
         cloud,
         auth: issuer.map(|issuer| AuthConfig {
             issuer,
@@ -1657,6 +1661,7 @@ async fn test_enhance_progress_keeps_sub_stage_and_stats() {
             s_per_step: 0.05,
             sub_stage: "thinking".into(),
             stats: stats.clone(),
+            preview: Vec::new(),
         })),
     })
     .unwrap();
@@ -3359,14 +3364,14 @@ async fn test_jobs_pages_filters_and_facets() {
         names(&get("limit=10&q=4201".into()).await),
         [ids[1].clone()]
     );
-    // LIKE wildcards in the search are literal.
+    // Punctuation in a search separates words; it is never syntax.
     assert_eq!(
         names(&get("limit=10&q=50%25_o".into()).await),
         [ids[0].clone()]
     );
     assert!(
         names(&get("limit=10&q=pr%253".into()).await).is_empty(),
-        "as a wildcard it would match prompt 3"
+        "only the last word is a prefix: `pr` is not `prompt`"
     );
 
     // Lists say there is reasoning; the job itself has it.
@@ -3411,6 +3416,131 @@ async fn test_jobs_pages_filters_and_facets() {
         .collect();
     sizes.sort();
     assert_eq!(sizes, [(768, 1376, 1), (1024, 1024, 2), (1376, 768, 1)]);
+}
+
+/// Search without a model (docs/SEARCH.md): words of the prompt and the enhanced prompt,
+/// kept in step with edits and deletes, labelled `text`, paged by offset; "more like this"
+/// finds nothing without image vectors.
+#[tokio::test]
+async fn test_search_words_without_a_model() {
+    let harness = start_test_harness().await;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let mut ids = Vec::new();
+    for prompt in [
+        "a red fox in the snow",
+        "a lighthouse at dusk",
+        "foxglove flowers in a garden",
+        "a quiet harbour",
+    ] {
+        let resp = submit(
+            &harness,
+            json!({ "prompt": prompt, "width": 1024, "height": 1024 }),
+        )
+        .await;
+        assert_eq!(resp.status(), 201);
+        ids.push(
+            resp.json::<Value>().await.unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    let pool = harness.state.db.pool();
+    sqlx::query("UPDATE jobs SET status = 'done'")
+        .execute(pool)
+        .await
+        .unwrap();
+    // The enhancer's rewrite is searched too.
+    sqlx::query("UPDATE jobs SET enhanced_prompt = 'A storm over a stone lighthouse' WHERE id = ?")
+        .bind(&ids[3])
+        .execute(pool)
+        .await
+        .unwrap();
+    let get = |query: &str| {
+        let url = format!("{}/api/jobs?status=done&{query}", harness.http_url);
+        async move {
+            reqwest::get(url)
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let found = |page: &Value| -> Vec<(String, String)> {
+        page["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| {
+                (
+                    j["id"].as_str().unwrap().to_string(),
+                    j["search_match"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect()
+    };
+
+    // The last word is a prefix (results follow the typing): "fox" finds foxglove too.
+    let fox = found(&get("limit=10&q=fox").await);
+    assert_eq!(fox.len(), 2);
+    assert!(fox.iter().all(|(_, m)| m == "text"));
+    assert_eq!(
+        found(&get("limit=10&q=red%20fox").await),
+        [(ids[0].clone(), "text".to_string())]
+    );
+    // Where the words were found, and whether as typed; no look, so no strength.
+    let red_fox = get("limit=10&q=red%20fox").await;
+    assert_eq!(red_fox["jobs"][0]["search_words"], "prompt");
+    assert_eq!(red_fox["jobs"][0]["search_phrase"], true);
+    assert!(red_fox["jobs"][0].get("search_strength").is_none());
+    let fox_snow = get("limit=10&q=fox%20snow").await;
+    assert!(fox_snow["jobs"][0].get("search_phrase").is_none());
+    let storm = get("limit=10&q=storm").await;
+    assert_eq!(found(&storm), [(ids[3].clone(), "text".to_string())]);
+    assert_eq!(storm["jobs"][0]["search_words"], "enhanced");
+
+    // Prompt and enhanced prompt, by relevance; offset cursors page through them.
+    let first = get("limit=1&q=lighthouse").await;
+    assert_eq!(found(&first).len(), 1);
+    assert_eq!(first["next"], "o:1");
+    let second = get("limit=1&q=lighthouse&before=o%3A1").await;
+    assert_eq!(second["next"], Value::Null);
+    let mut both: Vec<String> = found(&first)
+        .into_iter()
+        .chain(found(&second))
+        .map(|(id, _)| id)
+        .collect();
+    both.sort();
+    let mut want = vec![ids[1].clone(), ids[3].clone()];
+    want.sort();
+    assert_eq!(both, want);
+
+    // A deleted job leaves the index with it.
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/api/jobs/{}", harness.http_url, ids[1]))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    assert_eq!(
+        found(&get("limit=10&q=lighthouse").await),
+        [(ids[3].clone(), "text".to_string())]
+    );
+
+    // No model, no image vectors: nothing looks alike; an unknown job is not found.
+    let like = get(&format!("limit=10&like={}", ids[0])).await;
+    assert!(found(&like).is_empty());
+    let resp = reqwest::get(format!(
+        "{}/api/jobs?limit=10&like=job_nope",
+        harness.http_url
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 404);
+    // A plain list carries no match labels.
+    let plain = get("limit=10").await;
+    assert!(plain["jobs"][0].get("search_match").is_none());
 }
 
 fn urlencode(s: &str) -> String {
@@ -4492,4 +4622,195 @@ async fn test_owner_gets_what_was_made_before_sign_in() {
         .await
         .unwrap();
     assert_eq!(prefs["theme"], "dark");
+}
+
+/// Once denoise has left a latent, the job has a rough JPEG preview at a quarter size; before
+/// that, or for a model the preview was not fitted for, there is none.
+#[tokio::test]
+async fn test_job_preview_from_latent() {
+    let harness = start_test_harness().await;
+    let db = &harness.state.db;
+    let http = reqwest::Client::new();
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let res = submit(
+        &harness,
+        json!({ "id": "prev", "prompt": "p", "width": 1024, "height": 512 }),
+    )
+    .await;
+    assert!(res.status().is_success(), "{:?}", res.text().await);
+    let url = format!("{}/api/jobs/prev/preview", harness.http_url);
+    assert_eq!(http.get(&url).send().await.unwrap().status(), 404);
+
+    let denoise: String =
+        sqlx::query_scalar("SELECT id FROM tasks WHERE job_id = 'prev' AND stage = 'denoise'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    sqlx::query("UPDATE tasks SET status = 'done', current_attempt = 1 WHERE id = ?")
+        .bind(&denoise)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    // 1024x512 px is a 64x32 latent of 64 channels.
+    let blobs = harness.state.blobs.clone();
+    for (model, expect) in [("Other/model", 404), ("Qwen/Qwen-Image-2.1", 200)] {
+        let data = vec![0u8; 64 * 32 * 64 * 2];
+        let bytes = build_safetensors_bytes(
+            &[("latent", "BF16", vec![1, 64 * 32, 64], &data)],
+            &[("model", model)],
+        );
+        let (sha, len) = blobs.store_blob(bytes.into()).await.unwrap();
+        sqlx::query("DELETE FROM artifacts WHERE job_id = 'prev'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO artifacts (id, job_id, task_id, attempt, name, sha256, bytes, kind, metadata_json, created_at)
+             VALUES ('art-prev', 'prev', ?, 1, 'latent.safetensors', ?, ?, 'intermediate', ?, 1)",
+        )
+        .bind(&denoise)
+        .bind(sha)
+        .bind(len as i64)
+        .bind(json!({ "model": model }).to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let res = http.get(&url).send().await.unwrap();
+        assert_eq!(res.status(), expect, "{model}");
+        if expect == 200 {
+            assert_eq!(res.headers()["content-type"], "image/jpeg");
+            let img = image::load_from_memory(&res.bytes().await.unwrap()).unwrap();
+            assert_eq!((img.width(), img.height()), (256, 128));
+        }
+    }
+    // A second fetch comes from the cache: still one render timed.
+    assert_eq!(http.get(&url).send().await.unwrap().status(), 200);
+    // Timed for /metrics, by size.
+    let metrics = http
+        .get(format!("{}/metrics", harness.http_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("aries_preview_seconds_count{size=\"1024x512\"} 1"),
+        "{metrics}"
+    );
+    assert!(metrics.contains("aries_preview_seconds_bucket{size=\"1024x512\",le=\"+Inf\"} 1"));
+}
+
+/// A denoise worker's per-step preview: held for the job while it draws, named by
+/// `preview_step` on the job, served by the preview endpoint and timed in /metrics.
+#[tokio::test]
+async fn test_per_step_preview_from_worker() {
+    let harness = start_test_harness().await;
+    let db = &harness.state.db;
+    let http = reqwest::Client::new();
+    let (tx, _inbound) = connect_agent(&harness, sample_register_msg("aries")).await;
+    let res = submit(
+        &harness,
+        json!({ "id": "live", "prompt": "p", "width": 1024, "height": 512 }),
+    )
+    .await;
+    assert!(res.status().is_success());
+    for q in [
+        "UPDATE tasks SET status = 'done' WHERE job_id = 'live' AND stage = 'encode'",
+        "UPDATE tasks SET status = 'queued' WHERE job_id = 'live' AND stage = 'denoise'",
+    ] {
+        sqlx::query(q).execute(db.pool()).await.unwrap();
+    }
+    let denoise: String =
+        sqlx::query_scalar("SELECT id FROM tasks WHERE job_id = 'live' AND stage = 'denoise'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    db.assign_task(&denoise, "aries", "xpu0")
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A quarter-size JPEG, as the worker sends it.
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode(
+            &vec![128u8; 256 * 128 * 3],
+            256,
+            128,
+            image::ExtendedColorType::Rgb8,
+        )
+        .unwrap();
+    tx.send(proto::AgentMessage {
+        msg: Some(proto::agent_message::Msg::Progress(proto::Progress {
+            task: denoise.clone(),
+            attempt: 1,
+            step: 3,
+            steps: 20,
+            s_per_step: 2.5,
+            sub_stage: String::new(),
+            stats: [("preview_ms".to_string(), 12.0)].into(),
+            preview: jpeg.clone(),
+        })),
+    })
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let job: Value = http
+        .get(format!("{}/api/jobs/live", harness.http_url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(job["preview_step"], 3, "{job}");
+    let res = http
+        .get(format!("{}/api/jobs/live/preview?step=3", harness.http_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["cache-control"], "private, no-cache");
+    assert_eq!(res.bytes().await.unwrap().as_ref(), jpeg.as_slice());
+    let metrics = http
+        .get(format!("{}/metrics", harness.http_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("aries_step_preview_seconds_count{size=\"1024x512\"} 1"),
+        "{metrics}"
+    );
+    assert!(metrics.contains("aries_step_preview_seconds_sum{size=\"1024x512\"} 0.0120"));
+    assert!(metrics.contains("aries_step_preview_bytes_count{size=\"1024x512\"} 1"));
+
+    // Done drawing: no live preview any more.
+    sqlx::query("UPDATE tasks SET status = 'done' WHERE id = ?")
+        .bind(&denoise)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let job: Value = http
+        .get(format!("{}/api/jobs/live", harness.http_url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(job.get("preview_step").is_none(), "{job}");
+}
+
+#[test]
+fn full_size_images_get_previews_at_half_the_sides() {
+    use aries_image_studio::scheduler::preview_downscale;
+    let config = BackendConfig::default();
+    assert_eq!(preview_downscale(&config, 2400, 1792), 2);
+    assert_eq!(preview_downscale(&config, 2048, 2048), 2);
+    assert_eq!(preview_downscale(&config, 1216, 896), 1);
+    assert_eq!(preview_downscale(&config, 1696, 1152), 1);
 }

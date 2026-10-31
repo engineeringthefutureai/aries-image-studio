@@ -1,3 +1,4 @@
+import base64
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -458,6 +459,56 @@ def test_denoise_runner_execution(test_job_dir):
     assert save.call_args[1]["metadata"]["seed"] == "42"
 
 
+def test_denoise_sends_previews_when_asked(test_job_dir):
+    """With preview_every, every Nth step's progress carries a preview (none on the first
+    step, which has no step before it, and always on the last); a failing one is skipped."""
+    runner = DenoiseStageRunner()
+    embeds_path = test_job_dir / "embeds.safetensors"
+    embeds_path.write_bytes(b"x")
+    mock_pipe = MagicMock()
+    mock_pipe.scheduler.sigmas = [1.0 - i / 5 for i in range(6)]
+
+    def fake_pipe(**kwargs):
+        for step in range(kwargs["num_inference_steps"]):
+            kwargs["callback_on_step_end"](mock_pipe, step, None, {"latents": MagicMock()})
+        out = MagicMock()
+        out.images.detach.return_value.cpu.return_value = MagicMock()
+        return out
+
+    mock_pipe.side_effect = fake_pipe
+    runner.pipe = mock_pipe
+    paths = {"embeds_safetensors": str(embeds_path), "latent_safetensors": str(test_job_dir / "latent.safetensors")}
+    reports = []
+    renders = iter([(b"jpeg2", 3.0), RuntimeError("boom"), (b"jpeg5", 4.0)])
+
+    def render(_x0, _w, _h, downscale):
+        assert downscale == 2
+        r = next(renders)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    with (
+        patch("aries_worker.stages.denoise.load_safetensors_with_metadata") as load,
+        patch("aries_worker.stages.denoise.atomic_safetensors_save", return_value=64),
+        patch("aries_worker.stages.denoise.StepPreview") as preview_cls,
+        patch("torch.Generator"),
+    ):
+        preview_cls.return_value.render.side_effect = render
+        load.return_value = ({"prompt_embeds": MagicMock()}, {"prompt_source": "original"})
+        runner.run_job(
+            "job-prev",
+            paths,
+            {"steps": 5, "seed": 1, "width": 1024, "height": 512, "preview_every": 2, "preview_downscale": 2},
+            progress_cb=lambda step, steps, sps, **extra: reports.append((step, extra)),
+        )
+
+    previews = {step: extra.get("preview") for step, extra in reports if extra}
+    # Steps 2 and 4 by the interval (4's render fails), and 5, the last.
+    assert previews == {2: base64.b64encode(b"jpeg2").decode(), 5: base64.b64encode(b"jpeg5").decode()}
+    assert [step for step, _ in reports] == [1, 2, 3, 4, 5]
+
+
 def test_denoise_with_references_runs_its_own_loop(test_job_dir):
     """References: stored latents and the mask go through our loop, never the pipeline call."""
     runner = DenoiseStageRunner()
@@ -698,6 +749,43 @@ async def test_worker_socket_client_full_cycle(test_job_dir):
     await client.run()
     server.close()
     await server.wait_closed()
+
+
+
+@pytest.mark.asyncio
+async def test_worker_stops_its_job_when_the_agent_hangs_up(test_job_dir):
+    """The agent dropping the socket mid-denoise cancels the job at its next step and the
+    worker exits; progress sent after that is dropped quietly."""
+    sock_path = test_job_dir / "h.sock"
+    steps_run = []
+
+    async def handle_worker(reader, writer):
+        await reader.readline()  # hello
+        await reader.readline()  # claim
+        writer.write(json.dumps({"action": "job", "id": "j1", "paths": {}, "params": {}}).encode() + b"\n")
+        await writer.drain()
+        while json.loads(await reader.readline()).get("event") != "progress":
+            pass
+        writer.close()
+
+    def run_job(job_id, paths, params, progress_cb, cancel_check):
+        for step in range(1, 200):
+            if cancel_check():
+                raise RuntimeError("cancelled")
+            steps_run.append(step)
+            progress_cb(step=step, steps=200, preview="x" * 100_000)
+            time.sleep(0.02)
+        return {}, 0
+
+    server = await asyncio.start_unix_server(handle_worker, path=str(sock_path))
+    runner = MagicMock(load_s=0.0)
+    runner.run_job.side_effect = run_job
+    client = WorkerSocketClient(stage="denoise", socket_path=str(sock_path), runner=runner, idle_grace=1.0)
+    await asyncio.wait_for(client.run(), timeout=5.0)
+    server.close()
+    await server.wait_closed()
+    assert client.connection_lost
+    assert len(steps_run) < 50
 
 
 def test_v3_safetensors_encode_and_denoise(test_job_dir):

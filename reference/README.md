@@ -11,3 +11,8 @@ that run directly on the hardware.
 - `run-split.sh` — one pipeline across both cards, auto-restart.
 - `prompts.jsonl` — the fixed test prompt set (text rendering, counting, hands,
   portrait, RGBA, wide, tall). Reusable as a smoke/regression set.
+- `latent_preview/` — how the matrix behind Studio's preview before decode
+  (`studio/assets/latent_preview.bin`) was made: `encode.py` encodes sample images with the
+  VAE on the CPU, `fit.py` fits the linear map and scores it on held-out images. The
+  current one came from 18 Qwen-Image-2.1 images at 768 px (held-out PSNR about 23 dB
+  against the half-size image).

@@ -204,3 +204,11 @@ def test_agent_exports_the_metric_names_the_backend_scrapes():
     assert any(line.startswith(names["host_ram_available_bytes"] + " ") for line in text.splitlines())
     for key in ("executor_mem_used_bytes", "executor_mem_total_bytes", "executor_mem_overflow_bytes"):
         assert f'{names[key]}{{' in text and f'{label}="xpu0"' in text, key
+
+
+def test_worker_preview_matrix_matches_studio():
+    """The denoise worker's per-step preview and Studio's preview after denoise use one map."""
+    root = Path(__file__).resolve().parents[2]
+    worker = (root / "backend/aries_worker/stages/latent_preview.bin").read_bytes()
+    studio = (root / "studio/assets/latent_preview.bin").read_bytes()
+    assert worker == studio

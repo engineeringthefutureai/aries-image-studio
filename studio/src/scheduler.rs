@@ -61,6 +61,8 @@ pub struct AppState {
     pub db: Database,
     pub blobs: BlobStore,
     pub cloud: CloudEnhancers,
+    /// Search (docs/SEARCH.md): the model and the image vectors.
+    pub search: crate::search::Search,
     /// Sign-in (docs/AUTH.md); `None`: off, one user sees everything.
     pub auth: Option<crate::auth::Auth>,
     pub metrics: BackendMetricsRegistry,
@@ -73,7 +75,10 @@ impl AppState {
     pub fn new(config: BackendConfig, db: Database, blobs: BlobStore) -> Arc<Self> {
         let cloud = CloudEnhancers::new(&config.cloud);
         let auth = config.auth.clone().map(crate::auth::Auth::new);
+        let search =
+            crate::search::Search::new(config.search_model_dir.as_deref(), config.search_threads);
         Arc::new(Self {
+            search,
             cloud,
             auth,
             config,
@@ -284,7 +289,11 @@ pub async fn check_submit_feasibility(db: &Database, input: &JobSubmitInput) -> 
         return Err("prompt cannot be empty".to_string());
     }
     // Qwen-Image-2.1: VAE downsamples 16×, the DiT packs 2×2 patches; other sizes get floored.
-    if input.width == 0 || input.height == 0 || input.width % 32 != 0 || input.height % 32 != 0 {
+    if input.width == 0
+        || input.height == 0
+        || !input.width.is_multiple_of(32)
+        || !input.height.is_multiple_of(32)
+    {
         return Err(format!(
             "invalid dimensions {}×{} (must be positive multiples of 32)",
             input.width, input.height
@@ -1591,6 +1600,8 @@ async fn dispatch_task_to_executor(
                 seed: job.seed,
                 true_cfg_scale: job.true_cfg_scale,
                 references: job.references.len() as u32,
+                preview_every: state.config.preview_every_steps,
+                preview_downscale: preview_downscale(&state.config, job.width, job.height),
             }))
         }
         "decode" => {
@@ -1662,5 +1673,15 @@ pub fn proto_to_stage(stage: i32) -> Option<&'static str> {
         proto::Stage::Denoise => Some("denoise"),
         proto::Stage::Decode => Some("decode"),
         proto::Stage::Unspecified => None,
+    }
+}
+
+/// Per-step preview sides divided by this (ARCHITECTURE_V3.md §7.5): full-size images get
+/// half the sides, which keeps their previews about as small as those of half-size images.
+pub fn preview_downscale(config: &crate::config::BackendConfig, width: u32, height: u32) -> u32 {
+    if (width as u64) * (height as u64) > config.preview_halve_above_px {
+        2
+    } else {
+        1
     }
 }

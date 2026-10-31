@@ -43,8 +43,10 @@ IP addresses, never `localhost`.
 
 - Docker Engine with the Compose plugin. Disk for the images you keep (a 2048² PNG is
   around 5–8 MB, plus about 300 KB of JPEG thumbnails).
+- About 1.2 GB of RAM for Studio: most of it is the search model (SEARCH.md), loaded at
+  startup.
 
-**Building from source** (optional, section 9): Rust 1.85+ (`rustup`), Node.js 22+,
+**Building from source** (optional, section 9): Rust 1.92+ (`rustup`), Node.js 22+,
 Python 3.12 with [`uv`](https://docs.astral.sh/uv/) or `venv`. `protoc` is not needed:
 the Rust build uses a vendored copy.
 
@@ -424,6 +426,10 @@ validation and the contract tests on both sides.
 | `ARIES_OIDC_ISSUER` · `ARIES_SESSION_DAYS` | `https://accounts.google.com` · `30` | Another OpenID Connect provider; how long an unused session lasts (renewed while used) |
 | `ARIES_LEGAL_OPERATOR` · `ARIES_LEGAL_CONTACT` | unset | Who runs Studio and how to reach them (an email or a URL), named on the public `/privacy` and `/terms` pages |
 | `ARIES_ARTIFACT_BASE_URL` | `http://127.0.0.1:8080` | Base of the artifact URLs sent to agents |
+| `ARIES_PREVIEW_EVERY_STEPS` | `1` | Denoise workers send a preview of the picture forming with every Nth step; `0` for none (ARCHITECTURE_V3.md §7.5) |
+| `ARIES_SEARCH_MODEL_DIR` | `/app/search-model` in the image; unset otherwise | The search model (SEARCH.md §4); unset or unreadable: search matches prompts' words only |
+| `ARIES_SEARCH_THREADS` | `2` | CPU threads Studio gives each search embedding (an image as it finishes, or a query) |
+| `ARIES_PREVIEW_HALVE_ABOVE_PX` | `2000000` | Images above this many pixels (the full-size presets) get those previews at half the sides: an eighth of the image instead of a quarter |
 | `ARIES_DATA_DIR` | `./data` (`/app/data` in the image) | SQLite database, blobs, thumbnails |
 | `ARIES_HTTP_ADDR` | `0.0.0.0:8080` | Web app, `/api`, artifacts, `/metrics` |
 | `ARIES_GRPC_ADDR` | `0.0.0.0:50051` | AgentGateway |

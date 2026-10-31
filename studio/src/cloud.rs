@@ -1,7 +1,7 @@
 //! Cloud prompt enhancers (docs/CLOUD_ENHANCERS.md): Studio rewrites a job's prompt with a
 //! provider's API (Anthropic, or Google's Gemini API) instead of an agent's enhance
 //! worker. Off unless `ARIES_CLOUD_ENHANCERS` is on and the provider's key is set; the
-//! built-in enhancer stays the default and the only one that works offline.
+//! local enhancer stays the default and the only one that works offline.
 //!
 //! A cloud enhance is an ordinary enhance task: assigned to the pseudo-agent `cloud` with
 //! the provider as its executor, finished with the same `enhanced.json` fields and a

@@ -8,7 +8,8 @@ design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HA
 (memory and performance work so far summarized in **docs/OPTIMIZATIONS.md**); reference
 images in **docs/REFERENCE_IMAGES.md**, the image-aware enhancer in **docs/ENHANCER_I2I.md**,
 cloud prompt enhancers (Studio calls Anthropic / Gemini itself) in **docs/CLOUD_ENHANCERS.md**,
-sign-in with Google and per-account ownership in **docs/AUTH.md**;
+sign-in with Google and per-account ownership in **docs/AUTH.md**, search (by what images
+show and their prompts' words, in Studio) in **docs/SEARCH.md**;
 changes by release in **CHANGELOG.md**.
 Treat them as the source of truth and flag disagreements instead of silently
 diverging. When behavior changes, update the doc in the same change.
@@ -21,7 +22,8 @@ proto/aries/agent/v1/    Single source of truth for the AgentGateway gRPC protoc
 studio/                  Rust backend (axum, tonic, tokio, sqlx/SQLite WAL): SPA + public
                          /api/* + artifact HTTP + AgentGateway gRPC server + capability
                          matcher + scheduler + live /metrics scraper + blob store + JPEG
-                         thumbnailer + PNG tEXt provenance chunk writer.
+                         thumbnailer + PNG tEXt provenance chunk writer + search (SigLIP 2
+                         via ONNX Runtime, FTS5).
 backend/aries_agent/     Thin GPU agent (Python 3.12, asyncio, grpcio, httpx, prometheus_client,
                          NO torch): sysfs GPU probe, gRPC stream client, worker subprocess
                          lifecycle, PCI verification, HTTP artifact transfer, crash classifier.
@@ -36,7 +38,7 @@ deploy/grafana/          Grafana dashboard (import the JSON; picks a Prometheus 
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.5.0 — Architecture V3)
+## Current state (v0.7.0 — Architecture V3)
 
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
   `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/gallery/facets`, `/api/uploads` (reference images),
@@ -53,8 +55,8 @@ docs/  mockups/  reference/
 
 ## Stack
 
-- **studio (backend):** Rust (axum 0.7, tonic 0.12, prost 0.13, sqlx 0.8 SQLite WAL,
-  image 0.25).
+- **studio (backend):** Rust 1.92 (axum 0.7, tonic 0.12, prost 0.13, sqlx 0.8 SQLite WAL,
+  image 0.25, ort 2.0 rc with ONNX Runtime 1.31 loaded at startup, tokenizers 0.22).
 - **agent & workers:** Python 3.12, `diffusers` from git pinned to `b800f828` (needs
   `QwenImage21Pipeline`; the reference-image denoise loop uses its helpers),
   `transformers==5.20.1`, `torchao==0.18.0` (int4 enhancer), `safetensors`, `torch==2.14.1+xpu`/torchvision from the **XPU index** (workers

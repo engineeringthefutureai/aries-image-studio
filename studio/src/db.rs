@@ -86,8 +86,6 @@ pub struct JobPageQuery {
     /// Finished images only (the gallery).
     pub done_only: bool,
     pub favorites_only: bool,
-    /// Substring of the prompt, the enhanced prompt or the seed.
-    pub search: Option<String>,
     /// Width / height, within 0.01.
     pub ratio: Option<f64>,
     /// One account's jobs (sign-in on); `None`: everyone's.
@@ -412,7 +410,7 @@ pub struct JobRecord {
     /// The prompt rewriter's token limit; unset: the worker's default.
     pub enhance_max_tokens: Option<u32>,
     /// The cloud enhancer that rewrites the prompt (docs/CLOUD_ENHANCERS.md); unset: the
-    /// agents' built-in enhancer.
+    /// agents' local enhancer.
     #[serde(default)]
     pub enhancer: Option<String>,
     /// Decode with VAE tiling (off by default).
@@ -443,6 +441,22 @@ pub struct JobRecord {
     /// clients: each sees only its own.
     #[serde(skip)]
     pub owner: Option<String>,
+    /// The step of the newest per-step preview Studio holds for the job, while it draws
+    /// (preview.rs); the tile fetches `/api/jobs/{id}/preview?step=` with it. Not stored.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub preview_step: Option<u32>,
+    /// In search results (search.rs): which ranking found it, `semantic`, `text` or `both`.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub search_match: Option<&'static str>,
+    /// When its look matched a search: how closely, `strong`, `possible` or `weak`.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub search_strength: Option<&'static str>,
+    /// When its words matched a search: where, `prompt`, `enhanced` or `seed`.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub search_words: Option<&'static str>,
+    /// When its words matched: as the exact phrase typed.
+    #[serde(skip_serializing_if = "std::ops::Not::not", skip_deserializing)]
+    pub search_phrase: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -788,7 +802,146 @@ impl Database {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_artifacts_cache_key ON artifacts(cache_key)")
             .execute(&self.pool)
             .await?;
+        self.init_search_schema().await
+    }
+
+    /// Search (docs/SEARCH.md): each image's embedding, by model, and a full-text index of
+    /// prompts. Triggers keep both in step with `jobs`, whoever writes it.
+    async fn init_search_schema(&self) -> Result<()> {
+        let fts_existed: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'jobs_fts'")
+                .fetch_optional(&self.pool)
+                .await?;
+        for q in [
+            "CREATE TABLE IF NOT EXISTS job_embeddings (
+                job_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                vector BLOB NOT NULL
+            )",
+            "CREATE TRIGGER IF NOT EXISTS job_embeddings_delete AFTER DELETE ON jobs BEGIN
+                DELETE FROM job_embeddings WHERE job_id = old.id;
+            END",
+            // Its own copy of the text, keyed by job id: an external-content index keys rows
+            // by rowid, which VACUUM may renumber in a table without an INTEGER PRIMARY KEY.
+            "CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
+                job_id UNINDEXED, prompt, enhanced_prompt,
+                tokenize = 'unicode61 remove_diacritics 2'
+            )",
+            "CREATE TRIGGER IF NOT EXISTS jobs_fts_insert AFTER INSERT ON jobs BEGIN
+                INSERT INTO jobs_fts (job_id, prompt, enhanced_prompt)
+                VALUES (new.id, new.prompt, new.enhanced_prompt);
+            END",
+            "CREATE TRIGGER IF NOT EXISTS jobs_fts_update AFTER UPDATE OF prompt, enhanced_prompt ON jobs BEGIN
+                DELETE FROM jobs_fts WHERE job_id = old.id;
+                INSERT INTO jobs_fts (job_id, prompt, enhanced_prompt)
+                VALUES (new.id, new.prompt, new.enhanced_prompt);
+            END",
+            "CREATE TRIGGER IF NOT EXISTS jobs_fts_delete AFTER DELETE ON jobs BEGIN
+                DELETE FROM jobs_fts WHERE job_id = old.id;
+            END",
+        ] {
+            sqlx::query(q).execute(&self.pool).await?;
+        }
+        if fts_existed.is_none() {
+            sqlx::query(
+                "INSERT INTO jobs_fts (job_id, prompt, enhanced_prompt)
+                 SELECT id, prompt, enhanced_prompt FROM jobs",
+            )
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
+    }
+
+    /// Jobs a search ranks: [`JobPageQuery`]'s filters without its text and cursor, newest
+    /// first.
+    pub async fn search_candidates(&self, q: &JobPageQuery) -> Result<Vec<String>> {
+        let mut sql = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM jobs WHERE 1 = 1");
+        if let Some(owner) = &q.owner {
+            sql.push(" AND owner = ").push_bind(owner.clone());
+        }
+        if q.done_only {
+            sql.push(" AND status = 'done'");
+        }
+        if q.favorites_only {
+            sql.push(" AND favorite = 1");
+        }
+        if let Some(ratio) = q.ratio {
+            sql.push(" AND abs(CAST(width AS REAL) / height - ")
+                .push_bind(ratio)
+                .push(") < 0.01");
+        }
+        sql.push(" ORDER BY created_at DESC, id DESC");
+        Ok(sql
+            .build()
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|r| r.get("id"))
+            .collect())
+    }
+
+    /// Jobs whose prompt or enhanced prompt match an FTS5 query, best first; and, for a
+    /// query of digits, jobs whose seed contains them, before those.
+    pub async fn text_matches(&self, fts_query: &str, digits: Option<&str>) -> Result<Vec<String>> {
+        let mut ids: Vec<String> = Vec::new();
+        if let Some(d) = digits {
+            ids = sqlx::query_scalar("SELECT id FROM jobs WHERE CAST(seed AS TEXT) LIKE ?")
+                .bind(format!("%{d}%"))
+                .fetch_all(&self.pool)
+                .await?;
+        }
+        if !fts_query.is_empty() {
+            let words: Vec<String> = sqlx::query_scalar(
+                "SELECT job_id FROM jobs_fts WHERE jobs_fts MATCH ? ORDER BY bm25(jobs_fts)",
+            )
+            .bind(fts_query)
+            .fetch_all(&self.pool)
+            .await?;
+            for id in words {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Every stored embedding of `model`: job id and little-endian f32 vector.
+    pub async fn load_embeddings(&self, model: &str) -> Result<Vec<(String, Vec<u8>)>> {
+        let rows = sqlx::query("SELECT job_id, vector FROM job_embeddings WHERE model = ?")
+            .bind(model)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+    }
+
+    /// Stores a job's embedding; false if the job is gone (deleted while it was embedded).
+    pub async fn store_embedding(&self, job_id: &str, model: &str, vector: &[u8]) -> Result<bool> {
+        let done = sqlx::query(
+            "INSERT OR REPLACE INTO job_embeddings (job_id, model, vector)
+             SELECT id, ?2, ?3 FROM jobs WHERE id = ?1",
+        )
+        .bind(job_id)
+        .bind(model)
+        .bind(vector)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Finished jobs without an embedding of `model`, newest first.
+    pub async fn jobs_to_embed(&self, model: &str, limit: u32) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT j.id FROM jobs j
+             LEFT JOIN job_embeddings e ON e.job_id = j.id AND e.model = ?1
+             WHERE j.status = 'done' AND e.job_id IS NULL
+             ORDER BY j.created_at DESC LIMIT ?2",
+        )
+        .bind(model)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     async fn ensure_column(&self, table: &str, column: &str, decl: &str) -> Result<()> {
@@ -1448,23 +1601,6 @@ impl Database {
         if q.favorites_only {
             sql.push(" AND favorite = 1");
         }
-        if let Some(text) = q.search.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-            let like = format!(
-                "%{}%",
-                text.replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            );
-            sql.push(" AND (prompt LIKE ")
-                .push_bind(like.clone())
-                .push(" ESCAPE '\\'");
-            sql.push(" OR enhanced_prompt LIKE ")
-                .push_bind(like.clone())
-                .push(" ESCAPE '\\'");
-            sql.push(" OR CAST(seed AS TEXT) LIKE ")
-                .push_bind(like)
-                .push(" ESCAPE '\\')");
-        }
         if let Some(ratio) = q.ratio {
             sql.push(" AND abs(CAST(width AS REAL) / height - ")
                 .push_bind(ratio)
@@ -2028,6 +2164,17 @@ impl Database {
         Ok(rows.iter().map(Self::row_to_task).collect())
     }
 
+    /// `(width, height)` of the job a task belongs to.
+    pub async fn job_size_for_task(&self, task_id: &str) -> Result<Option<(u32, u32)>> {
+        let row = sqlx::query(
+            "SELECT j.width, j.height FROM jobs j JOIN tasks t ON t.job_id = j.id WHERE t.id = ?",
+        )
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| (r.get::<i64, _>(0) as u32, r.get::<i64, _>(1) as u32)))
+    }
+
     pub async fn get_task(&self, task_id: &str) -> Result<Option<TaskRecord>> {
         let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -2146,6 +2293,11 @@ impl Database {
             tasks: Vec::new(),
             provenance: HashMap::new(),
             owner: r.get("owner"),
+            preview_step: None,
+            search_match: None,
+            search_strength: None,
+            search_words: None,
+            search_phrase: false,
         }
     }
 
@@ -3280,7 +3432,7 @@ impl Database {
         Ok(Some((cancel_signal, full)))
     }
 
-    /// Changes who rewrites an Enhance job's prompt (`None`: the built-in enhancer), for a
+    /// Changes who rewrites an Enhance job's prompt (`None`: the local enhancer), for a
     /// retry with another enhancer. Only a failed or cancelled job changes.
     pub async fn set_job_enhancer(&self, job_id: &str, enhancer: Option<&str>) -> Result<bool> {
         let done = sqlx::query(

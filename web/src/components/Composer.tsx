@@ -504,8 +504,8 @@ export const Composer: React.FC<ComposerProps> = ({
 
   const advanced = preferences.advancedOpen;
   const hasReferences = references.length > 0;
-  // Who rewrites the prompt: the built-in enhancer, or a cloud one Studio offers
-  // (docs/CLOUD_ENHANCERS.md); a saved choice Studio no longer offers falls back to built-in.
+  // Who rewrites the prompt: the local enhancer, or a cloud one Studio offers
+  // (docs/CLOUD_ENHANCERS.md); a saved choice Studio no longer offers falls back to the local one.
   const cloudEnhancers = capabilities?.cloud_enhancers ?? [];
   const cloudEnhancer = cloudEnhancers.find((c) => c.id === preferences.enhancer);
   const enhancerName = cloudEnhancer ? cloudEnhancer.label : 'Qwen-Image-2.1-PE';
@@ -981,7 +981,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   <Check className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                 )}
               </button>
-              {/* Which enhancer, when Studio offers cloud ones: built-in stays the default. */}
+              {/* Which enhancer, when Studio offers cloud ones: the local one stays the default. */}
               {preferences.enhance && cloudEnhancers.length > 0 && (
                 <select
                   value={cloudEnhancer ? cloudEnhancer.id : 'builtin'}
@@ -990,7 +990,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   title="Who rewrites the prompt. Cloud enhancers get the prompt and any reference images; the provider's terms apply."
                   className={`${selectCls} min-w-0 max-w-full truncate`}
                 >
-                  <option value="builtin">Built-in</option>
+                  <option value="builtin">Local</option>
                   {cloudEnhancers.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.label.replace(/^Claude /, '')}

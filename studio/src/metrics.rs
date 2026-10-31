@@ -120,6 +120,44 @@ fn parse_name_and_labels(metric_part: &str) -> (&str, HashMap<String, String>) {
     (name, labels)
 }
 
+/// Bucket bounds of the preview timings: a few ms on a fast CPU, maybe a second on a slow one.
+pub const PREVIEW_BUCKETS: [f64; 10] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
+/// Bucket bounds of `aries_step_preview_bytes`.
+pub const PREVIEW_BYTES_BUCKETS: [f64; 8] = [5e3, 1e4, 2.5e4, 5e4, 1e5, 2.5e5, 5e5, 1e6];
+
+/// A Prometheus histogram's state: cumulative bucket counts, sum and count.
+#[derive(Debug, Default, Clone)]
+pub struct Histogram {
+    buckets: Vec<u64>,
+    sum: f64,
+    count: u64,
+}
+
+impl Histogram {
+    fn observe(&mut self, bounds: &[f64], v: f64) {
+        self.buckets.resize(bounds.len(), 0);
+        for (b, le) in self.buckets.iter_mut().zip(bounds) {
+            if v <= *le {
+                *b += 1;
+            }
+        }
+        self.sum += v;
+        self.count += 1;
+    }
+
+    fn render(&self, out: &mut String, name: &str, labels: &str, bounds: &[f64]) {
+        for (b, le) in self.buckets.iter().zip(bounds) {
+            out.push_str(&format!("{name}_bucket{{{labels},le=\"{le}\"}} {b}\n"));
+        }
+        out.push_str(&format!(
+            "{name}_bucket{{{labels},le=\"+Inf\"}} {}\n",
+            self.count
+        ));
+        out.push_str(&format!("{name}_sum{{{labels}}} {:.4}\n", self.sum));
+        out.push_str(&format!("{name}_count{{{labels}}} {}\n", self.count));
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct BackendMetricsRegistry {
     inner: Arc<RwLock<BackendMetricsInner>>,
@@ -132,6 +170,15 @@ struct BackendMetricsInner {
     pub job_e2e_count: HashMap<(String, String), u64>,
     pub task_wait_sum: HashMap<String, f64>,
     pub task_wait_count: HashMap<String, u64>,
+    /// Preview renders from a latent, by size (seconds, `PREVIEW_BUCKETS`).
+    pub preview: HashMap<String, Histogram>,
+    /// Per-step previews from denoise workers, by size: time to make (`PREVIEW_BUCKETS`)
+    /// and JPEG size (`PREVIEW_BYTES_BUCKETS`).
+    pub step_preview: HashMap<String, (Histogram, Histogram)>,
+    /// Search embeddings (search.rs), by kind (`image` or `query`); seconds, `PREVIEW_BUCKETS`.
+    pub search_embed: HashMap<String, Histogram>,
+    /// Images with an embedding in the search index.
+    pub search_indexed: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -183,6 +230,43 @@ impl BackendMetricsRegistry {
         if let Ok(mut g) = self.inner.write() {
             *g.task_wait_sum.entry(stage.to_string()).or_insert(0.0) += seconds;
             *g.task_wait_count.entry(stage.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// One rough preview rendered from a latent (preview.rs): reading it, the linear map and
+    /// the JPEG, timed on whatever CPU Studio runs on.
+    pub fn observe_preview(&self, size: &str, seconds: f64) {
+        if let Ok(mut g) = self.inner.write() {
+            g.preview
+                .entry(size.to_string())
+                .or_default()
+                .observe(&PREVIEW_BUCKETS, seconds);
+        }
+    }
+
+    /// One per-step preview from a denoise worker: the worker's time to make it and its
+    /// size in bytes.
+    /// One search embedding: `kind` is `image` (a thumbnail) or `query` (a search's text).
+    pub fn observe_search_embed(&self, kind: &str, seconds: f64) {
+        if let Ok(mut g) = self.inner.write() {
+            g.search_embed
+                .entry(kind.to_string())
+                .or_default()
+                .observe(&PREVIEW_BUCKETS, seconds);
+        }
+    }
+
+    pub fn set_search_indexed(&self, images: u64) {
+        if let Ok(mut g) = self.inner.write() {
+            g.search_indexed = Some(images);
+        }
+    }
+
+    pub fn observe_step_preview(&self, size: &str, seconds: f64, bytes: usize) {
+        if let Ok(mut g) = self.inner.write() {
+            let (t, b) = g.step_preview.entry(size.to_string()).or_default();
+            t.observe(&PREVIEW_BUCKETS, seconds);
+            b.observe(&PREVIEW_BYTES_BUCKETS, bytes as f64);
         }
     }
 
@@ -276,6 +360,60 @@ impl BackendMetricsRegistry {
                 out.push_str(&format!(
                     "aries_job_e2e_seconds_count{{size=\"{size}\",enhanced=\"{enhanced}\"}} {count}\n"
                 ));
+            }
+
+            out.push_str(
+                "# HELP aries_preview_seconds Time to render a preview from a latent, in Studio\n",
+            );
+            out.push_str("# TYPE aries_preview_seconds histogram\n");
+            for (size, h) in &g.preview {
+                let labels = format!("size=\"{size}\"");
+                h.render(&mut out, "aries_preview_seconds", &labels, &PREVIEW_BUCKETS);
+            }
+            out.push_str(
+                "# HELP aries_step_preview_seconds Time a denoise worker took to make a per-step preview\n",
+            );
+            out.push_str("# TYPE aries_step_preview_seconds histogram\n");
+            for (size, (t, _)) in &g.step_preview {
+                let labels = format!("size=\"{size}\"");
+                t.render(
+                    &mut out,
+                    "aries_step_preview_seconds",
+                    &labels,
+                    &PREVIEW_BUCKETS,
+                );
+            }
+            out.push_str("# HELP aries_step_preview_bytes Size of per-step preview JPEGs\n");
+            out.push_str("# TYPE aries_step_preview_bytes histogram\n");
+            for (size, (_, b)) in &g.step_preview {
+                let labels = format!("size=\"{size}\"");
+                b.render(
+                    &mut out,
+                    "aries_step_preview_bytes",
+                    &labels,
+                    &PREVIEW_BYTES_BUCKETS,
+                );
+            }
+
+            out.push_str(
+                "# HELP aries_search_embed_seconds Time to embed an image or a search query, in Studio\n",
+            );
+            out.push_str("# TYPE aries_search_embed_seconds histogram\n");
+            for (kind, h) in &g.search_embed {
+                let labels = format!("kind=\"{kind}\"");
+                h.render(
+                    &mut out,
+                    "aries_search_embed_seconds",
+                    &labels,
+                    &PREVIEW_BUCKETS,
+                );
+            }
+            if let Some(n) = g.search_indexed {
+                out.push_str(
+                    "# HELP aries_search_indexed_images Images with an embedding in the search index\n",
+                );
+                out.push_str("# TYPE aries_search_indexed_images gauge\n");
+                out.push_str(&format!("aries_search_indexed_images {n}\n"));
             }
 
             out.push_str("# HELP aries_task_wait_seconds Time spent queued before assignment\n");

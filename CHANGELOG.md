@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.7.0
+
+- **Search by what's in the image** (docs/SEARCH.md). The gallery's search finds images by
+  what they show as well as by the words of their prompts and enhanced prompts, and by
+  seed, best first instead of newest first. It runs in Studio, on its CPU: it works while
+  the GPU host sleeps, and nothing leaves Studio.
+  - A badge on each result says what found it: how closely its look matches (strong,
+    possible or weak), and whether the words are in the prompt as written, as the exact
+    phrase, or only in the enhanced prompt. Tapping it spells it out. Results found only
+    by a weak look come last, under a divider.
+  - **More like this**, on a tile and in the viewer, ranks the gallery by how alike the
+    images look to one.
+  - Each image is indexed as it finishes; existing ones are indexed in the background on
+    first start, newest first, and can be found by their words meanwhile.
+  - The model (SigLIP 2) is part of the Studio image, which grows to about 830 MB
+    compressed; Studio uses about 1 GB more RAM. Without the model Studio searches words
+    only.
+  - The search box keeps its focus, and a phone its keyboard, while results load.
+  - New: `GET /api/jobs?like=<id>`, and ranked pages carry `search_match`,
+    `search_strength`, `search_words` and `search_phrase`; `ARIES_SEARCH_MODEL_DIR` and
+    `ARIES_SEARCH_THREADS`; `aries_search_embed_seconds` and `aries_search_indexed_images`,
+    with dashboard panels. Building Studio needs Rust 1.92.
+- **Live preview while drawing.** The tile shows the picture forming, updated every step,
+  with progress and time left. Full-size images get smaller previews (an eighth of the
+  image's size instead of a quarter). New: `ARIES_PREVIEW_EVERY_STEPS` and
+  `ARIES_PREVIEW_HALVE_ABOVE_PX`; `aries_step_preview_seconds{size}` and
+  `aries_step_preview_bytes{size}`, with dashboard panels.
+- **Preview before decode.** Once an image is drawn, its tile shows a rough preview while
+  the decode waits for a card (often a minute or more in a batch) and while it runs. Studio
+  makes it without a model or a GPU. New: `GET /api/jobs/{id}/preview`;
+  `aries_preview_seconds{size}`, with dashboard panels.
+- **Enhancer names.** The enhancer that runs on the cards is called Local (was Built-in),
+  and while a cloud enhancer rewrites the prompt, the card names its model.
+- **Fix:** a worker whose events outgrew the agent's line limit lost its connection and
+  kept working for nobody; the agent now takes lines up to 16 MiB, and a worker whose agent
+  goes away stops its job and exits.
+
 ## 0.6.0
 
 - **Sign-in with Google, with images that belong to each account** (docs/AUTH.md). Off

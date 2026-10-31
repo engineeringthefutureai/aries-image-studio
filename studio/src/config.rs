@@ -13,6 +13,12 @@ pub struct BackendConfig {
     pub agent_token: String,
     pub artifact_base_url: String,
     pub max_wait_s: f64,
+    /// `ARIES_PREVIEW_EVERY_STEPS`: denoise workers send a preview with every Nth step
+    /// (ARCHITECTURE_V3.md §7.5); 0 for none.
+    pub preview_every_steps: u32,
+    /// `ARIES_PREVIEW_HALVE_ABOVE_PX`: images above this many pixels get per-step previews
+    /// at half the sides (an eighth of the image instead of a quarter).
+    pub preview_halve_above_px: u64,
     pub idle_grace_s: f64,
     pub scrape_interval_ms: u64,
     pub scrape_stale_s: f64,
@@ -21,6 +27,12 @@ pub struct BackendConfig {
     /// Reference images are resized to about this side squared (1024 → ~1 MP). Part of the
     /// key their stored latents are found by (docs/REFERENCE_IMAGES.md §5).
     pub reference_res: u32,
+    /// `ARIES_SEARCH_MODEL_DIR`: the search model (docs/SEARCH.md), as
+    /// reference/search/export.py writes it; the image ships one. Unset or unreadable: search
+    /// matches words in prompts only.
+    pub search_model_dir: Option<PathBuf>,
+    /// `ARIES_SEARCH_THREADS`: CPU threads for each search embedding.
+    pub search_threads: usize,
     /// Cloud prompt enhancers (docs/CLOUD_ENHANCERS.md): none unless switched on.
     pub cloud: CloudConfig,
     /// Sign-in with Google (docs/AUTH.md): none unless configured, and then every
@@ -40,12 +52,16 @@ impl Default for BackendConfig {
             agent_token: String::new(), // required: ARIES_AGENT_TOKEN
             artifact_base_url: "http://127.0.0.1:8080".to_string(),
             max_wait_s: 600.0,
+            preview_every_steps: 1,
+            preview_halve_above_px: 2_000_000,
             idle_grace_s: 45.0,
             scrape_interval_ms: 1000,
             scrape_stale_s: 5.0,
             reconnect_grace_s: 30.0,
             disk_watermark_pct: 80.0,
             reference_res: 1024,
+            search_model_dir: None,
+            search_threads: 2,
             cloud: CloudConfig::default(),
             auth: None,
             legal: LegalConfig::default(),
@@ -74,6 +90,25 @@ impl BackendConfig {
         }
         if let Ok(v) = env::var("ARIES_ARTIFACT_BASE_URL") {
             cfg.artifact_base_url = v.trim_end_matches('/').to_string();
+        }
+        if let Ok(v) = env::var("ARIES_PREVIEW_EVERY_STEPS") {
+            if let Ok(n) = v.trim().parse() {
+                cfg.preview_every_steps = n;
+            }
+        }
+        if let Ok(v) = env::var("ARIES_SEARCH_MODEL_DIR") {
+            let v = v.trim();
+            cfg.search_model_dir = (!v.is_empty()).then(|| PathBuf::from(v));
+        }
+        if let Ok(v) = env::var("ARIES_SEARCH_THREADS") {
+            if let Ok(n) = v.trim().parse::<usize>() {
+                cfg.search_threads = n.max(1);
+            }
+        }
+        if let Ok(v) = env::var("ARIES_PREVIEW_HALVE_ABOVE_PX") {
+            if let Ok(n) = v.trim().parse() {
+                cfg.preview_halve_above_px = n;
+            }
         }
         if let Ok(v) = env::var("ARIES_MAX_WAIT_S") {
             if let Ok(n) = v.parse() {

@@ -401,6 +401,20 @@ async fn handle_agent_message(
                     Some(&prog.stats),
                 )
                 .await?;
+            if accepted
+                && !prog.preview.is_empty()
+                && crate::preview::jpeg_size(&prog.preview).is_some()
+            {
+                if let Some((w, h)) = state.db.job_size_for_task(&prog.task).await? {
+                    let ms = prog.stats.get("preview_ms").copied().unwrap_or(0.0);
+                    state.metrics.observe_step_preview(
+                        &format!("{w}x{h}"),
+                        ms / 1000.0,
+                        prog.preview.len(),
+                    );
+                }
+                crate::preview::store_live(&prog.task, prog.step, prog.preview);
+            }
             if !accepted {
                 // Task is no longer active for this attempt (e.g. cancelled); notify agent
                 state.send_to_agent(
@@ -718,13 +732,15 @@ async fn finalize_completed_job_image(
     }
 
     // Thumbnails off the async runtime; the grids fall back to generating one on request.
+    // Search embeds the image from its thumbnail, so it hears of the image after.
     {
-        let blobs = state.blobs.clone();
+        let state = state.clone();
         let job_id = job_id.to_string();
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = blobs.write_thumbnails(&job_id, &tagged_png) {
+            if let Err(e) = state.blobs.write_thumbnails(&job_id, &tagged_png) {
                 warn!(job_id, error = %e, "thumbnail generation failed");
             }
+            state.search.image_added();
         });
     }
 

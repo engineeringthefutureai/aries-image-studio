@@ -190,6 +190,8 @@ message DenoiseParams {
   uint64 seed           = 4;    // noise from torch.Generator("cpu")
   float  true_cfg_scale = 5;
   uint32 references     = 6;    // reference latents arrive as inputs ref0..ref<n-1>.safetensors
+  uint32 preview_every  = 7;    // a preview JPEG with every Nth step's progress; 0: none
+  uint32 preview_downscale = 8; // preview sides divided by this: 0 or 1 a quarter of the image, 2 an eighth
 }
 
 message DecodeParams { DecodeMode mode = 1; }
@@ -234,6 +236,9 @@ message Progress {
   // prefill_tps, generation_tps, ...).
   string              sub_stage = 6;
   map<string, double> stats     = 7;
+  // denoise only, when asked (DenoiseParams.preview_every): a quarter-size JPEG (an
+  // eighth with preview_downscale 2) of the clean-image estimate at this step; stats["preview_ms"] is the time to make it.
+  bytes               preview   = 8;
 }
 
 message Provenance {

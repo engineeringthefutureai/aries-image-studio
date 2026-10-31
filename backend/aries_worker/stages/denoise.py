@@ -1,6 +1,7 @@
 """Denoise stage: 7B DiT transformer on one card, embeds.safetensors -> latent.safetensors.
 
-Emits progress every step. The latent is captured at the `vae.decode` input
+Emits progress every step, with a preview JPEG every `preview_every` steps when asked
+(ARCHITECTURE_V3.md §7.5). The latent is captured at the `vae.decode` input
 (output_type="latent"), so the decode stage needs only the VAE.
 
 With reference images the pipeline's `__call__` cannot be used: it VAE-encodes the
@@ -8,6 +9,7 @@ references from pixels and takes neither stored latents nor `image_pad_mask`. Th
 run `_denoise_with_references`, the pipeline's loop over the stored tensors
 (docs/REFERENCE_IMAGES.md §3.1).
 """
+import base64
 import json
 import logging
 import time
@@ -22,6 +24,7 @@ from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_shift
 from diffusers.utils.torch_utils import randn_tensor
 
 from aries_worker.stages.files import atomic_safetensors_save, load_safetensors_with_metadata
+from aries_worker.stages.preview import StepPreview, clean_estimate
 from aries_worker.stages.references import VAE_SCALE
 from aries_worker.stages.loader import (
     flush_xpu_cache,
@@ -48,6 +51,7 @@ class DenoiseStageRunner:
     def __init__(self) -> None:
         self.pipe: Optional[QwenImage21Pipeline] = None
         self.load_s = 0.0
+        self.preview: Optional[StepPreview] = None
 
     def load(self) -> float:
         t0 = time.monotonic()
@@ -136,7 +140,7 @@ class DenoiseStageRunner:
                     return_dict=False,
                 )[0]
             latents = scheduler.step(noise_pred[:, -latents.size(1):], t, latents, return_dict=False)[0]
-            step_callback(pipe, i, t, {})
+            step_callback(pipe, i, t, {"latents": latents})
         return latents
 
     def run_job(
@@ -199,6 +203,30 @@ class DenoiseStageRunner:
         generator = torch.Generator("cpu").manual_seed(seed)
         step_times = []
         last_step_time = t0
+        preview_every = int(params.get("preview_every") or 0)
+        preview_downscale = int(params.get("preview_downscale") or 1)
+        prev_latents: List[Any] = []
+
+        def step_preview(step_idx: int, latents: Any) -> Dict[str, Any]:
+            """The step's preview, as progress fields; none on the first step (the step
+            before is needed) or when it fails, which never fails the job."""
+            prev = prev_latents[0] if prev_latents else None
+            prev_latents[:] = [latents]
+            done = step_idx + 1
+            if prev is None or (done % preview_every and done != steps):
+                return {}
+            try:
+                sigmas = self.pipe.scheduler.sigmas
+                x0 = clean_estimate(
+                    latents.float(), prev.float(), float(sigmas[step_idx]), float(sigmas[step_idx + 1])
+                )
+                if self.preview is None:
+                    self.preview = StepPreview()
+                jpeg, ms = self.preview.render(x0, width, height, preview_downscale)
+                return {"preview": base64.b64encode(jpeg).decode("ascii"), "preview_ms": ms}
+            except Exception:
+                logger.exception("%s: preview at step %d failed", job_id, done)
+                return {}
 
         def step_callback(pipe, step_idx, _timestep, kwargs):
             nonlocal last_step_time
@@ -207,12 +235,13 @@ class DenoiseStageRunner:
 
             now = time.monotonic()
             step_times.append(now - last_step_time)
-            last_step_time = now
-
             recent = step_times[-SPS_WINDOW:]
+            extra = step_preview(step_idx, kwargs["latents"]) if preview_every and "latents" in kwargs else {}
+            # The preview counts toward the next step's time, which it delays.
+            last_step_time = now
             if progress_cb:
                 # diffusers numbers the callback from 0, after that step ran: report steps done.
-                progress_cb(step=step_idx + 1, steps=steps, sps=round(sum(recent) / len(recent), 3))
+                progress_cb(step=step_idx + 1, steps=steps, sps=round(sum(recent) / len(recent), 3), **extra)
             return kwargs
 
         try:

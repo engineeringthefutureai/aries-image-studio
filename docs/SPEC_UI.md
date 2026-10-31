@@ -54,7 +54,7 @@ App                                          URL
 ├── Sign-in screen (sign-in on, signed out) — "Sign in with Google"    any URL
 ├── Top bar: app name · view switch (Timeline / Gallery) · generator status · theme · account
 ├── Timeline view (default)      — chat-shaped history + composer      /
-├── Gallery view                 — grid of all images + filters        /gallery?fav=1&aspect=16:9&q=…
+├── Gallery view                 — grid of all images + filters        /gallery?fav=1&aspect=16:9&q=…&like=…
 ├── Image viewer (a page)        — full image + details + actions      /images/{id}
 └── System view (a page)         — agents, cards, queues               /status
 ```
@@ -93,7 +93,7 @@ Each entry is a **turn** — one submission:
 | Queued | Aspect-correct placeholder naming the stage it waits for (enhancement, text encoding, drawing, decoding). *(future: "2 ahead · starts in ~4 min")* Cancel. |
 | Generating | Placeholder that names the phase it's in — see below. Cancel. |
 | Done | The image. Hover/tap reveals quick actions (§4.4). |
-| Failed | Calm error ("The generator stopped unexpectedly"), **Retry**. Not alarming. When a cloud enhancer rewrote the prompt, also **Built-in**: retry with the built-in enhancer. |
+| Failed | Calm error ("The generator stopped unexpectedly"), **Retry**. Not alarming. When a cloud enhancer rewrote the prompt, also **Local**: retry with the local enhancer. |
 | Cancelled | Muted placeholder, "Cancelled", Retry. |
 
 A turn with several tiles can be in mixed states (one done, one generating, two queued).
@@ -106,8 +106,8 @@ looks stuck:
 | Waking *(future)* | 10–30 s | "Waking generator" |
 | Enhancing | about a minute, when Enhance is on | "Enhancing" with the sub-stage (reading prompt · thinking · rewriting prompt), tokens/s and time left. The bar is tokens generated against the expected finish line, 85 % of the enhancer's token limit (4096 by default, plus 2048 per reference image; the worker reports a raised limit and the bar follows it); past it the bar turns indeterminate with "almost done…" until the run ends (at the limit at the latest). With a cloud enhancer: seconds, "waiting for the enhancer" while a rate limit holds it, then "rewriting prompt", with an indeterminate bar |
 | Reading prompt | a few seconds | "Reading prompt" with an indeterminate bar (the encoder reports no steps) |
-| Drawing | most of the time | "Drawing", percent, live speed and time left ("6.40s/step · ~180s left") |
-| Finishing | 5–15 s | "Finishing" with an indeterminate bar — decoding the full-size image; must not look frozen |
+| Drawing | most of the time | The picture forming: a rough preview of the model's current guess fills the tile, updated every step (`ARIES_PREVIEW_EVERY_STEPS`), with "Drawing · 45% · ~180s left" and a thin bar over it. Before the first preview, or without previews: "Drawing", percent, live speed and time left ("6.40s/step · ~180s left") |
+| Finishing | 5–15 s, after up to a minute or more of waiting for a card | A rough preview of the image fills the tile (a quarter of its size, made in Studio from the drawn latent), with "Preview · waiting to finish" while the decode is queued and "Finishing" while it runs. Without a preview (another model): "Finishing" with an indeterminate bar. Must not look frozen |
 
 Each stage runs in a freshly started worker, so a phase may begin with a few seconds
 of model loading; the tile shows the GPU running it.
@@ -136,7 +136,7 @@ Docked at the bottom of the Timeline. Should feel like a message box, not a form
 | Quality | **Draft** (12 steps) · **Standard** (20) · **High** (40) | Standard |
 | Size | Full · ½ · ¼ (faster previews) | Full |
 | Enhance prompt | On/off toggle | Off |
-| Enhancer | Shown next to Enhance while it is on, when Studio offers cloud enhancers (CLOUD_ENHANCERS.md): Built-in · Sonnet 5.5 · Gemini 3.5 Flash Lite (one entry per configured model). Its tooltip says the prompt and any reference images go to the provider, whose terms apply. A cloud enhancer reads up to 10 reference images | Built-in |
+| Enhancer | Shown next to Enhance while it is on, when Studio offers cloud enhancers (CLOUD_ENHANCERS.md): Local · Sonnet 5.5 · Gemini 3.5 Flash Lite (one entry per configured model). Its tooltip says the prompt and any reference images go to the provider, whose terms apply. A cloud enhancer reads up to 10 reference images | Local |
 
 Every image gets its own random seed; the seed is not shown unless Advanced is open.
 
@@ -197,8 +197,18 @@ All finished images, newest first, infinite scroll (Studio filters and pages the
 browser holds only what was scrolled to). The filters live in the URL.
 
 - **Mixed-aspect grid** (masonry or justified rows — designer's call) using thumbnails.
-- **Filters**: Favorites only · aspect ratio · text search over prompts (and seeds). The
-  counts on the pills are over all finished images.
+- **Filters**: Favorites only · aspect ratio · search (SEARCH.md). The counts on the pills
+  are over all finished images.
+- **Search** ("Search images, prompts, seed…") finds images by what they
+  show and by their prompts' words (and seeds), best first instead of newest first. A
+  small badge on each result's tile says what found it: an eye (what it shows) with signal
+  bars for how closely (strong, possible, weak), a **T** for the words (a quote mark for the
+  exact phrase, dimmed when only the enhanced prompt has them, **#** for a seed), or both.
+  Tapping it spells it out; with a mouse the tile's hover overlay does, and the badge hides
+  while the tile shows its actions. Results found only by a weak look come last, under a
+  **Weaker matches** divider.
+- **More like this** (`like=`): the gallery ranked by how alike the images look to one, with
+  a chip showing that image's thumbnail and a × to leave it. Typing a search replaces it.
 - Hover/tap shows quick actions (§4.4). Click opens the Image viewer.
 - Must look good with mostly 1:1, and with a mix of 9:16 and 16:9.
 
@@ -206,6 +216,7 @@ browser holds only what was scrolled to). The filters live in the URL.
 
 - Favorite (toggle)
 - Vary — fills the composer with this image's prompt and settings and a random seed (§4.2)
+- More like this (gallery) — the gallery ranked by how alike the images look to this one
 - Use as reference (in the turn's action row) — attaches the image to the composer, which
   opens to show it; hidden when the composer is at its limit
 - Open
@@ -253,6 +264,7 @@ list it came from; opened from a link, to the timeline.
 | Favorite | |
 | Delete | Asks first, then removes the image and its settings for good (Enter confirms, Esc cancels). The same on a tile and for a whole turn; a failed or cancelled card, with no image to lose, goes at once. |
 | Use as reference | Attaches the image to the composer as the next reference image and closes the viewer. Hidden when the composer is at its limit. |
+| More like this | Opens the gallery ranked by how alike the images look to this one (a link: `/gallery?like={id}`). |
 
 ### 4.6 Top bar
 

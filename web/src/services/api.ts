@@ -137,6 +137,14 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     imageUrl: done ? `/api/images/${encodeURIComponent(v3.id)}` : undefined,
     thumbUrl: done ? `/api/images/${encodeURIComponent(v3.id)}/thumb?size=1024` : undefined,
     thumbSrcSet: done ? thumbSrcSet(v3.id, v3.width, v3.height) : undefined,
+    // While it draws, the worker's newest step (one URL per step); once decode is the stage
+    // left (queued or running), the drawn latent.
+    previewUrl:
+      !done && v3.preview_step != null
+        ? `/api/jobs/${encodeURIComponent(v3.id)}/preview?step=${v3.preview_step}`
+        : !done && (status === 'running' || status === 'queued') && current?.stage === 'decode'
+          ? `/api/jobs/${encodeURIComponent(v3.id)}/preview`
+          : undefined,
     error: v3.error_detail || v3.error_class || undefined,
     blockedReason: !done ? v3.blocked_reason || current?.blocked_reason || undefined : undefined,
     provenance: v3.provenance,
@@ -148,6 +156,14 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     card: cardDigits ? Number(cardDigits[1]) : undefined,
     peakVram: peakVram || undefined,
     references: v3.references?.length ? v3.references : undefined,
+    search: v3.search_match
+      ? {
+          match: v3.search_match,
+          strength: v3.search_strength,
+          words: v3.search_words,
+          phrase: v3.search_phrase,
+        }
+      : undefined,
   };
 }
 
@@ -257,10 +273,16 @@ export interface JobsPage {
 export interface JobQuery {
   doneOnly?: boolean;
   favorites?: boolean;
+  /** Search: Studio ranks the images (best first) by what they show and their prompts' words. */
   q?: string;
+  /** "More like this": images ranked by how alike they look to this job's. */
+  like?: string;
   /** `w:h` of the image size (not the label: presets are only near their label's ratio). */
   ratio?: string;
 }
+
+/** A search or "more like this": Studio's order is by relevance, not by time. */
+export const isRanked = (q: JobQuery) => !!(q.q?.trim() || q.like);
 
 async function getJobs(params: URLSearchParams): Promise<JobsPage> {
   const res = await fetch(`/api/jobs?${params}`, { cache: 'no-store' });
@@ -281,13 +303,15 @@ export function fetchJobChangesApi(changedSince: number): Promise<JobsPage> {
   return getJobs(new URLSearchParams({ changed_since: String(changedSince) }));
 }
 
-/** One page of a list, newest first, after `before` (the previous page's `next`). */
+/** One page of a list, newest first (best first when ranked), after `before` (the previous
+ * page's `next`). */
 export function fetchJobsPageApi(query: JobQuery, limit: number, before?: string | null): Promise<JobsPage> {
   const p = new URLSearchParams({ limit: String(limit) });
   if (before) p.set('before', before);
   if (query.doneOnly) p.set('status', 'done');
   if (query.favorites) p.set('favorite', 'true');
   if (query.q?.trim()) p.set('q', query.q.trim());
+  if (query.like) p.set('like', query.like);
   if (query.ratio) p.set('aspect', query.ratio);
   return getJobs(p);
 }
@@ -326,7 +350,7 @@ export interface JobSubmission {
   enhance: boolean;
   /** The prompt rewriter's token limit; omitted: Studio's default. */
   enhance_max_tokens?: number;
-  /** A cloud enhancer's id; omitted: the built-in enhancer. */
+  /** A cloud enhancer's id; omitted: the local enhancer. */
   enhancer?: string;
   tiling: boolean;
   meta: JobMeta;

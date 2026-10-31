@@ -7,10 +7,10 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 two Intel Arc Pro B60 GPUs. For one person or a few, on a home network, with optional
 sign-in with Google.
 
-**Version 0.6.0.** A Rust Studio server owns jobs, history and images, and a thin
+**Version 0.7.0.** A Rust Studio server owns jobs, history and images, and a thin
 agent on the GPU host runs the pipeline. It works end to end on the hardware it was
 built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.md) · [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+Release notes: [0.7.0](docs/releases/v0.7.0.md) · [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.md) · [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
 [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
@@ -21,6 +21,7 @@ Release notes: [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.
 
 - **Timeline**: one turn per send, its images in a carousel in send order, with live
   per-stage progress (enhancing, reading prompt, drawing, finishing), cancel and retry.
+  While an image draws, its tile shows the picture forming, step by step.
 - **Composer**: folds to a one-line pill until opened. 7 aspect ratios at ~2K, ½ and ¼
   size presets, 1–4 images, Draft / Standard / High, optional **prompt enhancement**
   with the official Qwen-Image-2.1-PE-T2I rewriter (its reasoning is kept and viewable;
@@ -33,9 +34,10 @@ Release notes: [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.
   them. Each reference is VAE-encoded once and stored, so later generations reuse it.
   Enhance works with references too when the image-aware Qwen-Image-2.1-PE-I2I enhancer is
   installed: it reads the images and writes a precise edit prompt.
-- **Gallery and viewer**: favorites, search and filters over the whole history, zoom to
-  actual pixels with pan and a navigator, Rerun / Vary into the composer, download. Every
-  page has its own URL, and long lists load as they scroll.
+- **Gallery and viewer**: favorites and filters over the whole history, **search** by what
+  the images show as well as by their prompts' words, **more like this**, zoom to actual
+  pixels with pan and a navigator, Rerun / Vary into the composer, download. Every page has
+  its own URL, and long lists load as they scroll.
 - **Accounts (optional)**: sign in with Google, for the addresses you allow; no passwords.
   Each account sees only its own images, favorites and preferences.
 - **Status page**: each GPU's state, current stage and VRAM; queue depth per stage;
@@ -74,7 +76,8 @@ failed stage is retried from its inputs. Details:
 - **GPU host:** Linux with the `xe` driver and the Level Zero runtime; tested on Ubuntu
   26.04 with 2× Intel Arc Pro B60 (24 GB). A full-size image needs a 24 GB card and
   about 6 GiB of free host RAM.
-- **Studio host:** any always-on Linux machine, no GPU. It can be the GPU host itself.
+- **Studio host:** any always-on Linux machine with about 1.5 GB of free RAM, no GPU. It
+  can be the GPU host itself.
 - Docker Engine with the Compose plugin on both, and `make` on the GPU host.
 - Disk for the model weights: ~50 GB for image generation and the prompt enhancer, ~70 GB
   with the image-aware enhancer (less with int4 copies). They are downloaded once;
@@ -260,6 +263,7 @@ reference/       Batch scripts that validated the pipeline on the hardware
 | [docs/ENHANCER_I2I.md](docs/ENHANCER_I2I.md) | The image-aware prompt enhancer (PE-I2I) |
 | [docs/CLOUD_ENHANCERS.md](docs/CLOUD_ENHANCERS.md) | Claude and Gemini as prompt enhancers |
 | [docs/AUTH.md](docs/AUTH.md) | Sign-in with Google, accounts, privacy policy and terms |
+| [docs/SEARCH.md](docs/SEARCH.md) | Search by what images show and by their words: design and measurements |
 | [CHANGELOG.md](CHANGELOG.md) | Every change, by release |
 | [docs/releases/](docs/releases/) | Release notes |
 
