@@ -10,7 +10,7 @@ use std::env;
 use std::sync::Arc;
 
 /// Change it whenever the wording below changes.
-const LAST_UPDATED: &str = "25 October 2026";
+const LAST_UPDATED: &str = "3 November 2026";
 
 /// The model agents load when they declare none (`backend/aries_agent/config.py`).
 const DEFAULT_MODEL: &str = "Qwen/Qwen-Image-2.1";
@@ -166,7 +166,7 @@ impl Facts {
     }
 }
 
-fn page(title: &str, body: &str) -> Html<String> {
+fn page(title: &str, description: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -174,6 +174,7 @@ fn page(title: &str, body: &str) -> Html<String> {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} · Aries Image Studio</title>
+<meta name="description" content="{description}">
 <style>
 :root {{ --bg:#fcf9f2; --fg:#1c1c18; --muted:#58423a; --line:#e5e2db; --accent:#a53705; }}
 @media (prefers-color-scheme: dark) {{
@@ -211,11 +212,21 @@ nav {{ display:flex; gap:1rem; font-size:.9rem; padding-bottom:1rem; margin-bott
 
 pub async fn privacy(State(state): State<Arc<AppState>>) -> Html<String> {
     let f = Facts::new(&state).await;
+    let guest = if state.config.demo.is_some() {
+        format!(
+            "<code>aries_guest</code>, a random id you get by opening the demo, which keeps you in \
+             it for {} days, until you leave, or until you sign in (Studio stores a hash of it). ",
+            crate::auth::GUEST_LIFE_S / 86400
+        )
+    } else {
+        String::new()
+    };
     let session = match f.session_days {
         Some(d) => format!(
             "<code>aries_session</code>, a random token that keeps you signed in until you \
              sign out, or until {d} days pass without you using Studio (Studio stores a hash \
-             of it). No others: a sign-in in progress is tracked on the server"
+             of it). <code>aries_login</code>, a random value for up to 10 minutes while you sign \
+             in, so that only your browser can finish it. {guest}No others"
         ),
         None => "whatever cookies the current version of Studio uses".into(),
     };
@@ -280,7 +291,7 @@ User Data Policy</a>, including the Limited Use requirements.</p>
 <p>As currently set up, Studio shows each account its own images, and everyone signed in sees
 how busy the shared GPUs are. The host can change that at any time. {cloud}</p>
 
-<h2>Who may use it</h2>
+{demo}<h2>Who may use it</h2>
 <p>The host decides who is invited, and is responsible for running this service in compliance
 with the laws and regulations that apply to it, including any minimum age for its users.</p>
 
@@ -294,9 +305,28 @@ moves.</p>
         op = f.operator,
         op_start = f.operator_start,
         contact = f.contact,
+        demo = if state.config.demo.is_some() {
+            r#"<h2>The public demo</h2>
+<p>This Studio shows a small set of images to anyone, without an account. The host chooses them;
+their prompts, settings and reference images are shown with them. Opening the demo gives your
+browser a random id, in a cookie. Studio stores a hash of the id and when you opened the demo, with
+nothing linking it to you, your address or what you look at, and deletes them when the id ends.
+Your IP address is held in memory for up to a minute to limit how many requests one address can
+make, and is not stored by Studio; the host's proxies may keep their own logs. Studio also counts
+how many different ids visit each hour and each day, in a form that a random value scrambles, is
+replaced each period and cannot be turned back into an id.</p>
+
+"#
+        } else {
+            ""
+        },
         cloud = f.cloud_sentence(),
     );
-    page("Privacy policy", &body)
+    page(
+        "Privacy policy",
+        "What Aries Image Studio stores, how long it keeps it, and who else sees it.",
+        &body,
+    )
 }
 
 pub async fn terms(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -333,7 +363,7 @@ compliance with the laws and regulations that apply to it, including any minimum
 users. Keep your access to yourself: don't share your account or
 let others use your session.</p>
 
-<h2>Acceptable use</h2>
+{demo}<h2>Acceptable use</h2>
 <p>Use Studio lawfully and decently. In particular, do not use it to make, upload or request:</p>
 <ul>
 <li>anything <a href="/terms#zero-tolerance">below</a> (non-consensual intimate imagery, sexual
@@ -411,6 +441,17 @@ Studio after a change means you accept the new terms.</p>
         op = f.operator,
         op_start = f.operator_start,
         contact = f.contact,
+        demo = if state.config.demo.is_some() {
+            r#"<h2>The public demo</h2>
+<p>Anyone may browse the images the host shows in the demo, with no account, to see what Studio
+does. Opening the demo means you accept these terms and the privacy policy. It is read-only and
+limited per address. The images and their prompts are shown as they
+are, with no promise that you may reuse them; the model licenses below apply to them too.</p>
+
+"#
+        } else {
+            ""
+        },
         models_when = if f.models_declared {
             "currently"
         } else {
@@ -419,5 +460,9 @@ Studio after a change means you accept the new terms.</p>
         models = f.model_links(),
         notes = f.model_notes(),
     );
-    page("Terms of service", &body)
+    page(
+        "Terms of service",
+        "The terms for using Aries Image Studio and the images made with it.",
+        &body,
+    )
 }

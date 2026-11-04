@@ -423,6 +423,7 @@ validation and the contract tests on both sides.
 | `ARIES_AUTH_ALLOWED_EMAILS` | — (required with sign-in) | Comma-separated addresses that may sign in |
 | `ARIES_PUBLIC_URL` | — (required with sign-in) | Studio's address as the browser sees it; the redirect URI is `{this}/auth/callback`. Comma-separate several (intranet and internet names): each request uses the one its `Host` names |
 | `ARIES_AUTH_OWNER` | first allowed address | Owns what was made before sign-in; the only account that may lend, disable or enable cards |
+| `ARIES_DEMO` | off | `1`: the sign-in screen offers a read-only guest demo; needs sign-in. Its quotas and `ARIES_DEMO_TRUSTED_PROXIES` are in docs/DEMO.md §2 |
 | `ARIES_OIDC_ISSUER` · `ARIES_SESSION_DAYS` | `https://accounts.google.com` · `30` | Another OpenID Connect provider; how long an unused session lasts (renewed while used) |
 | `ARIES_LEGAL_OPERATOR` · `ARIES_LEGAL_CONTACT` | unset | Who runs Studio and how to reach them (an email or a URL), named on the public `/privacy` and `/terms` pages |
 | `ARIES_ARTIFACT_BASE_URL` | `http://127.0.0.1:8080` | Base of the artifact URLs sent to agents |

@@ -7,10 +7,10 @@ Type a prompt, get pictures. A quiet, image-first web app for generating images 
 two Intel Arc Pro B60 GPUs. For one person or a few, on a home network, with optional
 sign-in with Google.
 
-**Version 0.7.0.** A Rust Studio server owns jobs, history and images, and a thin
+**Version 0.8.0.** A Rust Studio server owns jobs, history and images, and a thin
 agent on the GPU host runs the pipeline. It works end to end on the hardware it was
 built for; see [Limitations](#limitations) before deploying it anywhere else.
-Release notes: [0.7.0](docs/releases/v0.7.0.md) · [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.md) · [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
+Release notes: [0.8.0](docs/releases/v0.8.0.md) · [0.7.0](docs/releases/v0.7.0.md) · [0.6.0](docs/releases/v0.6.0.md) · [0.5.0](docs/releases/v0.5.0.md) · [0.4.0](docs/releases/v0.4.0.md) · [0.3.1](docs/releases/v0.3.1.md) · [0.3.0](docs/releases/v0.3.0.md) · [0.2.1](docs/releases/v0.2.1.md) ·
 [0.2.0](docs/releases/v0.2.0.md).
 
 ![Timeline with an enhanced prompt](docs/screenshots/timeline-enhanced.webp)
@@ -40,6 +40,12 @@ Release notes: [0.7.0](docs/releases/v0.7.0.md) · [0.6.0](docs/releases/v0.6.0.
   its own URL, and long lists load as they scroll.
 - **Accounts (optional)**: sign in with Google, for the addresses you allow; no passwords.
   Each account sees only its own images, favorites and preferences.
+- **Read-only demo (optional)**: from the sign-in screen, anyone can open a guest demo of the images
+  you choose, without an account and with no way to change anything (docs/DEMO.md).
+- **CLI and AI tools**: an MCP server in Studio for AI tools such as Antigravity, which
+  make, wait for, look at and find images; the `aries` command line (one Python file); and
+  a skill that teaches an AI tool to use them well. Each tool gets its own revocable access
+  token.
 - **Status page**: each GPU's state, current stage and VRAM; queue depth per stage;
   host RAM.
 - **Crash-tolerant backend**: each pipeline stage runs in its own process on one card,
@@ -245,6 +251,8 @@ web/             React + TypeScript + Tailwind single-page app
 deploy/studio/   Docker Compose for Studio
 deploy/aries/    Docker Compose + Makefile (and a systemd unit) for the agent
 deploy/grafana/  Grafana dashboard
+cli/             The aries command line (one Python file, standard library only)
+skills/          The skill for AI tools (Agent Skills format)
 docs/            Specs, architecture, hardware notes, build and run guide
 mockups/         UI mockups (visual reference)
 reference/       Batch scripts that validated the pipeline on the hardware
@@ -264,14 +272,20 @@ reference/       Batch scripts that validated the pipeline on the hardware
 | [docs/CLOUD_ENHANCERS.md](docs/CLOUD_ENHANCERS.md) | Claude and Gemini as prompt enhancers |
 | [docs/AUTH.md](docs/AUTH.md) | Sign-in with Google, accounts, privacy policy and terms |
 | [docs/SEARCH.md](docs/SEARCH.md) | Search by what images show and by their words: design and measurements |
+| [docs/DEMO.md](docs/DEMO.md) | The read-only demo: what visitors get, quotas, choosing what is shown |
+| [docs/SEO.md](docs/SEO.md) | Search engines and link previews |
+| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Access tokens, the MCP server, the CLI and the skill; setting up Antigravity |
 | [CHANGELOG.md](CHANGELOG.md) | Every change, by release |
 | [docs/releases/](docs/releases/) | Release notes |
 
 ## Limitations
 
 - **Sign-in is optional.** Without it (the default), anyone who can reach Studio's port
-  can use it and sees everything; keep it on a trusted network, or switch on sign-in with
-  Google ([docs/AUTH.md](docs/AUTH.md)). Agents authenticate with a shared token.
+  can use it and sees everything, and so can any web page opened by someone on that network;
+  keep it on a trusted network, or switch on sign-in with Google ([docs/AUTH.md](docs/AUTH.md)).
+- **Agent traffic is not encrypted.** Agents authenticate with a shared token, sent in the clear,
+  and prompts and images travel the same way: keep Studio's gRPC port and the agents on a network
+  you trust.
 - **Cloud enhancers send data out.** Off by default; switched on, the prompt and any
   reference images of a job that picks one go to that provider, under its terms.
 - Built and tested only on Intel Arc (XPU). Other accelerators would need changes in
@@ -282,6 +296,7 @@ reference/       Batch scripts that validated the pipeline on the hardware
 - Prometheus alert rules.
 - Wake-on-submit and lending cards to other GPU workloads.
 - Fast mode and live preview (docs/SPEC.md §8).
+- Claude (claude.ai) as an AI tool: sign-in with OAuth for its connectors (docs/INTEGRATIONS.md §6).
 
 ## License
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { LogOut } from 'lucide-react';
+import { LogOut, Plug } from 'lucide-react';
+import { navigate } from '../utils/router';
 import { signOut, type Account } from '../services/session';
 
 /** The signed-in account in the header: its picture, and a menu to sign out. */
@@ -58,6 +59,17 @@ export const AccountMenu: React.FC<{ account: Account }> = ({ account }) => {
             )}
             <div className="text-xs text-[#8c7169] dark:text-[#a09088] truncate">{account.email}</div>
           </div>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              navigate('/connections');
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[#58423a] dark:text-[#a09088] hover:bg-black/5 dark:hover:bg-white/10 hover:text-[#1c1c18] dark:hover:text-[#fcf9f2] transition-colors"
+          >
+            <Plug className="w-4 h-4" />
+            Connections
+          </button>
           <button
             role="menuitem"
             onClick={() => signOut()}

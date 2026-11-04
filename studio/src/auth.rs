@@ -9,6 +9,7 @@
 
 use crate::scheduler::AppState;
 use anyhow::{anyhow, bail, Context, Result};
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
@@ -19,10 +20,21 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{info, warn};
 
 pub const SESSION_COOKIE: &str = "aries_session";
+/// Ties a sign-in to the browser that started it: the callback must come with this.
+pub const LOGIN_COOKIE: &str = "aries_login";
+/// A demo guest's id (docs/DEMO.md). Its own cookie and table: never a session.
+pub const GUEST_COOKIE: &str = "aries_guest";
+/// How long a guest stays one before accepting the terms again. Not renewed by use.
+pub const GUEST_LIFE_S: u64 = 30 * 86400;
+/// Guest rows kept at most, the oldest going first: anyone can make them, so the table must not
+/// grow without limit, and refusing new ones would let someone close the demo. A guest who loses
+/// theirs clicks again.
+pub const MAX_GUESTS: u32 = 100_000;
 /// How long a sign-in may take between the redirect to the provider and the callback.
 pub const LOGIN_STATE_TTL_S: f64 = 600.0;
 /// How long a link from `aries-image-studio login-link` stays usable.
@@ -131,7 +143,7 @@ impl AuthConfig {
     /// The public URL this request came in on: the one whose `host[:port]` its
     /// `X-Forwarded-Host` or `Host` names, else the first. Only configured addresses are
     /// ever chosen, so a forged header can at worst pick another of them.
-    fn public_url(&self, headers: &HeaderMap) -> &str {
+    pub fn public_url(&self, headers: &HeaderMap) -> &str {
         let wanted: Vec<String> = [HeaderName::from_static("x-forwarded-host"), header::HOST]
             .iter()
             .filter_map(|h| headers.get(h)?.to_str().ok())
@@ -229,11 +241,25 @@ impl Auth {
     }
 }
 
+/// What a user sees. A visitor is its own case and not "no account", which sees everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// Sign-in is off.
+    Everyone,
+    Account(&'a str),
+    /// The images marked for the demo (docs/DEMO.md).
+    Demo,
+}
+
 /// Who is asking. With auth off there is one user who owns everything (`email: None`).
 #[derive(Debug, Clone)]
 pub struct User {
     pub email: Option<String>,
     pub is_owner: bool,
+    /// Came with an access token (the CLI, an AI tool), not a browser session.
+    pub via_token: bool,
+    /// A demo guest (docs/DEMO.md): no session, no token, read-only.
+    pub visitor: bool,
 }
 
 impl User {
@@ -241,11 +267,32 @@ impl User {
         Self {
             email: None,
             is_owner: true,
+            via_token: false,
+            visitor: false,
         }
     }
 
-    /// Whose things this user sees: `None` everything (auth off), else their own.
-    pub fn scope(&self) -> Option<&str> {
+    pub fn visitor() -> Self {
+        Self {
+            email: None,
+            is_owner: false,
+            via_token: false,
+            visitor: true,
+        }
+    }
+
+    /// Whose things this user sees.
+    pub fn scope(&self) -> Scope<'_> {
+        match (self.visitor, self.email.as_deref()) {
+            (true, _) => Scope::Demo,
+            (false, Some(email)) => Scope::Account(email),
+            (false, None) => Scope::Everyone,
+        }
+    }
+
+    /// The account that what this user makes belongs to: `None` with sign-in off. For writes,
+    /// which visitors never reach (demo.rs).
+    pub fn account(&self) -> Option<&str> {
         self.email.as_deref()
     }
 }
@@ -271,16 +318,30 @@ pub fn token_hash(token: &str) -> String {
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, SESSION_COOKIE)
+}
+
+fn guest_token(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, GUEST_COOKIE)
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|c| c.trim().split_once('='))
-        .find(|(k, _)| *k == SESSION_COOKIE)
+        .find(|(k, _)| *k == name)
         .map(|(_, v)| v.to_string())
         .filter(|v| !v.is_empty())
 }
+
+/// The database could not say whether a session exists. Not the same as there being none: the
+/// cookie stays, and the request can be tried again.
+struct SessionUnknown;
+
+const SESSION_UNKNOWN: &str = "could not check the session: try again";
 
 /// The browser's session, if its address is still on the allowlist, its expiry moved
 /// forward when due: one in use does not run out, so a device signed in while online keeps
@@ -289,14 +350,23 @@ async fn current_session(
     state: &AppState,
     auth: &Auth,
     headers: &HeaderMap,
-) -> Option<(Session, Option<HeaderValue>)> {
-    let token = session_token(headers)?;
+) -> Result<Option<(Session, Option<HeaderValue>)>, SessionUnknown> {
+    let Some(token) = session_token(headers) else {
+        return Ok(None);
+    };
     let hash = token_hash(&token);
-    let session = state.db.get_session(&hash).await.ok().flatten()?;
+    let session = match state.db.get_session(&hash).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            warn!(error = %e, "Could not look up a session");
+            return Err(SessionUnknown);
+        }
+    };
     // Taken off the allowlist since signing in: signed out, here and on every device.
     if !auth.config.allowed_emails.contains(&session.email) {
         let _ = state.db.delete_session(&hash).await;
-        return None;
+        return Ok(None);
     }
     let life_s = auth.config.session_days as u64 * 86400;
     let renewed = crate::db::now_s() + life_s as f64;
@@ -305,14 +375,47 @@ async fn current_session(
     {
         let cookie =
             HeaderValue::from_str(&session_cookie(&auth.config, headers, &token, life_s)).ok();
-        return Some((session, cookie));
+        return Ok(Some((session, cookie)));
     }
-    Some((session, None))
+    Ok(Some((session, None)))
+}
+
+/// The hash of this browser's guest id, if it has one still good: what visitors are counted by.
+async fn current_guest(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<String>, SessionUnknown> {
+    let Some(token) = guest_token(headers) else {
+        return Ok(None);
+    };
+    let hash = token_hash(&token);
+    match state.db.guest_exists(&hash).await {
+        Ok(true) => Ok(Some(hash)),
+        Ok(false) => Ok(None),
+        Err(e) => {
+            warn!(error = %e, "Could not look up a guest");
+            Err(SessionUnknown)
+        }
+    }
 }
 
 fn session_cookie(cfg: &AuthConfig, headers: &HeaderMap, token: &str, max_age_s: u64) -> String {
+    auth_cookie(cfg, headers, SESSION_COOKIE, token, max_age_s)
+}
+
+fn guest_cookie(cfg: &AuthConfig, headers: &HeaderMap, token: &str, max_age_s: u64) -> String {
+    auth_cookie(cfg, headers, GUEST_COOKIE, token, max_age_s)
+}
+
+fn auth_cookie(
+    cfg: &AuthConfig,
+    headers: &HeaderMap,
+    name: &str,
+    token: &str,
+    max_age_s: u64,
+) -> String {
     format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_s}{}",
+        "{name}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_s}{}",
         if cfg.secure_cookie(headers) {
             "; Secure"
         } else {
@@ -325,35 +428,163 @@ fn json_error(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
-/// Middleware on `/api/*`: puts the [`User`] on the request, or answers 401. Writes from
-/// another site's page are refused (SameSite=Lax already keeps the cookie off them).
+/// Access tokens (docs/INTEGRATIONS.md) start with this, so they are easy to spot in a
+/// leaked file and to tell from a session cookie.
+pub const API_TOKEN_PREFIX: &str = "aries_";
+/// A token's "last used" moves forward at most this often, so requests rarely write.
+const TOUCH_EVERY_S: f64 = 600.0;
+
+/// A new access token: the prefix and 256 random bits.
+pub fn new_api_token() -> String {
+    format!("{API_TOKEN_PREFIX}{}", random_token())
+}
+
+/// `Authorization: Bearer <token>`, if the request has one.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = v.trim().split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|t| !t.is_empty())
+}
+
+/// The account of an access token, if the token exists and its account may still sign in.
+async fn token_user(state: &AppState, auth: &Auth, token: &str) -> Option<User> {
+    let (id, email, last_used) = state
+        .db
+        .get_api_token(&token_hash(token))
+        .await
+        .ok()
+        .flatten()?;
+    // Taken off the allowlist: its tokens stop working with its sessions.
+    if !auth.config.allowed_emails.contains(&email) {
+        return None;
+    }
+    if last_used.is_none_or(|t| t < crate::db::now_s() - TOUCH_EVERY_S) {
+        let _ = state.db.touch_api_token(&id).await;
+    }
+    Some(User {
+        is_owner: email == auth.config.owner,
+        email: Some(email),
+        via_token: true,
+        visitor: false,
+    })
+}
+
+fn from_another_site(auth: &Auth, headers: &HeaderMap) -> bool {
+    headers.get(header::ORIGIN).is_some_and(|origin| {
+        !origin
+            .to_str()
+            .is_ok_and(|o| auth.config.origins().iter().any(|a| a == o))
+    })
+}
+
+/// Who a request comes from: an access token when it carries one (a bad one is refused,
+/// never passed over for the cookie), else the browser's session, with its renewed cookie
+/// when it was renewed. `Err` is the answer to send instead.
+pub async fn request_user(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+) -> Result<(User, Option<HeaderValue>), Box<Response>> {
+    let Some(auth) = &state.auth else {
+        return Ok((User::everyone(), None));
+    };
+    if let Some(token) = bearer_token(headers) {
+        return match token_user(state, auth, token).await {
+            Some(user) => Ok((user, None)),
+            None => Err(Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "the access token is not valid (revoked?)",
+            ))),
+        };
+    }
+    // Writes from another site's page are refused (SameSite=Lax already keeps the cookie
+    // off them). Token requests carry no cookie, so they need no such check.
+    if !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        && from_another_site(auth, headers)
+    {
+        return Err(Box::new(json_error(
+            StatusCode::FORBIDDEN,
+            "cross-site request refused",
+        )));
+    }
+    let (session, renewed) = match current_session(state, auth, headers).await {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            return Err(Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "sign in first",
+            )))
+        }
+        Err(SessionUnknown) => {
+            return Err(Box::new(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                SESSION_UNKNOWN,
+            )))
+        }
+    };
+    let is_owner = session.email == auth.config.owner;
+    Ok((
+        User {
+            email: Some(session.email),
+            is_owner,
+            via_token: false,
+            visitor: false,
+        },
+        renewed,
+    ))
+}
+
+/// Middleware on `/api/*`: puts the [`User`] on the request, or answers 401.
 pub async fn require_user(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
 ) -> Response {
-    let Some(auth) = &state.auth else {
-        req.extensions_mut().insert(User::everyone());
-        return next.run(req).await;
-    };
-    if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
-        if let Some(origin) = req.headers().get(header::ORIGIN) {
-            let ok = origin
-                .to_str()
-                .is_ok_and(|o| auth.config.origins().iter().any(|a| a == o));
-            if !ok {
-                return json_error(StatusCode::FORBIDDEN, "cross-site request refused");
+    // A guest who accepted the terms is a visitor, unless a session or token says otherwise.
+    // Without an id it is like any request with nothing to identify it. A cookie that ended is
+    // told so and forgotten, so the app asks Studio who this is now.
+    let demo = state.config.demo.clone().filter(|_| state.auth.is_some());
+    if let Some(cfg) = &demo {
+        if bearer_token(req.headers()).is_none() && session_token(req.headers()).is_none() {
+            match current_guest(&state, req.headers()).await {
+                Ok(Some(guest)) => {
+                    return crate::demo::serve_visitor(state.clone(), cfg, &guest, req, next).await
+                }
+                Ok(None) => {}
+                Err(SessionUnknown) => {
+                    return json_error(StatusCode::SERVICE_UNAVAILABLE, SESSION_UNKNOWN)
+                }
             }
         }
     }
-    let Some((session, renewed)) = current_session(&state, auth, req.headers()).await else {
-        return json_error(StatusCode::UNAUTHORIZED, "sign in first");
+    let (user, renewed) = match request_user(&state, req.headers(), req.method()).await {
+        Ok(u) => u,
+        Err(res) => {
+            let mut res = *res;
+            if demo.is_some()
+                && res.status() == StatusCode::UNAUTHORIZED
+                && bearer_token(req.headers()).is_none()
+            {
+                if let Some(auth) = &state.auth {
+                    let ended = if session_token(req.headers()).is_some() {
+                        info!("A session ended: its cookie is cleared");
+                        Some(session_cookie(&auth.config, req.headers(), "", 0))
+                    } else {
+                        guest_token(req.headers())
+                            .map(|_| guest_cookie(&auth.config, req.headers(), "", 0))
+                    };
+                    if let Some(cookie) = ended.and_then(|c| HeaderValue::from_str(&c).ok()) {
+                        res.headers_mut().append(header::SET_COOKIE, cookie);
+                    }
+                }
+            }
+            return res;
+        }
     };
-    let is_owner = session.email == auth.config.owner;
-    req.extensions_mut().insert(User {
-        email: Some(session.email),
-        is_owner,
-    });
+    req.extensions_mut().insert(user);
     let mut res = next.run(req).await;
     if let Some(cookie) = renewed {
         res.headers_mut().append(header::SET_COOKIE, cookie);
@@ -361,12 +592,29 @@ pub async fn require_user(
     res
 }
 
-/// `GET /api/me`: who is signed in; `{auth: false}` when auth is off, 401 when signed out.
+/// `GET /api/me`: who is signed in (or whose the access token is); `{auth: false}` when auth is off, 401 when signed out.
 pub async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let Some(auth) = &state.auth else {
         return Json(json!({ "auth": false })).into_response();
     };
-    match current_session(&state, auth, &headers).await {
+    // An access token (the CLI checking its login): whose it is.
+    if bearer_token(&headers).is_some() {
+        return match request_user(&state, &headers, &Method::GET).await {
+            Ok((user, _)) => Json(json!({
+                "auth": true,
+                "email": user.email,
+                "owner": user.is_owner,
+                "token": true,
+            }))
+            .into_response(),
+            Err(res) => *res,
+        };
+    }
+    let session = match current_session(&state, auth, &headers).await {
+        Ok(session) => session,
+        Err(SessionUnknown) => return json_error(StatusCode::SERVICE_UNAVAILABLE, SESSION_UNKNOWN),
+    };
+    match session {
         Some((s, renewed)) => {
             let mut res = Json(json!({
                 "auth": true,
@@ -374,10 +622,49 @@ pub async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
                 "name": s.name,
                 "picture": s.picture,
                 "owner": s.email == auth.config.owner,
+                "demo_mode": state.config.demo.is_some(),
             }))
             .into_response();
             if let Some(cookie) = renewed {
                 res.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+            res
+        }
+        // In a Studio with a demo: a guest who accepted the terms, or someone who can choose to.
+        // A cookie that no longer means anything is forgotten.
+        None if state.config.demo.is_some() => {
+            let guest = match current_guest(&state, &headers).await {
+                Ok(guest) => guest,
+                Err(SessionUnknown) => {
+                    return json_error(StatusCode::SERVICE_UNAVAILABLE, SESSION_UNKNOWN)
+                }
+            };
+            let mut res = if guest.is_some() {
+                Json(json!({
+                    "auth": true,
+                    "visitor": true,
+                    "owner": false,
+                    "demo_mode": true,
+                }))
+                .into_response()
+            } else {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "auth": true, "demo_mode": true, "error": "sign in first" })),
+                )
+                    .into_response()
+            };
+            let mut forget = Vec::new();
+            if session_token(&headers).is_some() {
+                forget.push(session_cookie(&auth.config, &headers, "", 0));
+            }
+            if guest.is_none() && guest_token(&headers).is_some() {
+                forget.push(guest_cookie(&auth.config, &headers, "", 0));
+            }
+            for cookie in forget {
+                if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+                    res.headers_mut().append(header::SET_COOKIE, cookie);
+                }
             }
             res
         }
@@ -390,14 +677,95 @@ pub async fn me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 }
 
 #[derive(Debug, Deserialize)]
+pub struct GuestStart {
+    pub accept_terms: bool,
+}
+
+/// `POST /auth/guest`: the click on the sign-in screen that accepts the terms. A new id each time;
+/// Studio keeps its hash and when it was made, not the address or anything the guest looks at.
+pub async fn start_guest(
+    State(state): State<Arc<AppState>>,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<GuestStart>,
+) -> Response {
+    let (Some(auth), Some(cfg)) = (&state.auth, &state.config.demo) else {
+        return json_error(StatusCode::NOT_FOUND, "this Studio has no demo");
+    };
+    if from_another_site(auth, &headers) {
+        return json_error(StatusCode::FORBIDDEN, "cross-site request refused");
+    }
+    if !body.accept_terms {
+        return json_error(StatusCode::BAD_REQUEST, "the demo needs the terms accepted");
+    }
+    // Signed in meanwhile (a sign-in screen left open in another tab): no id, or it would take
+    // over when the session ends. The app asks who this is next, and finds the account.
+    match current_session(&state, auth, &headers).await {
+        Ok(Some((_, renewed))) => {
+            let mut res = StatusCode::NO_CONTENT.into_response();
+            if let Some(cookie) = renewed {
+                res.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+            end_guest(&state, auth, &headers, &mut res).await;
+            return res;
+        }
+        Ok(None) => {}
+        Err(SessionUnknown) => return json_error(StatusCode::SERVICE_UNAVAILABLE, SESSION_UNKNOWN),
+    }
+    let quotas = &state.visitor_quotas;
+    let now = crate::db::now_s();
+    if let Err(refusal) = quotas.admit(
+        cfg,
+        &headers,
+        peer.map(|p| p.0.ip()),
+        crate::demo::Kind::Start,
+        now as u64,
+    ) {
+        return *refusal;
+    }
+    let token = random_token();
+    if let Err(e) = state
+        .db
+        .create_guest(&token_hash(&token), now + GUEST_LIFE_S as f64, MAX_GUESTS)
+        .await
+    {
+        warn!(error = %e, "Could not start a guest");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "could not open the demo: try again",
+        );
+    }
+    if let Some(old) = guest_token(&headers) {
+        delete_guest(&state, &old).await;
+    }
+    quotas.note_guest();
+    (
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            guest_cookie(&auth.config, &headers, &token, GUEST_LIFE_S),
+        )],
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LoginQuery {
     pub next: Option<String>,
 }
 
-/// Only paths of this site: `/gallery`, not `//evil.example` or `https://…`.
+/// Only paths of this site: `/gallery`, not `//evil.example` or `https://…`. Browsers drop tabs and
+/// newlines from a URL, so with those `/<TAB>/evil.example` would be another site.
 fn safe_next(next: Option<&str>) -> String {
     match next {
-        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.contains('\\') => n.to_string(),
+        Some(n)
+            if n.starts_with('/')
+                && !n.starts_with("//")
+                && !n.contains('\\')
+                && !n.chars().any(char::is_control) =>
+        {
+            n.to_string()
+        }
         _ => "/".to_string(),
     }
 }
@@ -451,7 +819,20 @@ pub async fn login(
         ],
     );
     match url {
-        Ok(u) => Redirect::to(u.as_str()).into_response(),
+        Ok(u) => {
+            let mut res = Redirect::to(u.as_str()).into_response();
+            let cookie = auth_cookie(
+                &auth.config,
+                &headers,
+                LOGIN_COOKIE,
+                &login_state,
+                LOGIN_STATE_TTL_S as u64,
+            );
+            if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+                res.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+            res
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -533,6 +914,13 @@ pub async fn callback(
     let Some(auth) = &state.auth else {
         return Redirect::to("/").into_response();
     };
+    // Only the browser that started this sign-in may finish it: otherwise someone could send you
+    // a link that signs you in to their account, where what you make next is theirs to read. Before
+    // the state is used, so such a link can't spoil a sign-in in progress either.
+    if q.state.is_none() || cookie_value(&headers, LOGIN_COOKIE) != q.state {
+        info!("Sign-in refused: it was started in another browser");
+        return signin_error("expired");
+    }
     let Some(login) = (match q.state.as_deref() {
         Some(s) => state.db.take_login_state(s).await.ok().flatten(),
         None => None,
@@ -565,7 +953,7 @@ pub async fn callback(
         return signin_error("not_allowed");
     }
     info!(email = %email, "Signed in");
-    start_session(
+    let mut res = start_session(
         &state,
         auth,
         &headers,
@@ -574,7 +962,12 @@ pub async fn callback(
         &claims.picture,
         login.next,
     )
-    .await
+    .await;
+    let spent = auth_cookie(&auth.config, &headers, LOGIN_COOKIE, "", 0);
+    if let Ok(cookie) = HeaderValue::from_str(&spent) {
+        res.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+    res
 }
 
 /// Creates a session for `email` and sends the browser on to `next` with its cookie.
@@ -602,7 +995,7 @@ async fn start_session(
     {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
-    (
+    let mut res = (
         StatusCode::FOUND,
         [
             (header::LOCATION, next),
@@ -612,7 +1005,29 @@ async fn start_session(
             ),
         ],
     )
-        .into_response()
+        .into_response();
+    end_guest(state, auth, headers, &mut res).await;
+    res
+}
+
+/// Signed in or signed out, this browser is no longer a guest: when the session ends it comes
+/// back to the sign-in screen, not to the demo.
+async fn end_guest(state: &AppState, auth: &Auth, headers: &HeaderMap, res: &mut Response) {
+    let Some(token) = guest_token(headers) else {
+        return;
+    };
+    delete_guest(state, &token).await;
+    if let Ok(cookie) = HeaderValue::from_str(&guest_cookie(&auth.config, headers, "", 0)) {
+        res.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+}
+
+/// The browser forgets the id either way, so a failure is only for the log: the row stays until
+/// the id would have run out, and /privacy says it goes when the id ends.
+async fn delete_guest(state: &AppState, token: &str) {
+    if let Err(e) = state.db.delete_guest(&token_hash(token)).await {
+        warn!(error = %e, "Could not delete a guest id that ended");
+    }
 }
 
 /// Makes a single-use sign-in link for `email` that skips the provider, for when it cannot
@@ -714,22 +1129,28 @@ async fn exchange_code(
     check_id_token(id_token, discovery, &auth.config, nonce)
 }
 
-/// `POST /auth/logout`: ends this browser's session.
+/// `POST /auth/logout`: ends this browser's session, or its visit as a guest.
 pub async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let Some(auth) = &state.auth else {
         return StatusCode::NO_CONTENT.into_response();
     };
+    // The cookie is sent with the answer, so another site's form could still sign you out.
+    if from_another_site(auth, &headers) {
+        return json_error(StatusCode::FORBIDDEN, "cross-site request refused");
+    }
     if let Some(token) = session_token(&headers) {
         let _ = state.db.delete_session(&token_hash(&token)).await;
     }
-    (
+    let mut res = (
         StatusCode::NO_CONTENT,
         [(
             header::SET_COOKIE,
             session_cookie(&auth.config, &headers, "", 0),
         )],
     )
-        .into_response()
+        .into_response();
+    end_guest(&state, auth, &headers, &mut res).await;
+    res
 }
 
 #[cfg(test)]
@@ -877,6 +1298,14 @@ mod tests {
         assert_eq!(safe_next(Some("//evil.example")), "/");
         assert_eq!(safe_next(Some("https://evil.example")), "/");
         assert_eq!(safe_next(Some("/\\evil.example")), "/");
+        for sneaky in [
+            "/\t/evil.example",
+            "/\n/evil.example",
+            "/\r/evil.example",
+            "/\x7f/x",
+        ] {
+            assert_eq!(safe_next(Some(sneaky)), "/", "{sneaky:?}");
+        }
         assert_eq!(safe_next(None), "/");
     }
 

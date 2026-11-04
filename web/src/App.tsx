@@ -24,12 +24,17 @@ import {
   setFavoriteApi,
   fetchPreferencesApi,
   savePreferencesApi,
+  setDemoApi,
+  fetchDemoUploadsApi,
+  fetchBatchImagesApi,
   type GalleryFacets,
   type JobQuery,
   type JobSubmission,
 } from './services/api';
 import { usePagedJobs } from './hooks/usePagedJobs';
 import type { Account } from './services/session';
+import { DemoBanner } from './components/DemoBanner';
+import { DemoShareDialog, type ShareRequest } from './components/DemoShareDialog';
 import {
   useRoute,
   navigate,
@@ -51,6 +56,7 @@ import { Timeline } from './components/Timeline';
 import { Gallery } from './components/Gallery';
 import { Viewer } from './components/Viewer';
 import { StatusPage } from './components/StatusPage';
+import { ConnectionsPage } from './components/ConnectionsPage';
 import { PageLoader } from './components/PageLoader';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { ConfirmDialog, type ConfirmRequest } from './components/ConfirmDialog';
@@ -58,7 +64,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 
 /** The timeline lists every job. */
 const TIMELINE_QUERY: JobQuery = {};
-const NO_FILTERS: GalleryFilters = { favorites: false, aspect: '', q: '', like: '' };
+const NO_FILTERS: GalleryFilters = { favorites: false, aspect: '', q: '', like: '', demo: false };
 
 /** The gallery's Studio query: an aspect label stands for its preset's exact size ratio. */
 function galleryQuery(f: GalleryFilters): JobQuery {
@@ -67,6 +73,7 @@ function galleryQuery(f: GalleryFilters): JobQuery {
   return {
     doneOnly: true,
     favorites: f.favorites || undefined,
+    demo: f.demo || undefined,
     q: f.q.trim() || undefined,
     like: f.like || undefined,
     ratio,
@@ -77,10 +84,13 @@ function galleryQuery(f: GalleryFilters): JobQuery {
 const fetchStatus = () => Promise.all([fetchWorkerHealth(), fetchCapabilitiesApi()]);
 
 const sameFilters = (a: GalleryFilters, b: GalleryFilters) =>
-  a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q && a.like === b.like;
+  a.favorites === b.favorites && a.aspect === b.aspect && a.q === b.q && a.like === b.like && a.demo === b.demo;
 
-/** `account`: who is signed in; null when Studio runs without sign-in. */
-export function App({ account }: { account: Account | null }) {
+/**
+ * `account`: who is signed in; null when Studio runs without sign-in, or for a demo visitor
+ * (`visitor`), who sees what the owner marked and has no way to change anything.
+ */
+export function App({ account, visitor = false }: { account: Account | null; visitor?: boolean }) {
   // Everything shown comes from Studio: jobs (with images, favorites and UI metadata) and
   // preferences. Nothing is kept in browser storage.
   const route = useRoute();
@@ -102,7 +112,11 @@ export function App({ account }: { account: Account | null }) {
   if (route.name === 'gallery' && (!galleryFilters || !sameFilters(galleryFilters, route.filters))) {
     setGalleryFilters(route.filters);
   }
-  const galleryJobQuery = useMemo(() => (galleryFilters ? galleryQuery(galleryFilters) : null), [galleryFilters]);
+  // A visitor has no favorites, whatever a shared link asks for.
+  const galleryJobQuery = useMemo(
+    () => (galleryFilters ? galleryQuery(visitor ? { ...galleryFilters, favorites: false } : galleryFilters) : null),
+    [galleryFilters, visitor],
+  );
   const galleryLink = galleryHref(galleryFilters || NO_FILTERS);
 
   // Job lists, a page at a time (infinite scroll). The timeline's first page also gives
@@ -146,7 +160,7 @@ export function App({ account }: { account: Account | null }) {
   const [composerSource, setComposerSource] = useState<ComposerSource | null>(null);
   // Reference images attached in the composer, in prompt order (docs/REFERENCE_IMAGES.md).
   const [references, setReferences] = useState<ComposerReference[]>([]);
-  const maxReferences = capabilities?.max_references_ever ?? 0;
+  const maxReferences = visitor ? 0 : (capabilities?.max_references_ever ?? 0);
 
   // Preferences: load once from Studio, then save each change (debounced). Nothing is
   // saved before the load, so defaults never overwrite what Studio has.
@@ -170,10 +184,10 @@ export function App({ account }: { account: Account | null }) {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', preferences.theme === 'dark');
-    if (!preferencesLoaded) return;
+    if (!preferencesLoaded || visitor) return; // A visitor's last for the visit.
     const timer = setTimeout(() => savePreferencesApi(preferences), 300);
     return () => clearTimeout(timer);
-  }, [preferences, preferencesLoaded]);
+  }, [preferences, preferencesLoaded, visitor]);
 
   // Periodic Health & Capabilities Polling
   const applyStatus = useCallback(([health, caps]: Awaited<ReturnType<typeof fetchStatus>>) => {
@@ -403,6 +417,72 @@ export function App({ account }: { account: Account | null }) {
     }
   };
 
+  // Showing images in the demo (docs/DEMO.md §3): the owner's, and only after saying yes. Studio
+  // also refuses an image with uploaded images behind it unless its warning was accepted, so one
+  // that gained some since the look before asking comes back here.
+  const canShare = !!account?.owner && account.demoMode;
+  const [pendingShare, setPendingShare] = useState<ShareRequest | null>(null);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const closePendingShare = useCallback(() => setPendingShare(null), []);
+  const setDemo = async (gens: Generation[], demo: boolean, warned: readonly string[] = []) => {
+    setDemoError(null);
+    const blocked: Generation[] = [];
+    const uploaded = new Set<string>();
+    let failed = 0;
+    await Promise.all(
+      gens.map(async (gen) => {
+        const res = await setDemoApi(gen.id, demo, warned.includes(gen.id));
+        if (res.ok) updateGeneration(gen.id, { demo });
+        else if (res.uploaded) {
+          blocked.push(gen);
+          res.uploaded.forEach((sha) => uploaded.add(sha));
+        } else failed += 1;
+      }),
+    );
+    if (failed) {
+      const images = failed === 1 ? '1 image' : `${failed} images`;
+      setDemoError(
+        demo
+          ? `Couldn't share ${images}. ${failed === 1 ? "It isn't" : "They aren't"} public. Try again.`
+          : `Couldn't take ${images} out of the demo. ${failed === 1 ? 'It is' : 'They are'} still public. Try again.`,
+      );
+    }
+    if (blocked.length) {
+      setPendingShare({ images: blocked, warned: blocked.map((g) => g.id), uploaded: [...uploaded] });
+    }
+  };
+  const askToShare = async (images: Generation[]) => {
+    if (!images.length) return;
+    setDemoError(null);
+    const found = await Promise.all(images.map((g) => fetchDemoUploadsApi(g.id)));
+    // Without knowing what is behind them, no question could be the right one.
+    if (found.some((shas) => shas === null)) {
+      setDemoError("Couldn't check what's behind this. Nothing was shared. Try again.");
+      return;
+    }
+    setPendingShare({
+      images,
+      warned: images.filter((_, i) => found[i]?.length).map((g) => g.id),
+      uploaded: [...new Set(found.flatMap((shas) => shas ?? []))],
+    });
+  };
+  const handleToggleDemo = (gen: Generation) => {
+    if (gen.demo) setDemo([gen], false);
+    else askToShare([gen]);
+  };
+  // The whole group, also what the pages loaded so far don't have.
+  const handleToggleDemoTurn = async (batchId: string) => {
+    setDemoError(null);
+    const turn = await fetchBatchImagesApi(batchId);
+    if (!turn) {
+      setDemoError("Couldn't load the whole group. Nothing changed. Try again.");
+    } else if (turn.some((g) => g.demo)) {
+      setDemo(turn, false);
+    } else {
+      askToShare(turn);
+    }
+  };
+
   /**
    * Rerun and Vary: fill the composer from an image (prompt, Enhance, aspect, size, steps)
    * instead of submitting. Rerun locks the image's seed; Vary leaves the seed random. The
@@ -458,6 +538,11 @@ export function App({ account }: { account: Account | null }) {
     );
     if (route.name === 'image') leavePage();
   };
+  // A visitor has no account page to go to.
+  useEffect(() => {
+    if (visitor && route.name === 'connections') navigate('/', { replace: true });
+  }, [visitor, route.name]);
+
   const canUseAsReference = maxReferences > 0 && references.length < maxReferences;
 
   // Retry Failed Job (V3: re-queues failed task in place if intermediate artifacts still exist, else re-submits)
@@ -615,6 +700,8 @@ export function App({ account }: { account: Account | null }) {
         ? `Gallery · ${base}`
         : route.name === 'status'
         ? `System · ${base}`
+        : route.name === 'connections'
+        ? `Connections · ${base}`
         : route.name === 'image' && viewerGen
         ? `${viewerGen.prompt.slice(0, 60)}${viewerGen.prompt.length > 60 ? '…' : ''} · ${base}`
         : base;
@@ -632,6 +719,7 @@ export function App({ account }: { account: Account | null }) {
   const composer = (
     <Composer
       key="composer"
+      readOnly={visitor}
       preferences={preferences}
       onUpdatePreferences={(newPrefs) => setPreferences((p) => ({ ...p, ...newPrefs }))}
       onSubmit={handleSubmitTurn}
@@ -649,13 +737,32 @@ export function App({ account }: { account: Account | null }) {
         setPrefilledPrompt(null);
         setPrefilledAspect(null);
       }}
-      hidden={route.name === 'image' || route.name === 'status'}
+      hidden={route.name === 'image' || route.name === 'status' || route.name === 'connections'}
     />
   );
 
   const shortcuts = (
     <>
       <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <DemoShareDialog
+        request={pendingShare}
+        onCancel={closePendingShare}
+        onConfirm={() => {
+          if (pendingShare) setDemo(pendingShare.images, true, pendingShare.warned);
+          setPendingShare(null);
+        }}
+      />
+      {demoError && (
+        <div
+          role="alert"
+          className="fixed top-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:w-96 sm:-translate-x-1/2 z-[70] flex items-start gap-3 rounded-xl bg-rose-600 text-white text-sm px-4 py-3 shadow-2xl"
+        >
+          <span className="flex-1">{demoError}</span>
+          <button onClick={() => setDemoError(null)} className="font-semibold underline underline-offset-2">
+            Dismiss
+          </button>
+        </div>
+      )}
       <ConfirmDialog
         request={pendingDelete}
         onConfirm={() => {
@@ -679,12 +786,13 @@ export function App({ account }: { account: Account | null }) {
             onNext={() => stepViewer(1)}
             hasPrev={viewerIndex > 0}
             hasNext={viewerIndex >= 0 && viewerIndex < viewerImages.length - 1}
-            onToggleFavorite={handleToggleFavorite}
+            onToggleFavorite={visitor ? undefined : handleToggleFavorite}
+            onToggleDemo={canShare ? handleToggleDemo : undefined}
             onVary={handleVary}
             onRerun={handleRerun}
             onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
             // After the delete the viewer has nothing left to show: back to the list.
-            onDelete={(id) => handleDeleteGeneration(id, () => leavePage())}
+            onDelete={visitor ? undefined : (id) => handleDeleteGeneration(id, () => leavePage())}
           />
         ) : viewerMissing || (viewerGen && !viewerGen.imageUrl) ? (
           <div className="min-h-dvh flex flex-col items-center justify-center gap-4 p-8 text-center">
@@ -723,29 +831,35 @@ export function App({ account }: { account: Account | null }) {
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         account={account}
       />
+      {visitor && <DemoBanner />}
 
       {/* Main Content Area */}
-      <main className={`flex-1 flex flex-col ${route.name === 'status' ? 'pb-8' : 'pb-24'}`}>
+      <main className={`flex-1 flex flex-col ${route.name === 'status' || route.name === 'connections' ? 'pb-8' : 'pb-24'}`}>
         <ErrorBoundary fallbackTitle="Page rendering error">
-          {route.name === 'status' ? (
+          {route.name === 'connections' && visitor ? (
+            <PageLoader />
+          ) : route.name === 'connections' ? (
+            <ConnectionsPage onClose={() => leavePage()} signIn={!!account} />
+          ) : route.name === 'status' ? (
             <StatusPage
               onClose={() => leavePage()}
               health={workerHealth}
               onRefresh={refreshStatus}
-              canControl={account?.owner ?? true}
+              canControl={!visitor && (account?.owner ?? true)}
             />
           ) : route.name === 'timeline' ? (
             <Timeline
               generations={timeline.items}
               onOpenLightbox={openViewer}
-              onToggleFavorite={handleToggleFavorite}
+              onToggleFavorite={visitor ? undefined : handleToggleFavorite}
+              onToggleDemoTurn={canShare ? handleToggleDemoTurn : undefined}
               onVary={handleVary}
               onRetry={handleRetry}
               onRerun={handleRerun}
               onCancel={handleCancelJob}
               onSelectPrompt={handleSelectSamplePrompt}
-              onDelete={handleDeleteGeneration}
-              onDeleteTurn={handleDeleteTurn}
+              onDelete={visitor ? undefined : handleDeleteGeneration}
+              onDeleteTurn={visitor ? undefined : handleDeleteTurn}
               onUseAsReference={canUseAsReference ? handleUseAsReference : undefined}
               loading={!timeline.loaded}
               hasMore={timeline.hasMore}
@@ -755,12 +869,13 @@ export function App({ account }: { account: Account | null }) {
           ) : (
             <Gallery
               generations={gallery.items}
-              filters={route.filters}
+              filters={visitor ? { ...route.filters, favorites: false } : route.filters}
               onFiltersChange={onGalleryFilters}
               facets={facets}
-              onToggleFavorite={handleToggleFavorite}
+              onToggleFavorite={visitor ? undefined : handleToggleFavorite}
+              onToggleDemo={canShare ? handleToggleDemo : undefined}
               onVary={handleVary}
-              onDelete={handleDeleteGeneration}
+              onDelete={visitor ? undefined : handleDeleteGeneration}
               loading={!gallery.loaded}
               hasMore={gallery.hasMore}
               loadingMore={gallery.loadingMore}

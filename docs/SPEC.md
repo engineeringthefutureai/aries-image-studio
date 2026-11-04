@@ -143,7 +143,10 @@ The job API in ARCHITECTURE_V3.md §8: submit and page jobs (`/api/jobs`, filter
 gallery), poll changes (`?changed_since=`), images and thumbnails, reference uploads,
 preferences, system state and capabilities, operator controls, and `/metrics`. A batch of
 N images is N jobs sharing a turn id in their `meta`. With sign-in on (AUTH.md), every
-`/api/*` route but `/api/me` needs a session and answers for that account only.
+`/api/*` route but `/api/me` needs a session and answers for that account only. The CLI and
+AI tools use the same API with an access token, and Studio's MCP server (`/mcp`) for AI tools
+(INTEGRATIONS.md). With `ARIES_DEMO`, people without an account can open a guest demo from the
+sign-in screen, accepting the terms, and browse the images the owner marks, read-only (DEMO.md).
 
 ---
 

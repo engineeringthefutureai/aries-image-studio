@@ -9,6 +9,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Globe,
   Heart,
   Download,
   Dices,
@@ -34,7 +35,10 @@ interface ViewerProps {
   onNext?: () => void;
   hasPrev?: boolean;
   hasNext?: boolean;
-  onToggleFavorite: (id: string) => void;
+  /** Absent for a demo visitor. */
+  onToggleFavorite?: (id: string) => void;
+  /** Show this image in the demo or stop (the owner). */
+  onToggleDemo?: (generation: Generation) => void;
   /** Fill the composer from this image with a new (random) seed. */
   onVary: (generation: Generation) => void;
   /** Fill the composer from this image with its seed locked. */
@@ -57,6 +61,7 @@ export const Viewer: React.FC<ViewerProps> = ({
   hasPrev = false,
   hasNext = false,
   onToggleFavorite,
+  onToggleDemo,
   onVary,
   onRerun,
   onUseAsReference,
@@ -109,7 +114,7 @@ export const Viewer: React.FC<ViewerProps> = ({
       } else if (e.key === 'ArrowRight' && !zoomedIn && hasNext && onNext) {
         onNext();
       } else if (e.key === 'f' || e.key === 'F') {
-        onToggleFavorite(generation.id);
+        onToggleFavorite?.(generation.id);
       }
     },
     [generation, onClose, onPrev, onNext, hasPrev, hasNext, onToggleFavorite, zoomedIn]
@@ -128,7 +133,7 @@ export const Viewer: React.FC<ViewerProps> = ({
     setTimeout(() => setCopiedPrompt(false), 2000);
   };
 
-  const moreLikeThis = galleryHref({ favorites: false, aspect: '', q: '', like: generation.id });
+  const moreLikeThis = galleryHref({ favorites: false, aspect: '', q: '', like: generation.id, demo: false });
   const timings = generation.timings;
   const genSeconds = generationSeconds(timings);
   const waitSeconds = queueSeconds(timings);
@@ -263,17 +268,33 @@ export const Viewer: React.FC<ViewerProps> = ({
           </h3>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              onClick={() => onToggleFavorite(generation.id)}
-              className={`p-2 rounded-lg transition-colors ${
-                generation.favorite
-                  ? 'bg-rose-500 text-white'
-                  : 'bg-white/10 hover:bg-white/20 text-white/80 hover:text-white'
-              }`}
-              title="Toggle favorite (F)"
-            >
-              <Heart className={`w-4 h-4 ${generation.favorite ? 'fill-current' : ''}`} />
-            </button>
+            {onToggleFavorite && (
+              <button
+                onClick={() => onToggleFavorite(generation.id)}
+                className={`p-2 rounded-lg transition-colors ${
+                  generation.favorite
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-white/10 hover:bg-white/20 text-white/80 hover:text-white'
+                }`}
+                title="Toggle favorite (F)"
+              >
+                <Heart className={`w-4 h-4 ${generation.favorite ? 'fill-current' : ''}`} />
+              </button>
+            )}
+            {onToggleDemo && (
+              <button
+                onClick={() => onToggleDemo(generation)}
+                className={`p-2 rounded-lg transition-colors ${
+                  generation.demo
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-white/10 hover:bg-white/20 text-white/80 hover:text-white'
+                }`}
+                title={generation.demo ? 'Shown publicly in the demo: stop showing it' : 'Show publicly in the demo'}
+                aria-pressed={!!generation.demo}
+              >
+                <Globe className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={handleCopyLink}
               className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-colors"
@@ -536,7 +557,7 @@ export const Viewer: React.FC<ViewerProps> = ({
                         </span>
                         <span>
                           {prov.agent}/{prov.executor}{' '}
-                          <span className="text-white/50">({prov.backend_kind})</span>
+                          {prov.backend_kind && <span className="text-white/50">({prov.backend_kind})</span>}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-white/50">

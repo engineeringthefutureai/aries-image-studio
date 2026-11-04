@@ -425,14 +425,18 @@ the viewer shows the 1024 px one until the PNG has loaded) and writes favorites 
 back.
 
 **Sign-in (AUTH.md), off unless configured.** With it on, every `/api/*` route below but
-`/api/me` needs a session cookie (401 without) and answers for that account only:
+`/api/me` needs a session cookie or an access token (`Authorization: Bearer`, INTEGRATIONS.md;
+401 without) and answers for that account only:
 someone else's job, image or upload is 404, a submit reusing someone else's id is 409, and
 the operator controls are the owner's (403 for others). Writes from another origin are
 refused. Without it, the API is open: keep the backend on a trusted network.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/me` | `{auth: false}` (sign-in off) · `{auth: true, email, name, picture, owner}` · 401 signed out |
+| `GET /api/me` | `{auth: false}` (sign-in off) · `{auth: true, email, name, picture, owner}` · with a token `{auth: true, email, owner, token: true}` · 401 signed out |
+| `GET /api/tokens` · `POST /api/tokens {name}` · `DELETE /api/tokens/{id}` | the account's access tokens for the CLI and AI tools (INTEGRATIONS.md §1): list (no tokens, only names and dates) · make one (shown once) · revoke. From a browser session only |
+| `PATCH /api/jobs/{id} {demo, accept_reference_risk}` · `GET /api/jobs/{id}/uploads` · `GET /api/jobs?demo=true` · `GET /api/jobs?batch=` | show an image in the read-only demo or stop; what it shows (DEMO.md §3). The owner, in a browser |
+| `POST /mcp` | MCP server for AI tools (INTEGRATIONS.md §2): JSON-RPC over Streamable HTTP, one JSON response per request, no sessions; with sign-in on, needs a token |
 | `GET /auth/login?next=` · `GET /auth/callback` · `POST /auth/logout` | OpenID Connect sign-in with PKCE and a nonce; the session cookie `aries_session` (renewed while used); sign out |
 | `GET /auth/link?token=` | Single-use sign-in link from `aries-image-studio login-link <email>`, for when Google cannot be reached (AUTH.md §2) |
 | `GET /healthz` | `ok`, always open (probes) |

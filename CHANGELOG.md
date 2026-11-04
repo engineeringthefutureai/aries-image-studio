@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.8.0
+
+- **CLI and AI tools** (docs/INTEGRATIONS.md).
+  - **Access tokens**: a **Connections** page (account menu) makes and revokes tokens that
+    let a tool act as the account; each is shown once, Studio keeps only its hash, and the
+    page shows when it was last used. Any `/api/*` route takes one
+    (`Authorization: Bearer`).
+  - **MCP server** at `/mcp`, for AI tools such as Antigravity: `generate_images`,
+    `get_jobs` (waits for jobs and returns the finished images as pictures),
+    `find_images` (search and more like this), `view_image`, `set_favorite`,
+    `cancel_jobs`, `studio_status`.
+  - **`aries` CLI** (`cli/aries.py`, one Python file, no dependencies): make images and
+    save the PNGs, wait, show, download, search, upload reference images, favorite,
+    cancel, status.
+  - **Skill** (`skills/aries-studio-mcp`): how an AI tool uses the MCP tools: picking sizes and
+    aspect ratios, waiting for jobs, and showing the results with their Studio links.
+  - New routes: `GET/POST /api/tokens`, `DELETE /api/tokens/{id}`, `POST /mcp`. With a
+    token, `GET /api/me` says whose it is.
+- **Read-only demo** (docs/DEMO.md): with `ARIES_DEMO=1`, the sign-in screen offers a guest demo.
+  A click accepts the terms, gives the browser a new random id, and opens the images the owner
+  marks, with their prompts and references, and a reduced status page. Nothing can be changed,
+  per-IP quotas apply, and what visitors are sent leaves out hosts, favorites and image metadata.
+  The owner marks images and groups with a globe button, confirming each time, and reviews them
+  with an **In demo** filter; an image made from uploaded images needs an explicit warning accepted
+  instead. `/privacy` and `/terms` describe the demo when it is on. `/metrics` counts unique
+  visitors by that id, requests and refusals, and the Grafana dashboard has a **Public demo** row.
+- **Link previews and search** (docs/SEO.md): shared links show a card with a collage of generated
+  images, using the addresses in `ARIES_PUBLIC_URL`. With a demo, `/robots.txt` and `/sitemap.xml`
+  list the public pages; without one, Studio asks not to be crawled.
+- **Security fixes.**
+  - Only the browser that started a sign-in can finish it. A link holding someone else's sign-in
+    could put another invited person in that account, where what they made next was readable.
+  - The address to return to after signing in could lead to another site, with a tab in it.
+  - Another site's page can no longer sign you out.
+
 ## 0.7.0
 
 - **Search by what's in the image** (docs/SEARCH.md). The gallery's search finds images by

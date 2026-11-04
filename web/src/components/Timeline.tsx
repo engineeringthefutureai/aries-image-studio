@@ -11,6 +11,7 @@ import { formatDuration, generationSeconds, queueSeconds } from '../utils/timing
 import { ReferenceStrip } from './ReferenceStrip';
 import { modelLabel } from '../utils/enhancers';
 import {
+  Globe,
   Heart,
   Dices,
   Maximize2,
@@ -73,7 +74,10 @@ const tileSizes = (ratio: number) =>
 interface TimelineProps {
   generations: Generation[];
   onOpenLightbox: (generation: Generation) => void;
-  onToggleFavorite: (id: string) => void;
+  /** Absent for a demo visitor. */
+  onToggleFavorite?: (id: string) => void;
+  /** Show every image of this turn in the demo, or stop (the owner). */
+  onToggleDemoTurn?: (batchId: string) => void;
   /** Fill the composer from an image with a new (random) seed. */
   onVary: (generation: Generation) => void;
   /** Retry a failed or cancelled job in place. */
@@ -101,6 +105,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   generations,
   onOpenLightbox,
   onToggleFavorite,
+  onToggleDemoTurn,
   onVary,
   onRetry,
   onRerun,
@@ -298,7 +303,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     isSelected={gen.id === selectedGen.id}
                     onSelect={() => select(gen)}
                     onOpenLightbox={() => onOpenLightbox(gen)}
-                    onToggleFavorite={() => onToggleFavorite(gen.id)}
+                    onToggleFavorite={onToggleFavorite ? () => onToggleFavorite(gen.id) : undefined}
                     onVary={() => onVary(gen)}
                     onRetry={(enhancer) => onRetry(gen, enhancer)}
                     onCancel={() => onCancel(gen.id)}
@@ -397,6 +402,24 @@ export const Timeline: React.FC<TimelineProps> = ({
                         <Copy className="w-3.5 h-3.5" />
                       )}
                     </button>
+                    {onToggleDemoTurn && turn.some((g) => g.status === 'done' && g.imageUrl) && (
+                      <button
+                        onClick={() => onToggleDemoTurn(primary.batchId)}
+                        className={`p-1 rounded-lg transition-colors ${
+                          turn.some((g) => g.demo)
+                            ? 'text-sky-600 dark:text-sky-400 bg-sky-500/10'
+                            : 'hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169]'
+                        }`}
+                        title={
+                          turn.some((g) => g.demo)
+                            ? 'Shown publicly in the demo: stop showing this group'
+                            : 'Show this group publicly in the demo'
+                        }
+                        aria-pressed={turn.some((g) => g.demo)}
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {onDeleteTurn && (
                       <button
                         onClick={() => onDeleteTurn(primary.batchId)}
@@ -554,17 +577,19 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                 {selectedGen.status === 'done' && selectedGen.imageUrl && (
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => onToggleFavorite(selectedGen.id)}
-                      className={`p-1.5 rounded-md transition-colors ${
-                        selectedGen.favorite
-                          ? 'text-rose-500 bg-rose-500/10'
-                          : 'hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169]'
-                      }`}
-                      title="Favorite"
-                    >
-                      <Heart className={`w-3.5 h-3.5 ${selectedGen.favorite ? 'fill-current' : ''}`} />
-                    </button>
+                    {onToggleFavorite && (
+                      <button
+                        onClick={() => onToggleFavorite(selectedGen.id)}
+                        className={`p-1.5 rounded-md transition-colors ${
+                          selectedGen.favorite
+                            ? 'text-rose-500 bg-rose-500/10'
+                            : 'hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169]'
+                        }`}
+                        title="Favorite"
+                      >
+                        <Heart className={`w-3.5 h-3.5 ${selectedGen.favorite ? 'fill-current' : ''}`} />
+                      </button>
+                    )}
                     <button
                       onClick={() => onOpenLightbox(selectedGen)}
                       className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-[#8c7169] transition-colors"
@@ -597,7 +622,7 @@ interface TileCardProps {
   isSelected?: boolean;
   onSelect?: () => void;
   onOpenLightbox: () => void;
-  onToggleFavorite: () => void;
+  onToggleFavorite?: () => void;
   onVary: () => void;
   onRetry: (enhancer?: string) => void;
   onCancel: () => void;
@@ -695,18 +720,20 @@ const TileCard: React.FC<TileCardProps> = ({
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleFavorite();
-              }}
-              className={`w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md transition-transform hover:scale-110 ml-auto ${
-                gen.favorite ? 'bg-rose-500 text-white' : 'bg-black/40 text-white hover:bg-black/60'
-              }`}
-              title="Favorite"
-            >
-              <Heart className={`w-4 h-4 ${gen.favorite ? 'fill-current' : ''}`} />
-            </button>
+            {onToggleFavorite && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite();
+                }}
+                className={`w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md transition-transform hover:scale-110 ml-auto ${
+                  gen.favorite ? 'bg-rose-500 text-white' : 'bg-black/40 text-white hover:bg-black/60'
+                }`}
+                title="Favorite"
+              >
+                <Heart className={`w-4 h-4 ${gen.favorite ? 'fill-current' : ''}`} />
+              </button>
+            )}
           </div>
 
           <div className="flex items-center justify-between text-white">

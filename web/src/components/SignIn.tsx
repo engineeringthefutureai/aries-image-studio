@@ -1,32 +1,36 @@
 import React, { useEffect, useState } from 'react';
+import { Globe } from 'lucide-react';
 import { Logo } from './Logo';
+import { useSignInError } from '../hooks/useSignInError';
 import { signInHref } from '../services/session';
 
-/** Why the last sign-in came back without a session (`?auth_error=` from Studio). */
-const ERRORS: Record<string, string> = {
-  not_allowed: "That Google account doesn't have access to this Studio.",
-  expired: 'The sign-in took too long. Try again.',
-  cancelled: 'Sign-in was cancelled.',
-  failed: "Sign-in didn't work. Try again.",
-};
+interface Props {
+  /** This Studio has a read-only demo that anyone can open. */
+  demo: boolean;
+  /** Accepts the terms and opens it; what went wrong, if it did not. */
+  onEnterDemo: () => Promise<string | null>;
+}
 
-/** Shown instead of the app while signed out. Google is the only way in. */
-export const SignIn: React.FC = () => {
-  const [error] = useState(() => {
-    const code = new URLSearchParams(window.location.search).get('auth_error');
-    return code ? (ERRORS[code] ?? ERRORS.failed) : null;
-  });
+/** Shown instead of the app while signed out. Google is the only way to an account; the demo, if
+ * this Studio has one, is a click away, and the click is what accepts the terms. */
+export const SignIn: React.FC<Props> = ({ demo, onEnterDemo }) => {
+  const signInError = useSignInError();
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const error = demoError ?? signInError;
+
+  const enterDemo = async () => {
+    setOpening(true);
+    setDemoError(null);
+    const problem = await onEnterDemo();
+    setDemoError(problem);
+    setOpening(false);
+  };
 
   useEffect(() => {
     // The page has no preferences yet: follow the system theme.
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     document.documentElement.classList.toggle('dark', dark);
-    // Drop ?auth_error= so a retry starts from a clean address.
-    const url = new URL(window.location.href);
-    if (url.searchParams.has('auth_error')) {
-      url.searchParams.delete('auth_error');
-      window.history.replaceState(null, '', url.pathname + url.search);
-    }
   }, []);
 
   return (
@@ -50,23 +54,35 @@ export const SignIn: React.FC = () => {
           <GoogleMark />
           Sign in with Google
         </a>
+        {demo && (
+          <button
+            type="button"
+            onClick={enterDemo}
+            disabled={opening}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium border border-[#d9d4ca] dark:border-[#3a3a36] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 transition-colors"
+          >
+            <Globe className="w-4 h-4" />
+            Open guest demo
+          </button>
+        )}
         <p className="mt-5 text-xs text-[#8c7169] dark:text-[#a09088]">
-          By signing in you agree to the{' '}
+          By {demo ? 'signing in or opening the demo' : 'signing in'} you agree to the{' '}
           <a href="/terms" className="underline hover:text-[#a53705]">terms</a> and the{' '}
           <a href="/privacy" className="underline hover:text-[#a53705]">privacy policy</a>.
         </p>
       </div>
-      <About />
+      <About demo={demo} />
     </div>
   );
 };
 
 /** What this is, under the card, for whoever lands here first; visible without a click. */
-const About: React.FC = () => (
+const About: React.FC<{ demo: boolean }> = ({ demo }) => (
   <p className="w-full max-w-md mt-6 mb-8 text-center text-[11px] leading-relaxed text-[#6b554d] dark:text-[#a09088]">
     Aries Image Studio is a private, self-hosted image generator, by invitation only. Images are
     made by open models on the host's own computers. Google sign-in only checks that you are
     invited; no Google API is used to make or edit images.
+    {demo && ' The guest demo is read-only: a few images the host chose, with no account.'}
   </p>
 );
 

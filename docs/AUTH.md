@@ -19,7 +19,8 @@ Status: **since 0.6.0**. Tests: `studio/tests/v3_backend_test.rs` (`test_sign_in
   everything made before sign-in was switched on, and is the only account that may lend,
   disable or enable cards. Everyone signed in sees the system page.
 - **For people you know.** Studio is meant for a few invited people, not the public: keep
-  the OAuth app in Testing (§3) and the allowlist short.
+  the OAuth app in Testing (§3) and the allowlist short. The one exception is the optional
+  read-only demo (DEMO.md), which shows anyone the images the owner marks.
 
 ## 2. How it works
 
@@ -27,12 +28,16 @@ Studio is the OpenID Connect client (`studio/src/auth.rs`); no proxy in front is
 
 1. **`GET /auth/login?next=/path`** looks up the provider's endpoints
    (`{issuer}/.well-known/openid-configuration`, fetched once), stores a random `state`,
-   `nonce` and PKCE verifier (table `login_states`, 10 minutes), and redirects to the
+   `nonce` and PKCE verifier (table `login_states`, 10 minutes), sets the cookie `aries_login` to the
+   same `state` (HttpOnly, SameSite=Lax), and redirects to the
    provider's sign-in page (`scope=openid email profile`, `prompt=select_account`). The
    redirect URI is `{address}/auth/callback`, for the address in `ARIES_PUBLIC_URL` that the
    request's `X-Forwarded-Host` or `Host` names (else the first), so a sign-in started on
    the intranet name comes back to it.
-2. The provider sends the browser back to **`GET /auth/callback?code&state`**. Studio
+2. The provider sends the browser back to **`GET /auth/callback?code&state`**. Studio first
+   requires `aries_login` to match `state`, so only the browser that started a sign-in can
+   finish it: a link holding someone else's code can't sign you in to their account (starting a
+   second sign-in in the same browser replaces the first, which then asks to try again). Then it
    takes the stored state (once), exchanges the code at the token endpoint with its client
    secret, the PKCE verifier and the same redirect URI (from the callback's own host), and
    checks the ID token: issuer, audience (our client ID), expiry and nonce. Its signature is
@@ -72,15 +77,20 @@ being able to run commands where Studio runs is the proof, and whoever can alrea
 the database. A link is a session in waiting: open it yourself rather than pasting it
 where previews might fetch it.
 
-Every `/api/*` route except `/api/me` needs a session (401 without). Writes (`POST`,
+Every `/api/*` route except `/api/me` needs a session (401 without; with `ARIES_DEMO`, a guest id
+from the sign-in screen makes a read-only visitor, DEMO.md), or an access token
+made on the Connections page for the CLI and AI tools (INTEGRATIONS.md §1), which acts as
+its account and stops with it when the address leaves the allowlist. Writes (`POST`,
 `PUT`, `PATCH`, `DELETE`) whose `Origin` is not one of `ARIES_PUBLIC_URL`'s addresses are
-refused (403); SameSite=Lax already keeps the cookie off them. Images and uploads are sent
+refused (403), as is `POST /auth/logout`; SameSite=Lax already keeps the cookie off them. Images and uploads are sent
 `Cache-Control: private` instead of `public`. Open as before: `/healthz` (for probes),
 `/metrics`, the agents' routes (`/agent/v1/*` and gRPC, with the agent token), the web
-app's files, `/auth/*`, and the privacy policy and terms (`/privacy`, `/terms`).
+app's files, `/auth/*`, the privacy policy and terms (`/privacy`, `/terms`), and `/robots.txt` and
+`/sitemap.xml` (SEO.md).
 
 **`GET /api/me`**: `{auth: false}` with sign-in off; `{auth: true, email, name, picture,
-owner}` signed in; 401 signed out. The web app asks it first and shows the sign-in screen
+owner, demo_mode}` signed in; `{auth: true, visitor: true, owner: false, demo_mode: true}` as a demo
+guest; 401 signed out, with `demo_mode: true` when the sign-in screen should offer the demo. The web app asks it first and shows the sign-in screen
 or the app; any later 401 from the API (the session expired) brings the sign-in screen
 back. Signed in, the header shows the account's picture with a menu to sign out.
 

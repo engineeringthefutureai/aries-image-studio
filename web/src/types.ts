@@ -273,6 +273,8 @@ export interface Generation {
   completedAt?: number;
   timings?: JobTimings;
   favorite?: boolean;
+  /** Shown to visitors of the read-only demo (docs/DEMO.md). */
+  demo?: boolean;
   card?: number;
   executor?: string;
   peakVram?: number;
@@ -417,6 +419,7 @@ export interface V3TaskRecord {
 
 export interface V3JobRecord {
   id: string;
+  demo?: boolean;
   status: string;
   prompt: string;
   enhanced_prompt?: string | null;

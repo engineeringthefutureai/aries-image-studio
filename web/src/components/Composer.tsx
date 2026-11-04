@@ -69,6 +69,8 @@ interface ComposerProps {
   maxReferences: number;
   /** On pages without a composer (the viewer): kept mounted, so the prompt stays, but not shown. */
   hidden?: boolean;
+  /** A demo visitor: everything can be tried but nothing can be sent. */
+  readOnly?: boolean;
 }
 
 function getAspectIconDims(ratioWidth: number, ratioHeight: number, maxSize = 15) {
@@ -269,6 +271,7 @@ const rowSummary = (row: ComposerRow) =>
     .join(' · ');
 
 export const Composer: React.FC<ComposerProps> = ({
+  readOnly = false,
   preferences,
   onUpdatePreferences,
   onSubmit,
@@ -449,7 +452,7 @@ export const Composer: React.FC<ComposerProps> = ({
   }, [expanded, inputRef]);
 
   const handleGenerate = () => {
-    if (!prompt.trim() || isSubmitting || overLimit || referencesPending) return;
+    if (readOnly || !prompt.trim() || isSubmitting || overLimit || referencesPending) return;
     // Without an image-aware enhancer Enhance is off for a send with references: the text
     // rewriter cannot see them and could rewrite away what the edit asks for.
     const jobs = buildJobs(preferences, sendSeeds(preferences)).map((j) =>
@@ -536,7 +539,9 @@ export const Composer: React.FC<ComposerProps> = ({
     `${main.steps} st`,
     `${totalImages} img`,
   ].join(' · ');
-  const sendTitle = referencesPending
+  const sendTitle = readOnly
+    ? 'This is a read-only demo: sign in to make images'
+    : referencesPending
     ? references.some((r) => r.status === 'failed')
       ? 'A reference image failed to upload: remove it to send'
       : 'Uploading reference images…'
@@ -698,7 +703,7 @@ export const Composer: React.FC<ComposerProps> = ({
             {/* Submit Button. Folded with Advanced on, it opens the composer first: nothing hidden is sent. */}
             <button
               onClick={!expanded && advanced ? expand : handleGenerate}
-              disabled={!prompt.trim() || isSubmitting || overLimit || referencesPending}
+              disabled={readOnly || !prompt.trim() || isSubmitting || overLimit || referencesPending}
               className={`w-9 h-9 rounded-full bg-[#a53705] text-white flex items-center justify-center hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30 transition-all shadow-md shrink-0 cursor-pointer ${
                 expanded ? 'mb-1' : ''
               }`}

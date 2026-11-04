@@ -152,6 +152,7 @@ export function jobToGeneration(v3: V3JobRecord): Generation {
     completedAt: v3.finished_at ? v3.finished_at * 1000 : undefined,
     timings,
     favorite: !!v3.favorite,
+    demo: !!v3.demo,
     executor: executorName,
     card: cardDigits ? Number(cardDigits[1]) : undefined,
     peakVram: peakVram || undefined,
@@ -219,6 +220,8 @@ export async function fetchWorkerHealth(): Promise<WorkerHealth> {
       }
       return { state, cards, agents, queues };
     }
+    // A demo visitor over their quota: nothing is wrong with the cards.
+    if (res.status === 429) return { state: 'busy' };
     return { state: 'error' };
   } catch {
     return { state: 'offline' };
@@ -273,6 +276,8 @@ export interface JobsPage {
 export interface JobQuery {
   doneOnly?: boolean;
   favorites?: boolean;
+  /** Only the images shown in the demo. */
+  demo?: boolean;
   /** Search: Studio ranks the images (best first) by what they show and their prompts' words. */
   q?: string;
   /** "More like this": images ranked by how alike they look to this job's. */
@@ -310,6 +315,7 @@ export function fetchJobsPageApi(query: JobQuery, limit: number, before?: string
   if (before) p.set('before', before);
   if (query.doneOnly) p.set('status', 'done');
   if (query.favorites) p.set('favorite', 'true');
+  if (query.demo) p.set('demo', 'true');
   if (query.q?.trim()) p.set('q', query.q.trim());
   if (query.like) p.set('like', query.like);
   if (query.ratio) p.set('aspect', query.ratio);
@@ -438,6 +444,58 @@ export async function setFavoriteApi(jobId: string, favorite: boolean): Promise<
   }
 }
 
+/**
+ * Show an image in the demo, or stop. `uploaded`: refused, because these uploaded images are
+ * behind it and the warning has not been accepted (docs/DEMO.md §3).
+ */
+export async function setDemoApi(
+  jobId: string,
+  demo: boolean,
+  acceptReferenceRisk = false,
+): Promise<{ ok: boolean; uploaded?: string[] }> {
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ demo, accept_reference_risk: acceptReferenceRisk }),
+    });
+    if (res.ok) return { ok: true };
+    const data = await res.json().catch(() => ({}));
+    return { ok: false, uploaded: data.uploaded_references };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Every finished image of one send, loaded or not; null: unknown. */
+export async function fetchBatchImagesApi(batchId: string): Promise<Generation[] | null> {
+  try {
+    const images: Generation[] = [];
+    let before: string | null = null;
+    do {
+      const p = new URLSearchParams({ limit: '200', status: 'done', batch: batchId });
+      if (before) p.set('before', before);
+      const page: JobsPage = await getJobs(p);
+      images.push(...page.jobs);
+      before = page.next;
+    } while (before);
+    return images;
+  } catch {
+    return null;
+  }
+}
+
+/** The uploaded images behind an image, to ask the right way before sharing it; null: unknown. */
+export async function fetchDemoUploadsApi(jobId: string): Promise<string[] | null> {
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/uploads`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()).uploaded_references;
+  } catch {
+    return null;
+  }
+}
+
 /** The UI's preferences, kept in Studio (`{}` until first saved). */
 export async function fetchPreferencesApi(): Promise<Partial<UserPreferences> | null> {
   try {
@@ -457,5 +515,49 @@ export async function savePreferencesApi(prefs: UserPreferences): Promise<void> 
     });
   } catch {
     // retried with the next change
+  }
+}
+
+/** An access token for the CLI and AI tools, as listed (the token itself is shown once). */
+export interface ApiToken {
+  id: string;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+/** The account's access tokens, newest first; `null` when Studio could not be asked. */
+export async function listTokensApi(): Promise<ApiToken[] | null> {
+  try {
+    const res = await fetch('/api/tokens', { cache: 'no-store' });
+    return res.ok ? (await res.json()).tokens : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A new access token: `token` is shown this once. */
+export async function createTokenApi(
+  name: string,
+): Promise<{ token: string; record: ApiToken } | { error: string }> {
+  try {
+    const res = await fetch('/api/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? body : { error: body.error || `Studio answered ${res.status}` };
+  } catch {
+    return { error: 'Studio could not be reached' };
+  }
+}
+
+export async function revokeTokenApi(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return res.ok || res.status === 404;
+  } catch {
+    return false;
   }
 }

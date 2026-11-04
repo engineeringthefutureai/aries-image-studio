@@ -56,7 +56,8 @@ App                                          URL
 ├── Timeline view (default)      — chat-shaped history + composer      /
 ├── Gallery view                 — grid of all images + filters        /gallery?fav=1&aspect=16:9&q=…&like=…
 ├── Image viewer (a page)        — full image + details + actions      /images/{id}
-└── System view (a page)         — agents, cards, queues               /status
+├── System view (a page)         — agents, cards, queues               /status
+└── Connections (a page)         — MCP address, access tokens, set-up  /connections
 ```
 
 Every screen is a page with its own URL, so any of them can be linked, bookmarked or
@@ -292,8 +293,23 @@ list it came from; opened from a link, to the timeline.
   It should read in two seconds, not look like an admin console. Numbers update live.
 - Theme toggle (light / dark) — **light by default**, not "follow system"
 - **Account** (sign-in on): the account's Google picture (or its initial); a menu with the
-  name, the email and **Sign out**. Lend / Disable / Enable on the status page are shown
-  only to the owner.
+  name, the email, **Connections** and **Sign out**. Lend / Disable / Enable on the status
+  page are shown only to the owner.
+- **Connections** (`/connections`, from the account menu): Studio's MCP address to copy;
+  the account's access tokens (name, created, last used, a bin to revoke, with a confirm)
+  and a form to make one, shown once in a highlighted box with a copy button; and the
+  set-up lines for the CLI and Antigravity with the address and a new token filled in.
+  Without sign-in the page says no token is needed (reached by its URL).
+- **Read-only demo** (DEMO.md): the sign-in screen adds **Open guest demo** under the Google button
+  and says that either accepts the terms and privacy policy; a failure shows in its alert. A visitor
+  sees a banner under the header ("Read-only demo", Privacy, Terms, **Leave demo**, **Sign in**, and
+  why a sign-in failed); no favorite, delete or card controls;
+  the composer with Send disabled. `/connections` goes to the timeline. For the owner, a globe
+  button (viewer, gallery tile, a turn's header) shows an image or a group in the demo after a
+  confirmation showing them and their references (**Cancel** has the focus; taking them out does not ask; a failure shows an error), a globe
+  badge marks them on gallery tiles, and an **In demo** gallery filter lists them (`?demo=1`).
+  Sharing an image with uploaded images behind it opens a warning instead: the uploads, the risks, a box
+  to tick before **Share publicly anyway** works; **Don't share** has the focus.
 
 ### 4.7 Empty, edge and error states (please design)
 

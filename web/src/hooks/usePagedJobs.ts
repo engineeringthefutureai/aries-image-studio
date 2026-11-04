@@ -15,6 +15,7 @@ const orderOf = (q: JobQuery) => (isRanked(q) ? null : newestFirst);
 export function matchesQuery(g: Generation, q: JobQuery): boolean {
   if (q.doneOnly && !(g.status === 'done' && g.imageUrl)) return false;
   if (q.favorites && !g.favorite) return false;
+  if (q.demo && !g.demo) return false;
   if (q.ratio) {
     const [w, h] = q.ratio.split(':').map(Number);
     if (!(w > 0 && h > 0) || Math.abs(g.params.width / g.params.height - w / h) >= 0.01) return false;

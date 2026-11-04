@@ -207,7 +207,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                       </div>
 
                       <div className="flex items-center gap-3 text-xs font-mono text-[#8c7169] dark:text-[#a09088]">
-                        <span>v{ag.agent_version}</span>
+                        {ag.agent_version && <span>v{ag.agent_version}</span>}
                         <span
                           className={
                             ag.scrape_stale

@@ -9,7 +9,9 @@ design in **docs/ARCHITECTURE.md**); measurements and failure modes in **docs/HA
 images in **docs/REFERENCE_IMAGES.md**, the image-aware enhancer in **docs/ENHANCER_I2I.md**,
 cloud prompt enhancers (Studio calls Anthropic / Gemini itself) in **docs/CLOUD_ENHANCERS.md**,
 sign-in with Google and per-account ownership in **docs/AUTH.md**, search (by what images
-show and their prompts' words, in Studio) in **docs/SEARCH.md**;
+show and their prompts' words, in Studio) in **docs/SEARCH.md**, access tokens, the MCP
+server, the `aries` CLI and the skill for AI tools in **docs/INTEGRATIONS.md**, the read-only
+demo for visitors in **docs/DEMO.md**, search engines and link previews in **docs/SEO.md**;
 changes by release in **CHANGELOG.md**.
 Treat them as the source of truth and flag disagreements instead of silently
 diverging. When behavior changes, update the doc in the same change.
@@ -32,19 +34,24 @@ backend/aries_worker/    Stage worker: one process = one stage (enhance | encode
                          writes .safetensors and PNG.
 backend/tests/           pytest; stage & agent tests mock torch/diffusers/transformers.
 web/                     Vite + React + TypeScript + Tailwind SPA.
+cli/aries.py             The aries CLI: one file, Python 3.9+ standard library only (its
+                         size tables copy web/src/types.ts; cli/test_aries.py checks).
+skills/aries-studio-mcp/ Skill for AI tools (Agent Skills SKILL.md): uses the MCP tools only.
 deploy/studio/           Docker Compose for Studio.
 deploy/aries/            Systemd unit for aries-agent + Docker Compose / Makefile.
 deploy/grafana/          Grafana dashboard (import the JSON; picks a Prometheus data source).
 docs/  mockups/  reference/
 ```
 
-## Current state (v0.7.0 — Architecture V3)
+## Current state (v0.8.0 — Architecture V3)
 
 - **Rust Backend (`studio/`)**: Serves the SPA and `/api/*` (`POST/GET /api/jobs`,
   `/api/images/{id}`, `/api/images/{id}/thumb`, `/api/gallery/facets`, `/api/uploads` (reference images),
   `/api/system`, `/api/capabilities`,
-  `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`, the public `/privacy` and `/terms`; with sign-in on, `/api/me`
-  and `/auth/{login,callback,link,logout}`, every `/api/*` route scoped to the signed-in account), runs the gRPC
+  `/api/executors/{id}/{lend,return,disable,enable}`, `/metrics`, the public `/privacy` and `/terms`, the MCP server
+  `/mcp`; with sign-in on, `/api/me`, `/api/tokens` and `/auth/{login,callback,link,logout}`, every `/api/*` route
+  scoped to the signed-in account or its access token, or, with `ARIES_DEMO`, to the marked
+  images for a guest who opened the demo (`POST /auth/guest`): a route visitors may use must be named in `demo::visitor_may`), runs the gRPC
   `AgentGateway` server, scrapes each online agent's `/metrics` every 1 s, and owns
   SQLite state and the content-addressed blob store.
 - **Thin Agent (`backend/aries_agent/`)**: Connects out to `AgentGateway`, declares
@@ -121,3 +128,4 @@ Full detail in docs/HARDWARE.md.
   - `cd studio && cargo fmt --check && cargo clippy --all-targets && cargo test`
   - `cd backend && ruff check && pytest`
   - `cd web && npm run build && npm run lint`
+  - `ruff check cli && python -m pytest cli` (from the repository root)

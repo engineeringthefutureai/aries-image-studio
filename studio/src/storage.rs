@@ -556,6 +556,45 @@ pub fn ascii_json(value: &serde_json::Value) -> Result<String> {
     Ok(out)
 }
 
+/// A PNG without its metadata (the text chunks and EXIF), the pixels untouched: what a demo
+/// visitor downloads, since the provenance chunk names where the image was made.
+pub fn strip_png_metadata(png_bytes: &[u8]) -> Result<Vec<u8>> {
+    if png_bytes.len() < 8 || png_bytes[0..8] != PNG_SIG {
+        bail!("invalid PNG signature");
+    }
+    let mut out = Vec::with_capacity(png_bytes.len());
+    out.extend_from_slice(&PNG_SIG);
+    let mut pos = 8usize;
+    while pos + 8 <= png_bytes.len() {
+        let len = u32::from_be_bytes(png_bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let total_chunk_len = 4 + 4 + len + 4;
+        if pos + total_chunk_len > png_bytes.len() {
+            bail!("corrupt PNG chunk at offset {pos}");
+        }
+        // The chunks that make the picture, named: anything else stays out, known or not.
+        if matches!(
+            &png_bytes[pos + 4..pos + 8],
+            b"IHDR"
+                | b"PLTE"
+                | b"IDAT"
+                | b"IEND"
+                | b"tRNS"
+                | b"gAMA"
+                | b"cHRM"
+                | b"sRGB"
+                | b"iCCP"
+                | b"cICP"
+                | b"sBIT"
+                | b"pHYs"
+                | b"bKGD"
+        ) {
+            out.extend_from_slice(&png_bytes[pos..pos + total_chunk_len]);
+        }
+        pos += total_chunk_len;
+    }
+    Ok(out)
+}
+
 /// Injects or replaces a `tEXt` chunk with `keyword` and `text` before the `IEND` chunk in a PNG.
 /// `tEXt` is Latin-1, so `text` must be ASCII (see `ascii_json`).
 pub fn inject_png_text_chunk(png_bytes: &[u8], keyword: &str, text: &str) -> Result<Vec<u8>> {
@@ -648,6 +687,28 @@ pub fn read_png_text_chunk(png_bytes: &[u8], keyword: &str) -> Result<Option<Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stripping_keeps_only_the_named_chunks() {
+        let chunk = |name: &[u8; 4]| {
+            let mut c = vec![0, 0, 0, 1];
+            c.extend_from_slice(name);
+            c.extend_from_slice(&[7, 0, 0, 0, 0]);
+            c
+        };
+        let mut png = PNG_SIG.to_vec();
+        for name in [
+            b"IHDR", b"tIME", b"caBX", b"tEXt", b"IDAT", b"xyZw", b"IEND",
+        ] {
+            png.extend(chunk(name));
+        }
+        let clean = strip_png_metadata(&png).unwrap();
+        let mut want = PNG_SIG.to_vec();
+        for name in [b"IHDR", b"IDAT", b"IEND"] {
+            want.extend(chunk(name));
+        }
+        assert_eq!(clean, want);
+    }
+
     use super::*;
 
     #[test]
@@ -669,5 +730,18 @@ mod tests {
         assert_eq!(parsed, meta);
 
         assert!(inject_png_text_chunk(&png, "k", "一").is_err());
+
+        let clean = strip_png_metadata(&tagged).unwrap();
+        assert_eq!(
+            read_png_text_chunk(&clean, "aries-image-studio").unwrap(),
+            None
+        );
+        assert_eq!(
+            image::load_from_memory(&clean)
+                .unwrap()
+                .to_rgba8()
+                .into_raw(),
+            image::load_from_memory(&png).unwrap().to_rgba8().into_raw()
+        );
     }
 }

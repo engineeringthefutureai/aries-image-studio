@@ -38,6 +38,8 @@ pub struct BackendConfig {
     /// Sign-in with Google (docs/AUTH.md): none unless configured, and then every
     /// `/api/*` request needs a session.
     pub auth: Option<AuthConfig>,
+    /// The read-only demo for visitors (docs/DEMO.md): only with sign-in on.
+    pub demo: Option<crate::demo::DemoConfig>,
     /// Who runs Studio, for the privacy policy and terms (`/privacy`, `/terms`).
     pub legal: LegalConfig,
 }
@@ -64,6 +66,7 @@ impl Default for BackendConfig {
             search_threads: 2,
             cloud: CloudConfig::default(),
             auth: None,
+            demo: None,
             legal: LegalConfig::default(),
         }
     }
@@ -149,6 +152,13 @@ impl BackendConfig {
         }
         cfg.cloud = CloudConfig::from_env();
         cfg.auth = AuthConfig::from_env()?;
+        cfg.demo = crate::demo::DemoConfig::from_env();
+        if cfg.demo.is_some() && cfg.auth.is_none() {
+            tracing::warn!(
+                "ARIES_DEMO is on but sign-in is off: everything is open, so there is no demo"
+            );
+            cfg.demo = None;
+        }
         cfg.legal = LegalConfig::from_env();
         Ok(cfg)
     }

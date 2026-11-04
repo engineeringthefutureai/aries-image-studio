@@ -1,4 +1,4 @@
-use crate::auth::{self, User};
+use crate::auth::{self, Scope, User};
 use crate::cloud::normalize_enhancer;
 use crate::config::bearer_matches;
 use crate::db::{
@@ -11,16 +11,18 @@ use crate::proto;
 use crate::scheduler::{
     check_submit_feasibility, compute_capabilities, encode_cache_key, tick, AppState,
 };
+use crate::seo;
 use crate::storage::{
-    is_sha256_hex, probe_upload_image, upload_thumb_key, validate_embeds_safetensors,
-    validate_enhanced_json, validate_latent_safetensors, validate_png_dimensions,
-    validate_reference_latents, THUMB_SIZES,
+    is_sha256_hex, probe_upload_image, strip_png_metadata, upload_thumb_key,
+    validate_embeds_safetensors, validate_enhanced_json, validate_latent_safetensors,
+    validate_png_dimensions, validate_reference_latents, THUMB_SIZES,
 };
+use crate::{demo, mcp, tokens};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{middleware, Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -30,7 +32,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 
 pub fn build_http_router(state: Arc<AppState>) -> Router {
     // The browser's API: a signed-in user on every request when sign-in is on (auth.rs).
@@ -40,6 +42,7 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
             "/api/jobs/:id",
             get(get_job).delete(delete_job).patch(patch_job),
         )
+        .route("/api/jobs/:id/uploads", get(get_job_uploads))
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
         .route("/api/gallery/facets", get(get_gallery_facets))
@@ -49,8 +52,8 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/uploads", post(upload_image))
         .route("/api/uploads/:sha", get(get_upload))
         .route("/api/uploads/:sha/thumb", get(get_upload_thumb))
-        .route("/api/system", get(get_system))
-        .route("/api/capabilities", get(get_capabilities))
+        .route("/api/system", get(system_route))
+        .route("/api/capabilities", get(capabilities_route))
         .route(
             "/api/preferences",
             get(get_preferences).put(put_preferences),
@@ -59,6 +62,11 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/api/executors/:id/return", post(return_executor))
         .route("/api/executors/:id/disable", post(disable_executor))
         .route("/api/executors/:id/enable", post(enable_executor))
+        .route(
+            "/api/tokens",
+            get(tokens::list_tokens).post(tokens::create_token),
+        )
+        .route("/api/tokens/:id", delete(tokens::delete_token))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_user,
@@ -76,10 +84,20 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
         .route("/privacy", get(legal::privacy))
         .route("/terms", get(legal::terms))
         .route("/api/me", get(auth::me))
+        // MCP for AI tools (docs/INTEGRATIONS.md): an access token, checked in the handler.
+        .route(
+            "/mcp",
+            post(mcp::mcp_post)
+                .get(mcp::mcp_other)
+                .delete(mcp::mcp_other),
+        )
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/link", get(auth::link))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/guest", post(auth::start_guest))
+        .route("/robots.txt", get(seo::robots))
+        .route("/sitemap.xml", get(seo::sitemap))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024));
     // Any origin may call an open Studio; one that signs in is same-origin only.
     if state.auth.is_none() {
@@ -91,17 +109,26 @@ pub fn build_http_router(state: Arc<AppState>) -> Router {
     if static_dir.exists() {
         // The web app's own paths (`/gallery`, `/images/{id}`, ...) get index.html with 200, so
         // shared links open; unknown API paths stay 404.
-        let serve =
-            ServeDir::new(static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
+        let serve = ServeDir::new(static_dir);
         api_router.fallback(move |req: axum::extract::Request| {
             let serve = serve.clone();
+            let state = state.clone();
             async move {
                 let path = req.uri().path();
-                if path.starts_with("/api/") || path.starts_with("/agent/") {
+                if path.starts_with("/api/") || path.starts_with("/agent/") || path == "/mcp" {
                     return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })))
                         .into_response();
                 }
+                let is_page = path == "/" || path == "/index.html";
+                let (method, headers) = (req.method().clone(), req.headers().clone());
+                let reads = matches!(method, axum::http::Method::GET | axum::http::Method::HEAD);
+                if is_page && reads {
+                    return seo::serve_index(&state, &headers).await;
+                }
                 match serve.oneshot(req).await {
+                    Ok(res) if res.status() == StatusCode::NOT_FOUND && reads => {
+                        seo::serve_index(&state, &headers).await
+                    }
                     Ok(res) => res.into_response(),
                     Err(never) => match never {},
                 }
@@ -130,6 +157,10 @@ pub struct ListJobsQuery {
     pub like: Option<String>,
     /// `w:h`: images of this aspect ratio.
     pub aspect: Option<String>,
+    /// One send's images: its `batch_id`, or the id of a job on its own.
+    pub batch: Option<String>,
+    /// Only the images marked for the demo (docs/DEMO.md).
+    pub demo: Option<bool>,
 }
 
 /// `POST /api/jobs/{id}/retry`, optional: retry with another enhancer (`builtin`, or a
@@ -139,9 +170,14 @@ pub struct RetryJobBody {
     pub enhancer: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct PatchJobBody {
     pub favorite: Option<bool>,
+    /// Show the image to demo visitors, or stop (the owner, in a browser: docs/DEMO.md).
+    pub demo: Option<bool>,
+    /// Marking an image with uploaded images behind it: the owner read the warning.
+    #[serde(default)]
+    pub accept_reference_risk: bool,
 }
 
 /// UI metadata and preferences are small JSON objects; anything bigger is a client bug.
@@ -170,9 +206,12 @@ pub struct SystemStageQueue {
 /// Whether `user` may see job `id`. `false` also when there is no such job: someone
 /// else's job is "not found", not "forbidden".
 async fn may_see_job(state: &AppState, user: &User, id: &str) -> bool {
-    match state.db.job_owner(id).await {
-        Ok(Some(owner)) => user.scope().is_none_or(|me| owner.as_deref() == Some(me)),
-        _ => false,
+    match user.scope() {
+        Scope::Demo => state.db.is_demo_job(id).await.unwrap_or(false),
+        Scope::Everyone => matches!(state.db.job_owner(id).await, Ok(Some(_))),
+        Scope::Account(me) => {
+            matches!(state.db.job_owner(id).await, Ok(Some(owner)) if owner.as_deref() == Some(me))
+        }
     }
 }
 
@@ -195,7 +234,7 @@ fn owner_only(user: &User) -> Option<Response> {
     })
 }
 
-async fn submit_job(
+pub(crate) async fn submit_job(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Json(mut input): Json<JobSubmitInput>,
@@ -265,7 +304,7 @@ async fn submit_job(
 
     match state
         .db
-        .create_job(&input, seed, &references, user.scope())
+        .create_job(&input, seed, &references, user.account())
         .await
     {
         Ok(job) => {
@@ -297,7 +336,7 @@ async fn resolve_references(
     let mut out = Vec::with_capacity(refs.len());
     for (i, r) in refs.iter().enumerate() {
         match (&r.upload, &r.image) {
-            (Some(sha), None) => match state.db.get_upload_for(sha, user.scope()).await {
+            (Some(sha), None) => match state.db.get_upload_for(sha, user.account()).await {
                 Ok(Some(up)) => out.push(up.sha256),
                 Ok(None) => return Err(format!("reference {} not found; attach it again", i + 1)),
                 Err(e) => return Err(e.to_string()),
@@ -326,7 +365,7 @@ async fn resolve_references(
                 };
                 match state.db.insert_upload(&up).await {
                     Ok(up) => {
-                        if let Some(owner) = user.scope() {
+                        if let Some(owner) = user.account() {
                             state
                                 .db
                                 .add_upload_owner(&up.sha256, owner)
@@ -398,7 +437,7 @@ async fn upload_image(
         created_at: now_s(),
     };
     let inserted = match state.db.insert_upload(&rec).await {
-        Ok(up) => match user.scope() {
+        Ok(up) => match user.account() {
             Some(owner) => state
                 .db
                 .add_upload_owner(&up.sha256, owner)
@@ -428,12 +467,34 @@ async fn upload_image(
     }
 }
 
+async fn upload_for(
+    state: &AppState,
+    user: &User,
+    sha: &str,
+) -> anyhow::Result<Option<UploadRecord>> {
+    match user.scope() {
+        Scope::Demo => state.db.get_demo_upload(sha).await,
+        Scope::Everyone => state.db.get_upload_for(sha, None).await,
+        Scope::Account(me) => state.db.get_upload_for(sha, Some(me)).await,
+    }
+}
+
 async fn get_upload(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Path(sha): Path<String>,
 ) -> Response {
-    let Ok(Some(up)) = state.db.get_upload_for(&sha, user.scope()).await else {
+    // A visitor gets the thumbnail at its largest: a JPEG made here, without the original's
+    // EXIF (where a photo was taken).
+    if user.visitor {
+        let query = Query(ThumbQuery { size: Some(1024) });
+        let mut res = get_upload_thumb(State(state), Extension(user), Path(sha), query).await;
+        // Signing in on this browser must not keep the small copy.
+        res.headers_mut()
+            .insert(header::VARY, HeaderValue::from_static("Cookie"));
+        return res;
+    }
+    let Ok(Some(up)) = upload_for(&state, &user, &sha).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "upload not found" })),
@@ -473,7 +534,7 @@ async fn get_upload_thumb(
         )
             .into_response();
     }
-    let Ok(Some(up)) = state.db.get_upload_for(&sha, user.scope()).await else {
+    let Ok(Some(up)) = upload_for(&state, &user, &sha).await else {
         return not_found("upload");
     };
     let key = upload_thumb_key(&up.sha256);
@@ -509,21 +570,47 @@ async fn get_upload_thumb(
     }
 }
 
-async fn list_jobs(
+pub(crate) async fn list_jobs(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Query(q): Query<ListJobsQuery>,
 ) -> Response {
+    if user.visitor
+        && q.q
+            .as_deref()
+            .is_some_and(|t| t.len() > demo::MAX_QUERY_BYTES)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "that search is too long" })),
+        )
+            .into_response();
+    }
     let version = state.db.current_version().await.unwrap_or(1);
     // Deletions since the client's version, so every client drops them too.
-    let deleted = match q.changed_since {
-        Some(since) => state
+    // Asking only for what the demo shows, an image taken out has left that list too (only the
+    // owner marks images, so only the owner's list has any).
+    let demo_only = q.demo == Some(true) && !user.visitor;
+    let deleted = match (q.changed_since, user.scope()) {
+        (None, _) => Ok(Vec::new()),
+        (Some(since), Scope::Demo) => state.db.list_demo_removed_since(since).await,
+        (Some(since), Scope::Everyone) => state.db.list_deleted_since(since, None).await,
+        (Some(since), Scope::Account(me)) => state.db.list_deleted_since(since, Some(me)).await,
+    }
+    .unwrap_or_default();
+    let mut deleted = deleted;
+    if let (Some(since), true, true) = (q.changed_since, demo_only, user.is_owner) {
+        for id in state
             .db
-            .list_deleted_since(since, user.scope())
+            .list_demo_removed_since(since)
             .await
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
+            .unwrap_or_default()
+        {
+            if !deleted.contains(&id) {
+                deleted.push(id);
+            }
+        }
+    }
     let result = match (q.changed_since, q.limit) {
         (None, Some(limit)) => {
             let ratio = q.aspect.as_deref().and_then(|a| {
@@ -535,9 +622,12 @@ async fn list_jobs(
                 limit,
                 before: q.before.clone(),
                 done_only: q.status.as_deref() == Some("done"),
-                favorites_only: q.favorite == Some(true),
+                // A visitor's favorites are nobody's: asking must not show the account's.
+                favorites_only: q.favorite == Some(true) && !user.visitor,
                 ratio,
-                owner: user.scope().map(str::to_string),
+                owner: user.account().map(str::to_string),
+                demo_only: user.visitor || q.demo == Some(true),
+                batch: q.batch.clone(),
             };
             let text = q.q.as_deref().map(str::trim).filter(|t| !t.is_empty());
             let like = q.like.as_deref().filter(|l| !l.is_empty());
@@ -552,11 +642,17 @@ async fn list_jobs(
                 state.db.list_jobs_page(&page).await
             }
         }
-        (since, _) => state
-            .db
-            .list_jobs(since, user.scope())
-            .await
-            .map(|jobs| (jobs, None)),
+        (since, _) => match user.scope() {
+            Scope::Demo => state.db.list_demo_jobs(since).await,
+            Scope::Everyone => state.db.list_jobs(since, None).await,
+            Scope::Account(me) => state.db.list_jobs(since, Some(me)).await,
+        }
+        .map(|mut jobs| {
+            if demo_only {
+                jobs.retain(|j| j.demo);
+            }
+            (jobs, None)
+        }),
     };
     match result {
         Ok((mut jobs, next)) => {
@@ -566,6 +662,11 @@ async fn list_jobs(
                 job.thinking = None;
             }
             crate::preview::attach_steps(&mut jobs);
+            let jobs: Value = if user.visitor {
+                jobs.iter().map(demo::visitor_job).collect()
+            } else {
+                json!(jobs)
+            };
             (
                 StatusCode::OK,
                 Json(json!({
@@ -590,7 +691,12 @@ async fn get_gallery_facets(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
 ) -> Response {
-    match state.db.gallery_facets(user.scope()).await {
+    let facets = match user.scope() {
+        Scope::Demo => state.db.demo_facets().await,
+        Scope::Everyone => state.db.gallery_facets(None).await,
+        Scope::Account(me) => state.db.gallery_facets(Some(me)).await,
+    };
+    match facets {
         Ok(f) => (StatusCode::OK, Json(f)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -600,7 +706,7 @@ async fn get_gallery_facets(
     }
 }
 
-async fn get_job(
+pub(crate) async fn get_job(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Path(id): Path<String>,
@@ -611,6 +717,9 @@ async fn get_job(
     match state.db.get_job(&id).await {
         Ok(Some(mut job)) => {
             crate::preview::attach_steps(std::slice::from_mut(&mut job));
+            if user.visitor {
+                return Json(demo::visitor_job(&job)).into_response();
+            }
             (StatusCode::OK, Json(job)).into_response()
         }
         Ok(None) => (
@@ -626,7 +735,7 @@ async fn get_job(
     }
 }
 
-async fn patch_job(
+pub(crate) async fn patch_job(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Path(id): Path<String>,
@@ -634,6 +743,9 @@ async fn patch_job(
 ) -> Response {
     if !may_see_job(&state, &user, &id).await {
         return not_found("job");
+    }
+    if let Some(on) = body.demo {
+        return set_demo(&state, &user, &id, on, body.accept_reference_risk).await;
     }
     let Some(favorite) = body.favorite else {
         return match state.db.get_job(&id).await {
@@ -660,11 +772,96 @@ async fn patch_job(
     }
 }
 
+/// Why this request may not manage the demo, if it may not.
+fn demo_refusal(state: &AppState, user: &User) -> Option<Response> {
+    let (status, error) = if state.config.demo.is_none() {
+        (StatusCode::CONFLICT, "this Studio has no demo")
+    } else if !user.is_owner || user.via_token {
+        (
+            StatusCode::FORBIDDEN,
+            "only the owner, signed in with a browser, can change the demo",
+        )
+    } else {
+        return None;
+    };
+    tracing::info!(via_token = user.via_token, error, "Demo request refused");
+    Some((status, Json(json!({ "error": error }))).into_response())
+}
+
+/// `GET /api/jobs/{id}/uploads`: the uploaded images behind an image, which decide how the app
+/// asks before sharing it (docs/DEMO.md §3).
+async fn get_job_uploads(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(refused) = demo_refusal(&state, &user) {
+        return refused;
+    }
+    if !may_see_job(&state, &user, &id).await {
+        return not_found("job");
+    }
+    match state.db.uploaded_ancestors(&id).await {
+        Ok(uploaded) => Json(json!({ "uploaded_references": uploaded })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Marks an image for the demo or takes it out. For the owner in a browser only: an access
+/// token, which an AI tool may hold, cannot publish anything. An image with uploaded images
+/// behind it needs the warning accepted (docs/DEMO.md §3); the answer names them.
+async fn set_demo(state: &AppState, user: &User, id: &str, on: bool, accepted: bool) -> Response {
+    let refuse =
+        |status: StatusCode, error: &str| (status, Json(json!({ "error": error }))).into_response();
+    if let Some(refused) = demo_refusal(state, user) {
+        return refused;
+    }
+    if on {
+        if !matches!(state.db.get_job(id).await, Ok(Some(j)) if j.status == JobStatus::Done) {
+            return refuse(StatusCode::CONFLICT, "only finished images can be shown");
+        }
+        match state.db.uploaded_ancestors(id).await {
+            Ok(uploaded) if !uploaded.is_empty() && !accepted => {
+                tracing::info!(job = %id, uploads = uploaded.len(), "Demo share held back: uploads behind it");
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "this image was made from uploaded images: accept the risk to show it",
+                        "uploaded_references": uploaded,
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(uploaded) if !uploaded.is_empty() => {
+                tracing::warn!(job = %id, uploads = uploaded.len(), "Demo share with uploads behind it: warning accepted");
+            }
+            Ok(_) => {}
+            Err(e) => return refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
+    match state.db.set_job_demo(id, on).await {
+        Ok(Some(job)) => {
+            tracing::info!(job = %id, demo = on, "Demo changed");
+            (StatusCode::OK, Json(job)).into_response()
+        }
+        Ok(None) => not_found("job"),
+        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
 async fn get_preferences(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
 ) -> Response {
-    match state.db.get_preferences(user.scope()).await {
+    // A visitor's last for the visit, in the page.
+    if user.visitor {
+        return Json(json!({})).into_response();
+    }
+    match state.db.get_preferences(user.account()).await {
         Ok(prefs) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -686,7 +883,7 @@ async fn put_preferences(
         )
             .into_response();
     }
-    match state.db.put_preferences(&prefs, user.scope()).await {
+    match state.db.put_preferences(&prefs, user.account()).await {
         Ok(()) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -741,7 +938,7 @@ async fn delete_job(
     }
 }
 
-async fn cancel_job(
+pub(crate) async fn cancel_job(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Path(id): Path<String>,
@@ -876,6 +1073,27 @@ async fn get_image(
         let Ok(bytes) = state.blobs.read_blob(&art.sha256).await else {
             continue;
         };
+        if user.visitor {
+            let Ok(clean) = strip_png_metadata(&bytes) else {
+                break;
+            };
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/png".to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        format!("inline; filename=\"{id}.png\""),
+                    ),
+                    (header::CACHE_CONTROL, immutable(&state).to_string()),
+                    (header::ETAG, format!("\"{}-clean\"", art.sha256)),
+                    // Signing in on this browser must not keep the stripped copy.
+                    (header::VARY, "Cookie".to_string()),
+                ],
+                clean,
+            )
+                .into_response();
+        }
         // Only the final PNG is cached for good.
         let cache = if art.metadata_json.is_some() {
             immutable(&state)
@@ -905,8 +1123,8 @@ async fn get_image(
 }
 
 #[derive(Deserialize)]
-struct ThumbQuery {
-    size: Option<u32>,
+pub(crate) struct ThumbQuery {
+    pub size: Option<u32>,
 }
 
 /// JPEG thumbnail, `?size=` 512, 768 or 1024 (longer side; default 1024). Generated on request
@@ -994,7 +1212,7 @@ async fn get_job_preview(
     }
 }
 
-async fn get_image_thumb(
+pub(crate) async fn get_image_thumb(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<User>,
     Path(id): Path<String>,
@@ -1052,10 +1270,24 @@ async fn get_image_thumb(
     }
 }
 
-async fn get_capabilities(State(state): State<Arc<AppState>>) -> Response {
+pub(crate) async fn get_capabilities(State(state): State<Arc<AppState>>) -> Response {
+    capabilities_answer(&state, false).await
+}
+
+async fn capabilities_route(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+) -> Response {
+    capabilities_answer(&state, user.visitor).await
+}
+
+async fn capabilities_answer(state: &AppState, visitor: bool) -> Response {
     match compute_capabilities(&state.db).await {
         Ok(mut caps) => {
             caps.cloud_enhancers = state.cloud.infos();
+            if visitor {
+                return Json(demo::visitor_capabilities(&caps)).into_response();
+            }
             (StatusCode::OK, Json(caps)).into_response()
         }
         Err(e) => (
@@ -1066,7 +1298,24 @@ async fn get_capabilities(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn get_system(State(state): State<Arc<AppState>>) -> Response {
+async fn system_route(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<User>,
+) -> Response {
+    let system = system_snapshot(&state).await;
+    Json(if user.visitor {
+        demo::scrub_system(&system)
+    } else {
+        system
+    })
+    .into_response()
+}
+
+pub(crate) async fn get_system(State(state): State<Arc<AppState>>) -> Response {
+    Json(system_snapshot(&state).await).into_response()
+}
+
+async fn system_snapshot(state: &AppState) -> Value {
     let now = now_s();
     let agents = state.db.list_agents().await.unwrap_or_default();
     let executors = state.db.list_executors().await.unwrap_or_default();
@@ -1165,14 +1414,10 @@ async fn get_system(State(state): State<Arc<AppState>>) -> Response {
         });
     }
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "agents": agents_out,
-            "queues": queues,
-        })),
-    )
-        .into_response()
+    json!({
+        "agents": agents_out,
+        "queues": queues,
+    })
 }
 
 async fn lend_executor(
@@ -1621,6 +1866,9 @@ async fn get_metrics(State(state): State<Arc<AppState>>) -> Response {
         .map(|(id, m)| (id.as_str(), m.raw.as_str()))
         .collect();
     text.push_str(&crate::metrics::reexport_agent_metrics(&fresh));
+    if state.config.demo.is_some() {
+        text.push_str(&state.visitor_quotas.render_metrics(now as u64));
+    }
     (
         StatusCode::OK,
         [(

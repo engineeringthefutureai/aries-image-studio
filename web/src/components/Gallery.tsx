@@ -12,6 +12,7 @@ import { imageHref, onLinkClick } from '../utils/router';
 import { LoadMore } from './LoadMore';
 import { formatDuration, generationSeconds } from '../utils/timings';
 import {
+  Globe,
   Heart,
   Dices,
   Maximize2,
@@ -37,7 +38,10 @@ interface GalleryProps {
   onFiltersChange: (filters: GalleryFilters, replace?: boolean) => void;
   /** Counts over all finished images, for the filter pills. */
   facets: GalleryFacets | null;
-  onToggleFavorite: (id: string) => void;
+  /** Absent for a demo visitor. */
+  onToggleFavorite?: (id: string) => void;
+  /** Show this image in the demo or stop (the owner). */
+  onToggleDemo?: (generation: Generation) => void;
   onVary: (generation: Generation) => void;
   onDelete?: (id: string) => void;
   /** The first page has not arrived yet: show a loader, not the empty state. */
@@ -102,6 +106,7 @@ export const Gallery: React.FC<GalleryProps> = ({
   onFiltersChange,
   facets,
   onToggleFavorite,
+  onToggleDemo,
   onVary,
   onDelete,
   loading = false,
@@ -141,7 +146,7 @@ export const Gallery: React.FC<GalleryProps> = ({
   const favoriteCount = facets?.favorites ?? generations.filter((g) => g.favorite).length;
 
   const hasActiveFilters =
-    onlyFavorites || selectedRatio !== 'all' || filters.q.trim() !== '' || filters.like !== '';
+    onlyFavorites || filters.demo || selectedRatio !== 'all' || filters.q.trim() !== '' || filters.like !== '';
   // Every result of "more like this" is found by its look: no badges.
   const showMatch = filters.like === '';
   // The tile whose badge was tapped open (touch screens have no hover to explain it).
@@ -151,7 +156,7 @@ export const Gallery: React.FC<GalleryProps> = ({
 
   const resetFilters = () => {
     setSearchQuery('');
-    onFiltersChange({ favorites: false, aspect: '', q: '', like: '' });
+    onFiltersChange({ favorites: false, aspect: '', q: '', like: '', demo: false });
   };
 
   // Only the first load replaces the page: later ones (a search, a filter) keep the header
@@ -240,9 +245,21 @@ export const Gallery: React.FC<GalleryProps> = ({
             </button>
           )}
 
-          {gen.favorite && (
-            <div className="pointer-events-none absolute top-2.5 left-2.5 z-20 w-6 h-6 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-xs">
-              <Heart className="w-3.5 h-3.5 fill-current" />
+          {(gen.favorite || (gen.demo && onToggleDemo)) && (
+            <div className="pointer-events-none absolute top-2.5 left-2.5 z-20 flex gap-1">
+              {gen.favorite && (
+                <div className="w-6 h-6 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-xs">
+                  <Heart className="w-3.5 h-3.5 fill-current" />
+                </div>
+              )}
+              {gen.demo && onToggleDemo && (
+                <div
+                  className="w-6 h-6 rounded-full bg-sky-600 text-white flex items-center justify-center shadow-xs"
+                  title="Shown publicly in the demo"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                </div>
+              )}
             </div>
           )}
 
@@ -250,18 +267,35 @@ export const Gallery: React.FC<GalleryProps> = ({
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-3.5 z-10">
             {/* Top Buttons */}
             <div className="pointer-events-auto flex items-center justify-end gap-1.5">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleFavorite(gen.id);
-                }}
-                className={`w-8 h-8 rounded-full backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110 ${
-                  gen.favorite ? 'bg-rose-500 text-white' : 'bg-black/50 text-white hover:bg-black/70'
-                }`}
-                title="Favorite"
-              >
-                <Heart className={`w-4 h-4 ${gen.favorite ? 'fill-current' : ''}`} />
-              </button>
+              {onToggleFavorite && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleFavorite(gen.id);
+                  }}
+                  className={`w-8 h-8 rounded-full backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110 ${
+                    gen.favorite ? 'bg-rose-500 text-white' : 'bg-black/50 text-white hover:bg-black/70'
+                  }`}
+                  title="Favorite"
+                >
+                  <Heart className={`w-4 h-4 ${gen.favorite ? 'fill-current' : ''}`} />
+                </button>
+              )}
+              {onToggleDemo && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleDemo(gen);
+                  }}
+                  className={`w-8 h-8 rounded-full backdrop-blur-md flex items-center justify-center transition-transform hover:scale-110 ${
+                    gen.demo ? 'bg-sky-600 text-white' : 'bg-black/50 text-white hover:bg-black/70'
+                  }`}
+                  title={gen.demo ? 'Shown publicly in the demo: stop showing it' : 'Show publicly in the demo'}
+                  aria-pressed={!!gen.demo}
+                >
+                  <Globe className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -349,18 +383,36 @@ export const Gallery: React.FC<GalleryProps> = ({
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-2xl bg-[#fcf9f2] dark:bg-[#1a1a17] border border-[#e5e2db] dark:border-[#2a2a26] shadow-xs">
         <div className="flex flex-wrap items-center gap-2">
           {/* Favorites Filter Pill */}
-          <button
-            onClick={() => onFiltersChange({ ...filters, favorites: !onlyFavorites })}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-              onlyFavorites
-                ? 'bg-rose-500 text-white shadow-xs'
-                : 'bg-[#f1eee7] dark:bg-[#262622] text-[#58423a] dark:text-[#b0a098] hover:bg-[#e5e2db] dark:hover:bg-[#32322c]'
-            }`}
-          >
-            <Heart className={`w-3.5 h-3.5 ${onlyFavorites ? 'fill-current' : ''}`} />
-            <span>Favorites</span>
-            <span className="font-mono text-[11px] opacity-80">({favoriteCount})</span>
-          </button>
+          {onToggleFavorite && (
+            <button
+              onClick={() => onFiltersChange({ ...filters, favorites: !onlyFavorites })}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                onlyFavorites
+                  ? 'bg-rose-500 text-white shadow-xs'
+                  : 'bg-[#f1eee7] dark:bg-[#262622] text-[#58423a] dark:text-[#b0a098] hover:bg-[#e5e2db] dark:hover:bg-[#32322c]'
+              }`}
+            >
+              <Heart className={`w-3.5 h-3.5 ${onlyFavorites ? 'fill-current' : ''}`} />
+              <span>Favorites</span>
+              <span className="font-mono text-[11px] opacity-80">({favoriteCount})</span>
+            </button>
+          )}
+
+          {/* What the demo shows: the owner's review of what is public */}
+          {onToggleDemo && (
+            <button
+              onClick={() => onFiltersChange({ ...filters, demo: !filters.demo })}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                filters.demo
+                  ? 'bg-sky-600 text-white shadow-xs'
+                  : 'bg-[#f1eee7] dark:bg-[#262622] text-[#58423a] dark:text-[#b0a098] hover:bg-[#e5e2db] dark:hover:bg-[#32322c]'
+              }`}
+              aria-pressed={filters.demo}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>In demo</span>
+            </button>
+          )}
 
           {/* Aspect Ratio Filter Pills */}
           <div className="flex items-center gap-1 overflow-x-auto py-0.5">

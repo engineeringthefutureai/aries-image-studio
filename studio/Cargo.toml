@@ -1,6 +1,6 @@
 [package]
 name = "aries-image-studio"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 # The toolchain studio/Dockerfile builds with; clippy then suggests nothing newer.
 rust-version = "1.92"

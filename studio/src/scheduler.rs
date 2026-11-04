@@ -69,6 +69,8 @@ pub struct AppState {
     pub live_metrics: RwLock<HashMap<String, AgentLiveMetrics>>,
     pub agent_streams: RwLock<HashMap<String, AgentTx>>,
     pub sched_lock: tokio::sync::Mutex<()>,
+    /// Per-IP limits on demo visitors (demo.rs).
+    pub visitor_quotas: crate::demo::Quotas,
 }
 
 impl AppState {
@@ -88,6 +90,7 @@ impl AppState {
             live_metrics: RwLock::new(HashMap::new()),
             agent_streams: RwLock::new(HashMap::new()),
             sched_lock: tokio::sync::Mutex::new(()),
+            visitor_quotas: crate::demo::Quotas::default(),
         })
     }
 

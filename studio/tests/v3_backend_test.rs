@@ -5,6 +5,7 @@ use aries_image_studio::config::BackendConfig;
 use aries_image_studio::db::{
     now_s, AttemptFailure, Database, ExecutorState, JobStatus, TaskStatus,
 };
+use aries_image_studio::demo::DemoConfig;
 use aries_image_studio::grpc::AgentGatewayService;
 use aries_image_studio::legal::LegalConfig;
 use aries_image_studio::metrics::{AgentLiveMetrics, ExecutorLiveMetrics};
@@ -54,6 +55,14 @@ async fn start_test_harness_with(cloud: CloudConfig) -> TestHarness {
 
 /// With `issuer`: sign-in on against that identity provider, for me@ (the owner) and you@.
 async fn start_test_harness_full(cloud: CloudConfig, issuer: Option<String>) -> TestHarness {
+    start_test_harness_demo(cloud, issuer, None).await
+}
+
+async fn start_test_harness_demo(
+    cloud: CloudConfig,
+    issuer: Option<String>,
+    demo: Option<DemoConfig>,
+) -> TestHarness {
     let temp_dir = std::env::temp_dir().join(format!("aries_v3_test_{}", ulid::Ulid::new()));
     std::fs::create_dir_all(temp_dir.join("static")).unwrap();
     std::fs::write(
@@ -96,6 +105,7 @@ async fn start_test_harness_full(cloud: CloudConfig, issuer: Option<String>) -> 
             public_urls: vec![format!("http://{http_addr}")],
             session_days: 30,
         }),
+        demo,
         legal: LegalConfig {
             operator: Some("Ops & <Co>".into()),
             contact: Some("ops@example.com".into()),
@@ -3990,12 +4000,22 @@ async fn begin_sign_in(harness: &TestHarness, next: &str) -> HashMap<String, Str
         .unwrap();
     assert_eq!(res.status(), 303, "a redirect to the provider");
     let location = res.headers()["location"].to_str().unwrap().to_string();
-    reqwest::Url::parse(&location)
+    let mut params: HashMap<String, String> = reqwest::Url::parse(&location)
         .unwrap()
         .query_pairs()
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect()
+        .collect();
+    let set = res.headers()["set-cookie"].to_str().unwrap();
+    assert!(
+        set.contains("HttpOnly") && set.contains("SameSite=Lax"),
+        "{set}"
+    );
+    // Not the provider's: what this browser holds, for `finish_sign_in`.
+    params.insert(BROWSER.into(), set.split(';').next().unwrap().to_string());
+    params
 }
+
+const BROWSER: &str = "browser-cookie";
 
 /// The provider sends the browser back with a code for `claims` (nonce filled in unless
 /// given). Returns the callback's response.
@@ -4003,7 +4023,17 @@ async fn finish_sign_in(
     harness: &TestHarness,
     idp: &Idp,
     params: &HashMap<String, String>,
+    claims: Value,
+) -> reqwest::Response {
+    finish_sign_in_with_cookie(harness, idp, params, claims, None).await
+}
+
+async fn finish_sign_in_with_cookie(
+    harness: &TestHarness,
+    idp: &Idp,
+    params: &HashMap<String, String>,
     mut claims: Value,
+    cookie: Option<&str>,
 ) -> reqwest::Response {
     let defaults = json!({
         "iss": harness.state.config.auth.as_ref().unwrap().issuer,
@@ -4023,14 +4053,19 @@ async fn finish_sign_in(
     }
     let code = format!("code-{}", ulid::Ulid::new());
     idp.lock().unwrap().codes.insert(code.clone(), claims);
-    no_redirects()
-        .get(format!(
-            "{}/auth/callback?code={code}&state={}",
-            harness.http_url, params["state"]
-        ))
-        .send()
-        .await
-        .unwrap()
+    let mut req = no_redirects().get(format!(
+        "{}/auth/callback?code={code}&state={}",
+        harness.http_url, params["state"]
+    ));
+    let held = &params[BROWSER];
+    req = req.header(
+        "cookie",
+        match cookie {
+            Some(more) => format!("{held}; {more}"),
+            None => held.clone(),
+        },
+    );
+    req.send().await.unwrap()
 }
 
 /// Signs `email` in; returns the `Cookie` header value for its session.
@@ -4813,4 +4848,1554 @@ fn full_size_images_get_previews_at_half_the_sides() {
     assert_eq!(preview_downscale(&config, 2048, 2048), 2);
     assert_eq!(preview_downscale(&config, 1216, 896), 1);
     assert_eq!(preview_downscale(&config, 1696, 1152), 1);
+}
+
+/// One JSON-RPC call to `/mcp`, with a bearer token when given.
+async fn mcp(harness: &TestHarness, token: Option<&str>, body: Value) -> reqwest::Response {
+    let mut req = reqwest::Client::new()
+        .post(format!("{}/mcp", harness.http_url))
+        .header("accept", "application/json, text/event-stream")
+        .json(&body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    req.send().await.unwrap()
+}
+
+async fn mcp_tool(harness: &TestHarness, token: Option<&str>, name: &str, args: Value) -> Value {
+    let res = mcp(
+        harness,
+        token,
+        json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": { "name": name, "arguments": args } }),
+    )
+    .await;
+    assert_eq!(res.status(), 200);
+    let v: Value = res.json().await.unwrap();
+    v["result"].clone()
+}
+
+fn mcp_text(result: &Value) -> String {
+    result["content"][0]["text"].as_str().unwrap().to_string()
+}
+
+/// Access tokens act as the account that made them, from the browser only; a bad token is
+/// refused even next to a good cookie, and a revoked one stops at once.
+#[tokio::test]
+async fn test_access_tokens() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let you = sign_in(&harness, &idp, "you@example.com").await;
+    let http = reqwest::Client::new();
+
+    let res = as_user(
+        reqwest::Method::POST,
+        url("/api/tokens"),
+        &me,
+        Some(json!({ "name": "  " })),
+    )
+    .await;
+    assert_eq!(res.status(), 400);
+    let res = as_user(
+        reqwest::Method::POST,
+        url("/api/tokens"),
+        &me,
+        Some(json!({ "name": "laptop CLI" })),
+    )
+    .await;
+    assert_eq!(res.status(), 201);
+    let made: Value = res.json().await.unwrap();
+    let token = made["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("aries_"));
+    let id = made["record"]["id"].as_str().unwrap().to_string();
+
+    // Listed without the token itself; not in the other account's list.
+    let list: Value = as_user(reqwest::Method::GET, url("/api/tokens"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list["tokens"][0]["name"], "laptop CLI");
+    assert!(list["tokens"][0].get("token").is_none());
+    assert!(list["tokens"][0]["last_used_at"].is_null());
+    let theirs: Value = as_user(reqwest::Method::GET, url("/api/tokens"), &you, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(theirs["tokens"].as_array().unwrap().len(), 0);
+
+    // The token works as me (writes need no Origin), and is marked used.
+    let res = http
+        .get(url("/api/jobs?limit=5"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let list: Value = as_user(reqwest::Method::GET, url("/api/tokens"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(list["tokens"][0]["last_used_at"].as_f64().is_some());
+    let who: Value = http
+        .get(url("/api/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(who["email"], "me@example.com");
+    assert_eq!(who["token"], true);
+    let res = http
+        .put(url("/api/preferences"))
+        .bearer_auth(&token)
+        .header("origin", "https://elsewhere.example")
+        .json(&json!({ "theme": "dark" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.status());
+
+    // A token cannot manage tokens.
+    let res = http
+        .get(url("/api/tokens"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+
+    // A wrong token is refused, even with a good cookie.
+    let res = http
+        .get(url("/api/jobs?limit=5"))
+        .bearer_auth("aries_nope")
+        .header("cookie", &me)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+
+    // Only its account revokes it; then it stops.
+    let res = as_user(
+        reqwest::Method::DELETE,
+        url(&format!("/api/tokens/{id}")),
+        &you,
+        None,
+    )
+    .await;
+    assert_eq!(res.status(), 404);
+    let res = as_user(
+        reqwest::Method::DELETE,
+        url(&format!("/api/tokens/{id}")),
+        &me,
+        None,
+    )
+    .await;
+    assert_eq!(res.status(), 204);
+    let res = http
+        .get(url("/api/jobs?limit=5"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+/// An account taken off the allowlist loses its tokens with its sessions.
+#[tokio::test]
+async fn test_access_token_ends_when_taken_off_the_list() {
+    let (_idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    harness
+        .state
+        .db
+        .create_api_token(
+            "t1",
+            &token_hash("aries_gone"),
+            "removed@example.com",
+            "old",
+        )
+        .await
+        .unwrap();
+    let res = reqwest::Client::new()
+        .get(format!("{}/api/jobs?limit=5", harness.http_url))
+        .bearer_auth("aries_gone")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+/// With sign-in on, `/mcp` needs a token (401 with `WWW-Authenticate` without one) and its
+/// tools see only the token's account.
+#[tokio::test]
+async fn test_mcp_needs_a_token_with_sign_in() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let you = sign_in(&harness, &idp, "you@example.com").await;
+    let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+    let res = mcp(&harness, None, list.clone()).await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers()["www-authenticate"]
+        .to_str()
+        .unwrap()
+        .starts_with("Bearer"));
+
+    let made: Value = as_user(
+        reqwest::Method::POST,
+        url("/api/tokens"),
+        &me,
+        Some(json!({ "name": "agent" })),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let token = made["token"].as_str().unwrap();
+    assert_eq!(mcp(&harness, Some(token), list).await.status(), 200);
+
+    // Theirs is not found through my token.
+    let res = as_user(
+        reqwest::Method::POST,
+        url("/api/jobs"),
+        &you,
+        Some(json!({ "prompt": "theirs", "width": 1024, "height": 1024 })),
+    )
+    .await;
+    assert_eq!(res.status(), 201);
+    let theirs: Value = res.json().await.unwrap();
+    let r = mcp_tool(
+        &harness,
+        Some(token),
+        "get_jobs",
+        json!({ "ids": [theirs["id"]] }),
+    )
+    .await;
+    assert!(mcp_text(&r).contains("not found"), "{}", mcp_text(&r));
+
+    // Mine is made as me.
+    let r = mcp_tool(
+        &harness,
+        Some(token),
+        "generate_images",
+        json!({ "prompt": "mine" }),
+    )
+    .await;
+    assert_eq!(r["isError"], false, "{}", mcp_text(&r));
+    let jobs = harness
+        .state
+        .db
+        .list_jobs(None, Some("me@example.com"))
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].prompt, "mine");
+}
+
+/// The MCP protocol and the tools, with sign-in off: jobs as the composer makes them,
+/// their state, favorites and cancelling.
+#[tokio::test]
+async fn test_mcp_tools() {
+    let harness = start_test_harness().await;
+    let _agent = connect_agent(&harness, sample_register_msg("aries")).await;
+
+    let res = mcp(
+        &harness,
+        None,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18", "capabilities": {},
+                            "clientInfo": { "name": "test", "version": "1" } } }),
+    )
+    .await;
+    assert_eq!(res.status(), 200);
+    let init: Value = res.json().await.unwrap();
+    assert_eq!(init["id"], 1);
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert!(init["result"]["capabilities"]["tools"].is_object());
+    let res = mcp(
+        &harness,
+        None,
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    assert_eq!(res.status(), 202);
+    let res = reqwest::get(format!("{}/mcp", harness.http_url))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 405);
+
+    let tools: Value = mcp(
+        &harness,
+        None,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "generate_images",
+            "get_jobs",
+            "find_images",
+            "view_image",
+            "set_favorite",
+            "cancel_jobs",
+            "studio_status"
+        ]
+    );
+    let unknown: Value = mcp(
+        &harness,
+        None,
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": { "name": "nope", "arguments": {} } }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(unknown["error"]["code"], -32602);
+
+    // Bad arguments are tool errors the model can read.
+    let r = mcp_tool(
+        &harness,
+        None,
+        "generate_images",
+        json!({ "prompt": "x", "aspect": "5:1" }),
+    )
+    .await;
+    assert_eq!(r["isError"], true);
+    assert!(mcp_text(&r).contains("aspect"));
+
+    // Two half-size 16:9 drafts from seed 7: one batch, as the composer sends them.
+    let r = mcp_tool(
+        &harness,
+        None,
+        "generate_images",
+        json!({ "prompt": "a lighthouse in fog", "aspect": "16:9", "size": "half",
+                "quality": "draft", "count": 2, "seed": 7 }),
+    )
+    .await;
+    assert_eq!(r["isError"], false, "{}", mcp_text(&r));
+    let mut jobs = harness.state.db.list_jobs(None, None).await.unwrap();
+    jobs.sort_by_key(|j| j.seed);
+    assert_eq!(jobs.len(), 2);
+    for (j, seed) in jobs.iter().zip([7, 8]) {
+        assert_eq!((j.width, j.height, j.steps, j.seed), (1376, 768, 12, seed));
+        assert_eq!(j.meta["batch_id"], jobs[0].meta["batch_id"]);
+        assert_eq!(j.meta["aspect"], "16:9");
+        assert_eq!(j.meta["client"], "mcp");
+        assert!(mcp_text(&r).contains(&j.id));
+    }
+    let ids: Vec<&str> = jobs.iter().map(|j| j.id.as_str()).collect();
+
+    let r = mcp_tool(&harness, None, "get_jobs", json!({ "ids": ids })).await;
+    let text = mcp_text(&r);
+    assert!(text.contains("not finished yet"), "{text}");
+    assert_eq!(r["content"].as_array().unwrap().len(), 1, "no pictures yet");
+
+    // Nothing finished: the gallery is empty.
+    let r = mcp_tool(&harness, None, "find_images", json!({})).await;
+    assert_eq!(mcp_text(&r), "No images found.");
+
+    let r = mcp_tool(&harness, None, "set_favorite", json!({ "id": ids[0] })).await;
+    assert_eq!(r["isError"], false);
+    assert!(
+        harness
+            .state
+            .db
+            .get_job(ids[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .favorite
+    );
+
+    let r = mcp_tool(&harness, None, "view_image", json!({ "id": ids[0] })).await;
+    let text = mcp_text(&r);
+    assert!(
+        text.contains("prompt: a lighthouse in fog") && text.contains("favorite"),
+        "{text}"
+    );
+
+    let r = mcp_tool(&harness, None, "cancel_jobs", json!({ "ids": ids })).await;
+    assert_eq!(
+        mcp_text(&r).matches("cancelled").count(),
+        2,
+        "{}",
+        mcp_text(&r)
+    );
+
+    let r = mcp_tool(&harness, None, "studio_status", json!({})).await;
+    let text = mcp_text(&r);
+    assert!(text.contains("GPU host aries: online"), "{text}");
+}
+
+/// A finished job whose image is a PNG with its provenance chunk naming the host, as Studio
+/// stores it, and whose task says where it ran.
+async fn finish_with_image(harness: &TestHarness, id: &str) {
+    let png = aries_image_studio::storage::inject_png_text_chunk(
+        &build_png_bytes(32, 32),
+        "aries-image-studio",
+        &format!("{{\"agent\":\"secret-host\",\"id\":\"{id}\"}}"),
+    )
+    .unwrap();
+    let (sha, bytes) = harness.state.blobs.store_blob(png.into()).await.unwrap();
+    let pool = harness.state.db.pool();
+    sqlx::query("UPDATE jobs SET status = 'done', meta = ? WHERE id = ?")
+        .bind(json!({ "batch_id": "b1", "aspect": "1:1", "note": "secret-note" }).to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE tasks SET status = 'done', current_attempt = 1, assigned_agent = 'secret-host' WHERE job_id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO artifacts (id, job_id, task_id, attempt, name, sha256, bytes, kind, metadata_json, created_at)
+         SELECT ?, ?, id, 1, 'image.png', ?, ?, 'image', '{}', 1.0 FROM tasks WHERE job_id = ? AND stage = 'decode'",
+    )
+    .bind(format!("art-{id}"))
+    .bind(id)
+    .bind(&sha)
+    .bind(bytes as i64)
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Opens the demo as the sign-in screen does, and gives back the cookie.
+async fn open_demo(harness: &TestHarness, address: &str) -> String {
+    let res = reqwest::Client::new()
+        .post(format!("{}/auth/guest", harness.http_url))
+        .header("x-forwarded-for", address)
+        .json(&json!({ "accept_terms": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let set = res.headers()["set-cookie"].to_str().unwrap();
+    assert!(
+        set.contains("HttpOnly") && set.contains("SameSite=Lax"),
+        "{set}"
+    );
+    set.split(';').next().unwrap().to_string()
+}
+
+/// With a demo on: a guest sees only what the owner marked, scrubbed, and can
+/// change nothing; marking is the owner's, in a browser; uploaded images behind an image need
+/// the warning accepted; taking an image out reaches open pages.
+#[tokio::test]
+async fn test_demo_visitors_read_only_what_was_marked() {
+    use reqwest::Method as M;
+    let (idp, issuer) = start_fake_idp().await;
+    let demo = DemoConfig {
+        trusted_proxies: 1,
+        ..Default::default()
+    };
+    let harness = start_test_harness_demo(Default::default(), Some(issuer), Some(demo)).await;
+    let _agent = connect_agent(&harness, i2i_register_msg("secret-host")).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let you = sign_in(&harness, &idp, "you@example.com").await;
+    let http = reqwest::Client::new();
+    let guest = open_demo(&harness, "203.0.113.1").await;
+    let get = |p: &str| {
+        http.get(url(p))
+            .header("x-forwarded-for", "203.0.113.1")
+            .header("cookie", &guest)
+            .send()
+    };
+
+    // Before anything is marked: a visitor, with nothing to see.
+    let who: Value = get("/api/me").await.unwrap().json().await.unwrap();
+    assert_eq!(who["visitor"], true);
+    assert_eq!(who["owner"], false);
+    // Every answer says so, for a tab that thinks it is signed in; a session's never does.
+    let answer = get("/api/jobs?limit=1").await.unwrap();
+    assert_eq!(answer.headers()["x-aries-visitor"], "1");
+    let closed = get("/api/tokens").await.unwrap();
+    assert_eq!(closed.status(), 403);
+    assert_eq!(closed.headers()["x-aries-visitor"], "1");
+    let mine = as_user(M::GET, url("/api/jobs?limit=1"), &me, None).await;
+    assert!(mine.headers().get("x-aries-visitor").is_none());
+    assert!(who.get("email").is_none());
+    let page: Value = get("/api/jobs?limit=10")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page["jobs"], json!([]));
+
+    for id in ["shown", "hidden", "pending"] {
+        let job =
+            json!({ "id": id, "prompt": format!("a {id} fox"), "width": 1024, "height": 1024 });
+        let res = as_user(M::POST, url("/api/jobs"), &me, Some(job)).await;
+        assert_eq!(res.status(), 201);
+    }
+    finish_with_image(&harness, "shown").await;
+    finish_with_image(&harness, "hidden").await;
+
+    // Marking: the owner's, in a browser, for finished images.
+    let mark = json!({ "demo": true });
+    let path = url("/api/jobs/shown");
+    let refused = http
+        .patch(&path)
+        .header("cookie", &guest)
+        .json(&mark)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403, "a visitor");
+    let refused = as_user(M::PATCH, path.clone(), &you, Some(mark.clone())).await;
+    assert_eq!(refused.status(), 404, "someone else's");
+    let made: Value = as_user(
+        M::POST,
+        url("/api/tokens"),
+        &me,
+        Some(json!({ "name": "t" })),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let refused = http
+        .patch(&path)
+        .bearer_auth(made["token"].as_str().unwrap())
+        .json(&mark)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403, "a token");
+    let refused = as_user(M::PATCH, url("/api/jobs/pending"), &me, Some(mark.clone())).await;
+    assert_eq!(refused.status(), 409, "not finished");
+    let job: Value = as_user(M::PATCH, path.clone(), &me, Some(mark.clone()))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(job["demo"], true);
+    as_user(
+        M::PATCH,
+        path.clone(),
+        &me,
+        Some(json!({ "favorite": true })),
+    )
+    .await;
+
+    // A visitor's view: the one image, every way of asking, without where it was made.
+    let page: Value = get("/api/jobs?limit=10")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let version = page["version"].as_i64().unwrap();
+    assert_eq!(page["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(page["jobs"][0]["id"], "shown");
+    assert_eq!(page["jobs"][0]["prompt"], "a shown fox");
+    assert_eq!(page["jobs"][0]["favorite"], false);
+    let text = page.to_string();
+    for private in ["secret-host", "secret-note", "me@example.com"] {
+        assert!(!text.contains(private), "{private} in {text}");
+    }
+    let all: Value = get("/api/jobs").await.unwrap().json().await.unwrap();
+    assert_eq!(all["jobs"].as_array().unwrap().len(), 1);
+    let found: Value = get("/api/jobs?limit=10&q=fox")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["jobs"].as_array().unwrap().len(), 1);
+    let favorites: Value = get("/api/jobs?limit=10&favorite=true")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        favorites["jobs"].as_array().unwrap().len(),
+        1,
+        "not the account's"
+    );
+    let facets: Value = get("/api/gallery/facets")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(facets["total"], 1);
+    assert_eq!(facets["favorites"], 0);
+    for p in [
+        "/api/jobs/hidden",
+        "/api/images/hidden",
+        "/api/images/hidden/thumb",
+        "/api/jobs?limit=10&like=hidden",
+    ] {
+        assert_eq!(get(p).await.unwrap().status(), 404, "{p}");
+    }
+    let one: Value = get("/api/jobs/shown").await.unwrap().json().await.unwrap();
+    assert!(!one.to_string().contains("secret-host"));
+    assert_eq!(get("/api/images/shown/thumb").await.unwrap().status(), 200);
+
+    // The PNG comes without the chunk that names the host; the owner's keeps it.
+    let png = get("/api/images/shown").await.unwrap();
+    assert_eq!(png.status(), 200);
+    let png = png.bytes().await.unwrap();
+    assert_eq!(
+        read_png_text_chunk(&png, "aries-image-studio").unwrap(),
+        None
+    );
+    let mine = as_user(M::GET, url("/api/images/shown"), &me, None)
+        .await
+        .bytes()
+        .await
+        .unwrap();
+    assert!(read_png_text_chunk(&mine, "aries-image-studio")
+        .unwrap()
+        .is_some());
+
+    let system = get("/api/system").await.unwrap().text().await.unwrap();
+    assert!(system.contains("gpu-host-1") && !system.contains("secret-host"));
+    assert!(!system.contains("metrics_url") && !system.contains("worker_pid"));
+    let caps = get("/api/capabilities")
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!caps.contains("secret-host"));
+    let prefs: Value = get("/api/preferences").await.unwrap().json().await.unwrap();
+    assert_eq!(prefs, json!({}));
+
+    // Nothing can be changed, and what is not named stays closed.
+    let body = json!({ "id": "new", "prompt": "p", "width": 1024, "height": 1024 });
+    for (method, p) in [
+        (M::POST, "/api/jobs"),
+        (M::PATCH, "/api/jobs/shown"),
+        (M::DELETE, "/api/jobs/shown"),
+        (M::POST, "/api/jobs/shown/cancel"),
+        (M::POST, "/api/jobs/shown/retry"),
+        (M::POST, "/api/uploads"),
+        (M::PUT, "/api/preferences"),
+        (M::POST, "/api/executors/xpu0/disable"),
+        (M::POST, "/api/executors/xpu0/lend"),
+        (M::GET, "/api/tokens"),
+        (M::POST, "/api/tokens"),
+        (M::GET, "/api/jobs/pending/preview"),
+    ] {
+        let res = http
+            .request(method.clone(), url(p))
+            .header("cookie", &guest)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{method} {p}");
+    }
+    assert!(!harness.state.db.get_job("new").await.unwrap().is_some());
+    let mcp_call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+    let res = http
+        .post(url("/mcp"))
+        .header("cookie", &guest)
+        .json(&mcp_call)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401, "MCP takes tokens only");
+
+    // A session that ended or a bad token is refused, and the cookie forgotten: no silent
+    // turning into a visitor mid-work.
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), "aries_session=gone", None).await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
+    let res = http
+        .get(url("/api/jobs?limit=1"))
+        .bearer_auth("aries_bad")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let res = as_user(M::GET, url("/api/me"), "aries_session=gone", None).await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
+    // The owner is unaffected, and can list what is shown.
+    let who: Value = as_user(M::GET, url("/api/me"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(who["email"], "me@example.com");
+    assert_eq!(who["demo_mode"], true);
+    let shown: Value = as_user(M::GET, url("/api/jobs?limit=10&demo=true"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(shown["jobs"].as_array().unwrap().len(), 1);
+    let everything: Value = as_user(M::GET, url("/api/jobs?limit=10"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(everything["jobs"].as_array().unwrap().len(), 3);
+
+    // An uploaded image behind an image: refused until the warning is accepted, and still so
+    // through an edit of the edit. A generated reference needs no warning.
+    let upload: Value = http
+        .post(url("/api/uploads"))
+        .header("cookie", &me)
+        .body(build_png_bytes(32, 32))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sha = upload["sha256"].as_str().unwrap().to_string();
+    let other: Value = http
+        .post(url("/api/uploads"))
+        .header("cookie", &me)
+        .body(build_png_bytes(48, 48))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other = other["sha256"].as_str().unwrap().to_string();
+    for (id, reference) in [
+        ("edit", json!({ "upload": sha })),
+        ("edit-of-edit", json!({ "image": "edit" })),
+        ("from-generated", json!({ "image": "shown" })),
+    ] {
+        let job = json!({ "id": id, "prompt": "p", "width": 1024, "height": 1024, "references": [reference] });
+        let res = as_user(M::POST, url("/api/jobs"), &me, Some(job)).await;
+        assert_eq!(res.status(), 201, "{id}");
+        finish_with_image(&harness, id).await;
+    }
+    assert_eq!(
+        get(&format!("/api/uploads/{sha}")).await.unwrap().status(),
+        404
+    );
+    // What the app asks with before sharing: for the owner in a browser only.
+    let missing = as_user(M::GET, url("/api/jobs/no-such-job/uploads"), &me, None).await;
+    assert_eq!(missing.status(), 404);
+    let job = json!({ "id": "yours", "prompt": "p", "width": 1024, "height": 1024 });
+    let res = as_user(M::POST, url("/api/jobs"), &you, Some(job)).await;
+    assert_eq!(res.status(), 201);
+    let theirs = as_user(M::GET, url("/api/jobs/yours/uploads"), &me, None).await;
+    assert_eq!(theirs.status(), 404);
+    for (id, uploads) in [
+        ("edit", json!([sha])),
+        ("edit-of-edit", json!([sha])),
+        ("from-generated", json!([])),
+    ] {
+        let path = url(&format!("/api/jobs/{id}/uploads"));
+        let found: Value = as_user(M::GET, path.clone(), &me, None)
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(found["uploaded_references"], uploads, "{id}");
+        let not_owner = as_user(M::GET, path.clone(), &you, None).await;
+        assert_eq!(not_owner.status(), 403, "{id}");
+        assert_eq!(
+            get(&format!("/api/jobs/{id}/uploads"))
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for id in ["edit", "edit-of-edit"] {
+        let path = url(&format!("/api/jobs/{id}"));
+        let res = as_user(M::PATCH, path.clone(), &me, Some(mark.clone())).await;
+        assert_eq!(res.status(), 409, "{id}");
+        let refused: Value = res.json().await.unwrap();
+        assert_eq!(refused["uploaded_references"], json!([sha]), "{id}");
+    }
+    let res = as_user(
+        M::PATCH,
+        url("/api/jobs/from-generated"),
+        &me,
+        Some(mark.clone()),
+    )
+    .await;
+    assert_eq!(res.status(), 200);
+    let accepted = json!({ "demo": true, "accept_reference_risk": true });
+    let res = as_user(M::PATCH, url("/api/jobs/edit"), &me, Some(accepted)).await;
+    assert_eq!(res.status(), 200);
+    // Its reference shows, always as a JPEG made here (no EXIF); others do not.
+    let reference = get(&format!("/api/uploads/{sha}")).await.unwrap();
+    assert_eq!(reference.status(), 200);
+    assert_eq!(reference.headers()["content-type"], "image/jpeg");
+    assert_eq!(reference.headers()["vary"], "Cookie");
+    // A send's images, by its batch or a lone job's id.
+    let lone: Value = as_user(M::GET, url("/api/jobs?limit=50&batch=edit"), &me, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(lone["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(lone["jobs"][0]["id"], "edit");
+    // The owner's list of what is public, with or without paging.
+    for path in ["/api/jobs?demo=true", "/api/jobs?demo=true&limit=50"] {
+        let list: Value = as_user(M::GET, url(path), &me, None)
+            .await
+            .json()
+            .await
+            .unwrap();
+        let ids: Vec<&str> = list["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| j["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"shown"), "{path}");
+        assert!(!ids.contains(&"edit-of-edit"), "{path}");
+    }
+    assert_eq!(
+        get(&format!("/api/uploads/{sha}/thumb?size=512"))
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        get(&format!("/api/uploads/{other}"))
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        get(&format!("/api/uploads/{other}/thumb"))
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
+    // Taken out, or deleted: gone at once, and open pages are told.
+    let off = json!({ "demo": false });
+    let res = as_user(M::PATCH, url("/api/jobs/shown"), &me, Some(off)).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(get("/api/jobs/shown").await.unwrap().status(), 404);
+    assert_eq!(get("/api/images/shown").await.unwrap().status(), 404);
+    let res = as_user(M::DELETE, url("/api/jobs/edit"), &me, None).await;
+    assert_eq!(res.status(), 204);
+    let changes: Value = get(&format!("/api/jobs?changed_since={version}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(changes["deleted"], json!(["shown", "edit"]));
+    // The owner following the same list learns of it too.
+    let mine: Value = as_user(
+        M::GET,
+        url(&format!("/api/jobs?demo=true&changed_since={version}")),
+        &me,
+        None,
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let mut gone: Vec<&str> = mine["deleted"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap())
+        .collect();
+    gone.sort();
+    assert_eq!(gone, ["edit", "shown"]);
+    let ids: Vec<&str> = changes["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["from-generated"]);
+    // The one left shows its generated reference, though the job it came from is out.
+    let reference = changes["jobs"][0]["references"][0]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        get(&format!("/api/uploads/{reference}"))
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+}
+
+/// Each address has its own quota; signed-in requests have none.
+#[tokio::test]
+async fn test_demo_quotas_hold_visitors_by_address() {
+    let (idp, issuer) = start_fake_idp().await;
+    let demo = DemoConfig {
+        trusted_proxies: 1,
+        searches_per_min: 2,
+        ..Default::default()
+    };
+    let harness = start_test_harness_demo(Default::default(), Some(issuer), Some(demo)).await;
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let url = format!("{}/api/jobs?limit=1&q=fox", harness.http_url);
+    let http = reqwest::Client::new();
+    // A new id does not buy a new quota, and is what visitors are counted by.
+    let first = open_demo(&harness, "203.0.113.1").await;
+    let second = open_demo(&harness, "203.0.113.2").await;
+    let search = |ip: &'static str| {
+        http.get(&url)
+            .header("x-forwarded-for", ip)
+            .header("cookie", if ip.ends_with(".1") { &first } else { &second })
+            .send()
+    };
+    // Up to a few tries: the limit starts over if a new minute begins during the test.
+    let mut held = None;
+    let mut minute = 0;
+    for _ in 0..10 {
+        minute = aries_image_studio::db::now_s() as u64 / 60;
+        let res = search("203.0.113.1").await.unwrap();
+        if res.status() == 429 {
+            held = Some(res);
+            break;
+        }
+        assert_eq!(res.status(), 200);
+    }
+    let held = held.expect("the quota holds");
+    let wait: u64 = held.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=60).contains(&wait));
+    assert_eq!(search("203.0.113.2").await.unwrap().status(), 200);
+    // Over the search limit, browsing goes on, and the metrics say so.
+    let browse = http
+        .get(format!("{}/api/jobs?limit=1", harness.http_url))
+        .header("x-forwarded-for", "203.0.113.1")
+        .header("cookie", &first)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(browse.status(), 200);
+    // A third id, at the first's address: its quota is still used up.
+    let third = open_demo(&harness, "203.0.113.1").await;
+    let res = http
+        .get(&url)
+        .header("x-forwarded-for", "203.0.113.1")
+        .header("cookie", &third)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        res.status() == 429 || aries_image_studio::db::now_s() as u64 / 60 != minute,
+        "{}",
+        res.status()
+    );
+    let metrics = http
+        .get(format!("{}/metrics", harness.http_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("aries_demo_unique_visitors{window=\"day\"} 3"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("aries_demo_refused_total{reason=\"quota\"}"),
+        "{metrics}"
+    );
+    for _ in 0..5 {
+        let res = http
+            .get(&url)
+            .header("x-forwarded-for", "203.0.113.1")
+            .header("cookie", &me)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+    }
+}
+
+/// A failed session lookup is not "no session": the cookie stays, and the client can retry.
+#[tokio::test]
+async fn test_demo_a_session_lookup_failure_keeps_the_cookie() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness =
+        start_test_harness_demo(Default::default(), Some(issuer), Some(Default::default())).await;
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let http = reqwest::Client::new();
+    let ask = |path: &'static str| {
+        http.get(format!("{}{path}", harness.http_url))
+            .header("cookie", &me)
+            .send()
+    };
+    harness.state.db.break_sessions_for_test(true).await;
+    for path in ["/api/me", "/api/jobs?limit=1"] {
+        let res = ask(path).await.unwrap();
+        assert_eq!(res.status(), 503, "{path}");
+        assert!(res.headers().get("set-cookie").is_none(), "{path}");
+    }
+    harness.state.db.break_sessions_for_test(false).await;
+    let who: Value = ask("/api/me").await.unwrap().json().await.unwrap();
+    assert_eq!(who["email"], "me@example.com");
+}
+
+/// Nobody is a visitor by arriving: the sign-in screen, then a click that accepts the terms makes
+/// a new id, which ends when they leave or sign in.
+#[tokio::test]
+async fn test_demo_starts_with_accepting_the_terms() {
+    use reqwest::Method as M;
+    let (idp, issuer) = start_fake_idp().await;
+    let demo = DemoConfig {
+        trusted_proxies: 1,
+        guests_per_min: 4,
+        ..Default::default()
+    };
+    let harness = start_test_harness_demo(Default::default(), Some(issuer), Some(demo)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let http = reqwest::Client::new();
+    let post = |body: Value| {
+        http.post(url("/auth/guest"))
+            .header("x-forwarded-for", "203.0.113.9")
+            .json(&body)
+    };
+
+    // Nothing to go on: refused, with word that a demo can be opened.
+    let res = reqwest::get(url("/api/me")).await.unwrap();
+    assert_eq!(res.status(), 401);
+    let who: Value = res.json().await.unwrap();
+    assert_eq!(who["demo_mode"], true);
+    assert!(who.get("visitor").is_none());
+    let res = reqwest::get(url("/api/jobs?limit=1")).await.unwrap();
+    assert_eq!(res.status(), 401);
+    assert!(res.headers().get("x-aries-visitor").is_none());
+    // A made-up id is no better, and is forgotten.
+    let res = as_user(
+        M::GET,
+        url("/api/jobs?limit=1"),
+        "aries_guest=made-up",
+        None,
+    )
+    .await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("aries_guest=; "));
+    let res = as_user(M::GET, url("/api/me"), "aries_guest=made-up", None).await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("aries_guest=; "));
+
+    // The terms must be accepted, from this site's page.
+    let res = post(json!({ "accept_terms": false })).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    assert!(res.headers().get("set-cookie").is_none());
+    assert_eq!(post(json!({})).send().await.unwrap().status(), 422);
+    let res = post(json!({ "accept_terms": true }))
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    assert_eq!(
+        http.get(url("/auth/guest")).send().await.unwrap().status(),
+        405
+    );
+
+    // Each click a different id; Studio holds only a hash of it, and no address.
+    let one = open_demo(&harness, "203.0.113.1").await;
+    let two = open_demo(&harness, "203.0.113.1").await;
+    assert_ne!(one, two);
+    let pool = harness.state.db.pool();
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT * FROM guests")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    let raw = one.split_once('=').unwrap().1;
+    for row in &rows {
+        assert_eq!(row.columns().len(), 3, "no address, no activity");
+        assert_ne!(row.get::<String, _>("token_hash"), raw);
+    }
+    for cookie in [&one, &two] {
+        let who: Value = as_user(M::GET, url("/api/me"), cookie, None)
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(who["visitor"], true);
+        let res = as_user(M::GET, url("/api/jobs?limit=1"), cookie, None).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.headers()["x-aries-visitor"], "1");
+    }
+    // Being a guest opens nothing a visitor's routes did not.
+    let res = as_user(M::GET, url("/api/tokens"), &one, None).await;
+    assert_eq!(res.status(), 403);
+    let res = as_user(
+        M::POST,
+        url("/api/jobs"),
+        &one,
+        Some(json!({ "prompt": "x" })),
+    )
+    .await;
+    assert_eq!(res.status(), 403);
+    let metrics = reqwest::get(url("/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("aries_demo_unique_visitors{window=\"day\"} 2"),
+        "two ids at one address: {metrics}"
+    );
+    assert!(
+        metrics.lines().any(|l| l == "aries_demo_guests_total 2"),
+        "{metrics}"
+    );
+
+    // Opening it again replaces the id.
+    let res = http
+        .post(url("/auth/guest"))
+        .header("cookie", &two)
+        .header("x-forwarded-for", "203.0.113.1")
+        .json(&json!({ "accept_terms": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), &two, None).await;
+    assert_eq!(res.status(), 401);
+
+    // Leaving ends it, on the server too.
+    let res = as_user(M::POST, url("/auth/logout"), &one, None).await;
+    assert_eq!(res.status(), 204);
+    assert!(res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|c| c.to_str().unwrap().starts_with("aries_guest=;")));
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), &one, None).await;
+    assert_eq!(res.status(), 401);
+
+    // An id that ran out is no id, and the purge takes the row.
+    let old = open_demo(&harness, "203.0.113.2").await;
+    sqlx::query("UPDATE guests SET expires_at = 1")
+        .execute(pool)
+        .await
+        .unwrap();
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), &old, None).await;
+    assert_eq!(res.status(), 401);
+    harness.state.db.purge_auth().await.unwrap();
+    assert!(sqlx::query("SELECT 1 FROM guests")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A session wins over an id.
+    let both = open_demo(&harness, "203.0.113.3").await;
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let cookies = format!("{both}; {me}");
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), &cookies, None).await;
+    assert!(res.headers().get("x-aries-visitor").is_none());
+    let who: Value = as_user(M::GET, url("/api/me"), &cookies, None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(who["email"], "me@example.com");
+
+    // Signing in with an id ends it: a later sign-out does not fall back into the demo.
+    let params = begin_sign_in(&harness, "/").await;
+    let res = finish_sign_in_with_cookie(
+        &harness,
+        &idp,
+        &params,
+        json!({ "email": "me@example.com" }),
+        Some(&both),
+    )
+    .await;
+    assert_eq!(res.status(), 302);
+    let set: Vec<&str> = res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|c| c.to_str().unwrap())
+        .collect();
+    assert!(
+        set.iter().any(|c| c.starts_with("aries_guest=;")),
+        "{set:?}"
+    );
+    let session = set
+        .iter()
+        .find(|c| c.starts_with("aries_session="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let res = as_user(M::GET, url("/api/me"), &both, None).await;
+    assert_eq!(res.status(), 401, "the id is gone from the server");
+    let res = as_user(M::POST, url("/auth/logout"), session, None).await;
+    assert_eq!(res.status(), 204);
+    let res = reqwest::get(url("/api/me")).await.unwrap();
+    assert_eq!(res.status(), 401);
+
+    // Opening the demo while signed in (a sign-in screen left open) makes no id, and ends any.
+    let count = || async {
+        sqlx::query("SELECT 1 FROM guests")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .len()
+    };
+    let before = count().await;
+    let res = http
+        .post(url("/auth/guest"))
+        .header("cookie", &me)
+        .json(&json!({ "accept_terms": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert!(res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .all(|c| !c.to_str().unwrap().contains("aries_guest=")));
+    assert_eq!(count().await, before);
+    let stray = open_demo(&harness, "203.0.113.3").await;
+    let res = http
+        .post(url("/auth/guest"))
+        .header("cookie", format!("{stray}; {me}"))
+        .json(&json!({ "accept_terms": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert!(res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|c| c.to_str().unwrap().starts_with("aries_guest=;")));
+    let res = as_user(M::GET, url("/api/me"), &stray, None).await;
+    assert_eq!(res.status(), 401);
+
+    // The table has a ceiling, and the oldest go first.
+    let db = &harness.state.db;
+    let far = now_s() + 600.0;
+    sqlx::query("DELETE FROM guests")
+        .execute(pool)
+        .await
+        .unwrap();
+    for hash in ["oldest", "middle", "newest"] {
+        db.create_guest(hash, far, 2).await.unwrap();
+    }
+    assert!(!db.guest_exists("oldest").await.unwrap());
+    assert!(db.guest_exists("middle").await.unwrap());
+    assert!(db.guest_exists("newest").await.unwrap());
+
+    // Too many new ids from one address; another is not held back.
+    let over = post(json!({ "accept_terms": true }));
+    let mut last = over.send().await.unwrap();
+    for _ in 0..8 {
+        if last.status() == 429 {
+            break;
+        }
+        last = post(json!({ "accept_terms": true })).send().await.unwrap();
+    }
+    assert_eq!(last.status(), 429);
+    assert!(last.headers().contains_key("retry-after"));
+    open_demo(&harness, "203.0.113.4").await;
+
+    // A failed lookup is not "no id": the cookie stays, and the client can retry.
+    let kept = open_demo(&harness, "203.0.113.5").await;
+    harness.state.db.break_guests_for_test(true).await;
+    for path in ["/api/me", "/api/jobs?limit=1"] {
+        let res = as_user(M::GET, url(path), &kept, None).await;
+        assert_eq!(res.status(), 503, "{path}");
+        assert!(res.headers().get("set-cookie").is_none(), "{path}");
+    }
+    harness.state.db.break_guests_for_test(false).await;
+    let res = as_user(M::GET, url("/api/jobs?limit=1"), &kept, None).await;
+    assert_eq!(res.status(), 200);
+}
+
+/// Only the browser that started a sign-in can finish it: a link with someone else's code and state
+/// must not sign you in to their account. The refusal leaves that sign-in usable, and it ends once.
+#[tokio::test]
+async fn test_sign_in_finishes_in_the_browser_that_started_it() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let url = |p: &str| format!("{}{p}", harness.http_url);
+    let params = begin_sign_in(&harness, "/").await;
+    let callback = url(&format!("/auth/callback?code=c&state={}", params["state"]));
+    let refused = |cookie: Option<&'static str>| {
+        let mut req = no_redirects().get(&callback);
+        if let Some(cookie) = cookie {
+            req = req.header("cookie", cookie);
+        }
+        req.send()
+    };
+    for cookie in [
+        None,
+        Some("aries_login=someone-elses"),
+        Some("aries_session=mine"),
+    ] {
+        let res = refused(cookie).await.unwrap();
+        assert_eq!(res.status(), 303, "{cookie:?}");
+        assert_eq!(
+            res.headers()["location"],
+            "/?auth_error=expired",
+            "{cookie:?}"
+        );
+        assert!(res.headers().get("set-cookie").is_none(), "{cookie:?}");
+    }
+    let res = finish_sign_in(
+        &harness,
+        &idp,
+        &params,
+        json!({ "email": "me@example.com" }),
+    )
+    .await;
+    assert_eq!(res.status(), 302, "still usable by its own browser");
+    let set: Vec<&str> = res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|c| c.to_str().unwrap())
+        .collect();
+    assert!(
+        set.iter().any(|c| c.starts_with("aries_session=")),
+        "{set:?}"
+    );
+    assert!(
+        set.iter().any(|c| c.starts_with("aries_login=;")),
+        "spent: {set:?}"
+    );
+    // No state at all is no sign-in, even with no cookie to compare it to.
+    let res = no_redirects()
+        .get(url("/auth/callback?code=c"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["location"], "/?auth_error=expired");
+    // And a redirect to another site does not survive the round trip.
+    let params = begin_sign_in(&harness, "/%09/evil.example").await;
+    let res = finish_sign_in(
+        &harness,
+        &idp,
+        &params,
+        json!({ "email": "me@example.com" }),
+    )
+    .await;
+    assert_eq!(res.status(), 302);
+    assert_eq!(res.headers()["location"], "/");
+}
+
+/// Another site's page can't sign you out.
+#[tokio::test]
+async fn test_sign_out_only_from_this_site() {
+    let (idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let me = sign_in(&harness, &idp, "me@example.com").await;
+    let url = format!("{}/auth/logout", harness.http_url);
+    let res = reqwest::Client::new()
+        .post(&url)
+        .header("cookie", &me)
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    assert!(res.headers().get("set-cookie").is_none());
+    let who = as_user(
+        reqwest::Method::GET,
+        format!("{}/api/me", harness.http_url),
+        &me,
+        None,
+    )
+    .await;
+    assert_eq!(who.status(), 200, "still signed in");
+    let origin = harness.state.config.auth.as_ref().unwrap().public_urls[0].clone();
+    let res = reqwest::Client::new()
+        .post(&url)
+        .header("cookie", &me)
+        .header("origin", origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+}
+
+/// Link previews get absolute addresses, only ever the configured ones; a private Studio asks not
+/// to be listed, and one with a demo lists only its public pages.
+#[tokio::test]
+async fn test_search_engines_and_link_previews() {
+    let index = "<head><title>app</title><!-- aries:head --></head>";
+    let write_index = |harness: &TestHarness| {
+        let dir = &harness.state.config.static_dir;
+        std::fs::write(dir.join("index.html"), index).unwrap();
+        std::fs::write(dir.join("og-image.jpg"), b"jpeg").unwrap();
+    };
+    let text = |url: String, host: Option<&'static str>| async move {
+        let mut req = reqwest::Client::new().get(url);
+        if let Some(host) = host {
+            req = req.header("x-forwarded-host", host);
+        }
+        let res = req.send().await.unwrap();
+        (res.status().as_u16(), res.text().await.unwrap())
+    };
+
+    // With a demo: every page of the app, the same tags; the image needs no id.
+    let (_idp, issuer) = start_fake_idp().await;
+    let demo =
+        start_test_harness_demo(Default::default(), Some(issuer), Some(Default::default())).await;
+    write_index(&demo);
+    let base = demo.state.config.auth.as_ref().unwrap().public_urls[0].clone();
+    let url = |p: &str| format!("{}{p}", demo.http_url);
+    for path in ["/", "/index.html", "/gallery", "/images/some-job"] {
+        let (status, page) = text(url(path), None).await;
+        assert_eq!(status, 200, "{path}");
+        assert!(
+            page.contains(&format!(r#"og:image" content="{base}/og-image.jpg""#)),
+            "{path}: {page}"
+        );
+        assert!(
+            page.contains(&format!(r#"rel="canonical" href="{base}/""#)),
+            "{path}"
+        );
+        assert!(
+            page.contains("twitter:card") && page.contains("guest demo"),
+            "{path}"
+        );
+        assert!(!page.contains("aries:head"), "{path}");
+    }
+    let (_, page) = text(url("/"), Some("evil.example")).await;
+    assert!(
+        !page.contains("evil.example"),
+        "a forged host is not written"
+    );
+    let (status, image) = text(url("/og-image.jpg"), None).await;
+    assert_eq!((status, image.as_str()), (200, "jpeg"));
+    let res = reqwest::get(url("/")).await.unwrap();
+    assert_eq!(res.headers()["cache-control"], "no-cache");
+    assert!(res.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let res = reqwest::Client::new()
+        .post(url("/gallery"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 405);
+    let (status, _) = text(url("/api/nope"), None).await;
+    assert_eq!(status, 404, "an unknown API path is not the app");
+    let (status, robots) = text(url("/robots.txt"), None).await;
+    assert_eq!(status, 200);
+    assert!(
+        robots.contains(&format!("Sitemap: {base}/sitemap.xml")),
+        "{robots}"
+    );
+    for closed in ["/api/", "/auth/", "/agent/", "/mcp", "/metrics"] {
+        assert!(
+            robots.contains(&format!("Disallow: {closed}\n")),
+            "{robots}"
+        );
+    }
+    assert!(!robots.contains("Disallow: /\n"), "{robots}");
+    let (status, map) = text(url("/sitemap.xml"), None).await;
+    assert_eq!(status, 200);
+    for page in ["/<", "/terms<", "/privacy<"] {
+        assert!(map.contains(&format!("<loc>{base}{page}")), "{map}");
+    }
+
+    // Sign-in but no demo: previews still work, and it asks not to be listed.
+    let (_idp, issuer) = start_fake_idp().await;
+    let private = start_test_harness_full(Default::default(), Some(issuer)).await;
+    write_index(&private);
+    let url = |p: &str| format!("{}{p}", private.http_url);
+    let (_, page) = text(url("/"), None).await;
+    assert!(
+        page.contains("og:image") && !page.contains("guest demo"),
+        "{page}"
+    );
+    let (_, robots) = text(url("/robots.txt"), None).await;
+    assert_eq!(robots, "User-agent: *\nDisallow: /\n");
+    assert_eq!(text(url("/sitemap.xml"), None).await.0, 404);
+
+    // No sign-in, so no known address: nothing absolute to give.
+    let open = start_test_harness_full(Default::default(), None).await;
+    write_index(&open);
+    let url = |p: &str| format!("{}{p}", open.http_url);
+    let (_, page) = text(url("/"), None).await;
+    assert_eq!(page, "<head><title>app</title></head>");
+    let (_, robots) = text(url("/robots.txt"), None).await;
+    assert_eq!(robots, "User-agent: *\nDisallow: /\n");
+}
+
+/// Without sign-in there is no demo: no visitors, and the setting changes nothing.
+#[tokio::test]
+async fn test_no_demo_without_it_being_switched_on() {
+    let (_idp, issuer) = start_fake_idp().await;
+    let harness = start_test_harness_full(Default::default(), Some(issuer)).await;
+    let res = reqwest::get(format!("{}/api/jobs?limit=1", harness.http_url))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let res = reqwest::get(format!("{}/api/me", harness.http_url))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let res = reqwest::Client::new()
+        .post(format!("{}/auth/guest", harness.http_url))
+        .json(&json!({ "accept_terms": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    assert!(res.headers().get("set-cookie").is_none());
 }

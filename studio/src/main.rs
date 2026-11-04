@@ -35,6 +35,9 @@ async fn main() -> Result<()> {
     let db = Database::connect(&db_path).await?;
     let blobs = BlobStore::new(&config.data_dir)?;
     let state = AppState::new(config.clone(), db, blobs);
+    if let Some(demo) = &config.demo {
+        aries_image_studio::demo::spawn_forgetting(state.clone(), demo);
+    }
     // Cloud enhances run inside Studio: any left in flight ended with the last process.
     let reclaimed = state.db.reclaim_cloud_tasks().await?;
     if !reclaimed.is_empty() {
@@ -74,7 +77,13 @@ async fn main() -> Result<()> {
         .max_encoding_message_size(16 * 1024 * 1024);
     info!(%grpc_addr, "Aries Image Studio AgentGateway gRPC server listening");
 
-    let http_task = tokio::spawn(async move { axum::serve(http_listener, http_router).await });
+    let http_task = tokio::spawn(async move {
+        axum::serve(
+            http_listener,
+            http_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
 
     let grpc_task = tokio::spawn(async move {
         GrpcServer::builder()

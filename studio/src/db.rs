@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -90,6 +90,10 @@ pub struct JobPageQuery {
     pub ratio: Option<f64>,
     /// One account's jobs (sign-in on); `None`: everyone's.
     pub owner: Option<String>,
+    /// Finished images marked for the demo only (docs/DEMO.md).
+    pub demo_only: bool,
+    /// One send's images: its `batch_id`, or the id of a job on its own.
+    pub batch: Option<String>,
 }
 
 /// A sign-in between the redirect to the provider and its callback.
@@ -98,6 +102,15 @@ pub struct LoginState {
     pub nonce: String,
     pub verifier: String,
     pub next: String,
+}
+
+/// An access token as listed: never the token itself, which Studio does not keep.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiTokenRecord {
+    pub id: String,
+    pub name: String,
+    pub created_at: f64,
+    pub last_used_at: Option<f64>,
 }
 
 /// The opaque cursor of the page after `job`.
@@ -426,6 +439,9 @@ pub struct JobRecord {
     /// UI-owned metadata (turn id, aspect label, size and quality preset), opaque here.
     pub meta: serde_json::Value,
     pub favorite: bool,
+    /// Shown to demo visitors (docs/DEMO.md).
+    #[serde(default)]
+    pub demo: bool,
     /// Reference images in prompt order.
     #[serde(default)]
     pub references: Vec<JobReference>,
@@ -760,6 +776,19 @@ impl Database {
         self.ensure_column("jobs", "enhancer", "TEXT").await?;
         // Sign-in (docs/AUTH.md): who made a job; NULL with sign-in off.
         self.ensure_column("jobs", "owner", "TEXT").await?;
+        self.ensure_column("jobs", "demo", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        for q in [
+            "CREATE INDEX IF NOT EXISTS idx_jobs_demo ON jobs(demo, created_at)",
+            // Images visitors must drop: no longer marked, or deleted. Like `deleted_jobs`, but
+            // those are the account's own and name jobs a visitor never saw.
+            "CREATE TABLE IF NOT EXISTS demo_removed (
+                id TEXT PRIMARY KEY,
+                version INTEGER NOT NULL
+            )",
+        ] {
+            sqlx::query(q).execute(&self.pool).await?;
+        }
         self.ensure_column("deleted_jobs", "owner", "TEXT").await?;
         for q in [
             "CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner, created_at)",
@@ -780,6 +809,11 @@ impl Database {
                 created_at REAL NOT NULL,
                 expires_at REAL NOT NULL
             )",
+            "CREATE TABLE IF NOT EXISTS guests (
+                token_hash TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )",
             "CREATE TABLE IF NOT EXISTS login_states (
                 state TEXT PRIMARY KEY,
                 nonce TEXT NOT NULL,
@@ -791,6 +825,15 @@ impl Database {
                 token_hash TEXT PRIMARY KEY,
                 email TEXT NOT NULL,
                 expires_at REAL NOT NULL
+            )",
+            // Access tokens for the CLI and AI tools (docs/INTEGRATIONS.md), by hash.
+            "CREATE TABLE IF NOT EXISTS api_tokens (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                last_used_at REAL
             )",
         ] {
             sqlx::query(q).execute(&self.pool).await?;
@@ -865,6 +908,16 @@ impl Database {
         }
         if q.favorites_only {
             sql.push(" AND favorite = 1");
+        }
+        if q.demo_only {
+            sql.push(" AND demo = 1 AND status = 'done'");
+        }
+        if let Some(batch) = &q.batch {
+            sql.push(" AND (json_extract(meta, '$.batch_id') = ")
+                .push_bind(batch.clone())
+                .push(" OR id = ")
+                .push_bind(batch.clone())
+                .push(")");
         }
         if let Some(ratio) = q.ratio {
             sql.push(" AND abs(CAST(width AS REAL) / height - ")
@@ -1601,6 +1654,16 @@ impl Database {
         if q.favorites_only {
             sql.push(" AND favorite = 1");
         }
+        if q.demo_only {
+            sql.push(" AND demo = 1 AND status = 'done'");
+        }
+        if let Some(batch) = &q.batch {
+            sql.push(" AND (json_extract(meta, '$.batch_id') = ")
+                .push_bind(batch.clone())
+                .push(" OR id = ")
+                .push_bind(batch.clone())
+                .push(")");
+        }
         if let Some(ratio) = q.ratio {
             sql.push(" AND abs(CAST(width AS REAL) / height - ")
                 .push_bind(ratio)
@@ -1882,6 +1945,194 @@ impl Database {
         self.get_job(job_id).await
     }
 
+    /// Marks a finished job for the demo, or takes it out, so open visitors' pages follow.
+    /// Does nothing to a job that is not finished.
+    pub async fn set_job_demo(&self, job_id: &str, demo: bool) -> Result<Option<JobRecord>> {
+        let mut tx = self.pool.begin().await?;
+        let ver = Self::next_version_tx(&mut tx).await?;
+        let changed = sqlx::query(
+            "UPDATE jobs SET demo = ?, version = ? WHERE id = ? AND status = 'done' AND demo != ?",
+        )
+        .bind(demo as i64)
+        .bind(ver)
+        .bind(job_id)
+        .bind(demo as i64)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if changed > 0 {
+            if demo {
+                sqlx::query("DELETE FROM demo_removed WHERE id = ?")
+                    .bind(job_id)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("INSERT OR REPLACE INTO demo_removed (id, version) VALUES (?, ?)")
+                    .bind(job_id)
+                    .bind(ver)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        self.get_job(job_id).await
+    }
+
+    /// The demo's images, all or changed since a version.
+    pub async fn list_demo_jobs(&self, changed_since: Option<i64>) -> Result<Vec<JobRecord>> {
+        self.load_jobs(
+            "j.version > ? AND j.demo = 1 AND j.status = 'done'",
+            JobFilter::Version(changed_since.unwrap_or(i64::MIN)),
+        )
+        .await
+    }
+
+    /// Images visitors must drop since `version`.
+    pub async fn list_demo_removed_since(&self, version: i64) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT id FROM demo_removed WHERE version > ? ORDER BY version")
+            .bind(version)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
+
+    /// For a test of what a failed session lookup does.
+    #[doc(hidden)]
+    pub async fn break_sessions_for_test(&self, broken: bool) {
+        let sql = if broken {
+            "ALTER TABLE sessions RENAME TO sessions_broken"
+        } else {
+            "ALTER TABLE sessions_broken RENAME TO sessions"
+        };
+        sqlx::query(sql).execute(&self.pool).await.unwrap();
+    }
+
+    /// For a test of what a failed guest lookup does.
+    #[doc(hidden)]
+    pub async fn break_guests_for_test(&self, broken: bool) {
+        let sql = if broken {
+            "ALTER TABLE guests RENAME TO guests_broken"
+        } else {
+            "ALTER TABLE guests_broken RENAME TO guests"
+        };
+        sqlx::query(sql).execute(&self.pool).await.unwrap();
+    }
+
+    /// A demo guest who accepted the terms now. Past `keep` rows, the oldest go.
+    pub async fn create_guest(&self, token_hash: &str, expires_at: f64, keep: u32) -> Result<()> {
+        sqlx::query("INSERT INTO guests (token_hash, created_at, expires_at) VALUES (?, ?, ?)")
+            .bind(token_hash)
+            .bind(now_s())
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "DELETE FROM guests WHERE rowid IN
+             (SELECT rowid FROM guests ORDER BY rowid DESC LIMIT -1 OFFSET ?)",
+        )
+        .bind(keep)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn guest_exists(&self, token_hash: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM guests WHERE token_hash = ? AND expires_at > ?")
+            .bind(token_hash)
+            .bind(now_s())
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    pub async fn delete_guest(&self, token_hash: &str) -> Result<()> {
+        sqlx::query("DELETE FROM guests WHERE token_hash = ?")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Whether visitors may see this job.
+    pub async fn is_demo_job(&self, job_id: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM jobs WHERE id = ? AND demo = 1 AND status = 'done'")
+            .bind(job_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    /// The demo's counts for the gallery's filters. Favorites are the account's own.
+    pub async fn demo_facets(&self) -> Result<GalleryFacets> {
+        let rows = sqlx::query(
+            "SELECT width, height, COUNT(*) AS n FROM jobs
+             WHERE status = 'done' AND demo = 1 GROUP BY width, height",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut facets = GalleryFacets::default();
+        for r in rows {
+            let count = r.get::<i64, _>("n") as u64;
+            facets.total += count;
+            facets.sizes.push(SizeCount {
+                width: r.get::<i64, _>("width") as u32,
+                height: r.get::<i64, _>("height") as u32,
+                count,
+            });
+        }
+        Ok(facets)
+    }
+
+    /// An upload that a demo image was made from; other uploads do not exist for visitors.
+    pub async fn get_demo_upload(&self, sha256: &str) -> Result<Option<UploadRecord>> {
+        let used = sqlx::query(
+            "SELECT 1 FROM job_references r JOIN jobs j ON r.job_id = j.id
+             WHERE r.sha256 = ? AND j.demo = 1 AND j.status = 'done' LIMIT 1",
+        )
+        .bind(sha256)
+        .fetch_optional(&self.pool)
+        .await?;
+        match used {
+            Some(_) => self.get_upload(sha256).await,
+            None => Ok(None),
+        }
+    }
+
+    /// The uploaded (not generated) images behind a job: its references that no job in Studio
+    /// made, following generated ones back to theirs, since an edit of an edit of a photo still
+    /// shows the photo. A reference whose job was deleted counts as uploaded.
+    pub async fn uploaded_ancestors(&self, job_id: &str) -> Result<Vec<String>> {
+        let mut uploaded = Vec::new();
+        let mut seen_jobs = HashSet::from([job_id.to_string()]);
+        let mut next = vec![job_id.to_string()];
+        while let Some(job) = next.pop() {
+            let refs =
+                sqlx::query("SELECT sha256 FROM job_references WHERE job_id = ? ORDER BY idx")
+                    .bind(&job)
+                    .fetch_all(&self.pool)
+                    .await?;
+            for r in refs {
+                let sha: String = r.get("sha256");
+                let makers = sqlx::query(
+                    "SELECT DISTINCT job_id FROM artifacts WHERE sha256 = ? AND name = 'image.png'",
+                )
+                .bind(&sha)
+                .fetch_all(&self.pool)
+                .await?;
+                if makers.is_empty() && !uploaded.contains(&sha) {
+                    uploaded.push(sha);
+                }
+                for m in makers {
+                    let id: String = m.get("job_id");
+                    if seen_jobs.insert(id.clone()) {
+                        next.push(id);
+                    }
+                }
+            }
+        }
+        Ok(uploaded)
+    }
+
     /// The UI's preferences (composer settings, theme): one JSON document, `{}` if unset.
     /// With sign-in, each account has its own.
     pub async fn get_preferences(&self, owner: Option<&str>) -> Result<serde_json::Value> {
@@ -2124,8 +2375,91 @@ impl Database {
             }))
     }
 
-    /// Drops expired sessions and login links, and abandoned sign-ins.
+    pub async fn create_api_token(
+        &self,
+        id: &str,
+        token_hash: &str,
+        email: &str,
+        name: &str,
+    ) -> Result<ApiTokenRecord> {
+        let created_at = now_s();
+        sqlx::query(
+            "INSERT INTO api_tokens (id, token_hash, email, name, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(token_hash)
+        .bind(email)
+        .bind(name)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(ApiTokenRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            created_at,
+            last_used_at: None,
+        })
+    }
+
+    /// The account a token belongs to, and when it was last used.
+    pub async fn get_api_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(String, String, Option<f64>)>> {
+        let row =
+            sqlx::query("SELECT id, email, last_used_at FROM api_tokens WHERE token_hash = ?")
+                .bind(token_hash)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| (r.get("id"), r.get("email"), r.get("last_used_at"))))
+    }
+
+    pub async fn touch_api_token(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
+            .bind(now_s())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// An account's tokens, newest first.
+    pub async fn list_api_tokens(&self, email: &str) -> Result<Vec<ApiTokenRecord>> {
+        let rows = sqlx::query(
+            "SELECT id, name, created_at, last_used_at FROM api_tokens
+             WHERE email = ? ORDER BY created_at DESC",
+        )
+        .bind(email)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| ApiTokenRecord {
+                id: r.get("id"),
+                name: r.get("name"),
+                created_at: r.get("created_at"),
+                last_used_at: r.get("last_used_at"),
+            })
+            .collect())
+    }
+
+    /// Whether the account had a token `id` (now revoked).
+    pub async fn delete_api_token(&self, id: &str, email: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND email = ?")
+            .bind(id)
+            .bind(email)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Drops expired sessions, guests and login links, and abandoned sign-ins.
     pub async fn purge_auth(&self) -> Result<()> {
+        sqlx::query("DELETE FROM guests WHERE expires_at <= ?")
+            .bind(now_s())
+            .execute(&self.pool)
+            .await?;
         sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
             .bind(now_s())
             .execute(&self.pool)
@@ -2285,6 +2619,7 @@ impl Database {
                 .and_then(|m| serde_json::from_str(&m).ok())
                 .unwrap_or_else(|| serde_json::json!({})),
             favorite: r.get::<Option<i64>, _>("favorite").unwrap_or(0) != 0,
+            demo: r.get::<Option<i64>, _>("demo").unwrap_or(0) != 0,
             references: Vec::new(),
             version: r.get("version"),
             created_at: r.get("created_at"),
@@ -3572,6 +3907,14 @@ impl Database {
         let candidate_shas: Vec<String> = sha_rows.iter().map(|r| r.get("sha256")).collect();
 
         let ver = Self::next_version_tx(&mut tx).await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO demo_removed (id, version)
+             SELECT id, ? FROM jobs WHERE id = ? AND demo = 1",
+        )
+        .bind(ver)
+        .bind(job_id)
+        .execute(&mut *tx)
+        .await?;
         // Tombstone, so clients polling `changed_since` learn about the deletion.
         sqlx::query(
             "INSERT OR REPLACE INTO deleted_jobs (id, version, owner)

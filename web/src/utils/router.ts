@@ -9,7 +9,8 @@ export type Route =
   | { name: 'timeline' }
   | { name: 'gallery'; filters: GalleryFilters }
   | { name: 'image'; id: string }
-  | { name: 'status' };
+  | { name: 'status' }
+  | { name: 'connections' };
 
 export interface GalleryFilters {
   favorites: boolean;
@@ -18,6 +19,8 @@ export interface GalleryFilters {
   q: string;
   /** "More like this": the job whose image the gallery ranks the rest against; empty: none. */
   like: string;
+  /** Only the images shown in the demo (the owner, reviewing what is public). */
+  demo: boolean;
 }
 
 /** Where the viewer was opened from: its ←/→ follow that list, and closing goes back to it. */
@@ -42,10 +45,12 @@ export function parseRoute(path: string, search: string): Route {
         aspect: p.get('aspect') || '',
         q: p.get('q') || '',
         like: p.get('like') || '',
+        demo: p.get('demo') === '1',
       },
     };
   }
   if (/^\/status\/?$/.test(path)) return { name: 'status' };
+  if (/^\/connections\/?$/.test(path)) return { name: 'connections' };
   return { name: 'timeline' };
 }
 
@@ -55,6 +60,7 @@ export function galleryHref(f: GalleryFilters): string {
   if (f.aspect) p.set('aspect', f.aspect);
   if (f.q.trim()) p.set('q', f.q.trim());
   if (f.like) p.set('like', f.like);
+  if (f.demo) p.set('demo', '1');
   const qs = p.toString();
   return qs ? `/gallery?${qs}` : '/gallery';
 }

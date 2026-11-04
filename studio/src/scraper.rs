@@ -61,7 +61,7 @@ pub fn spawn_scraper_and_gc_loop(state: Arc<AppState>) {
                         let _ = state.blobs.delete_blob(&sha);
                     }
                 }
-                // Expired sessions and sign-ins never finished (docs/AUTH.md).
+                // Expired sessions and guest ids, and sign-ins never finished (docs/AUTH.md).
                 let _ = state.db.purge_auth().await;
                 // Reference uploads no job uses, a day after upload (docs/REFERENCE_IMAGES.md §4).
                 if let Ok(orphans) = state.db.gc_uploads(86400.0).await {
